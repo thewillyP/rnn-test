@@ -1,0 +1,23 @@
+name: ci
+
+on:
+  workflow_dispatch:
+  push:
+    paths-ignore:
+      - 'README.md'
+      - '*.slurm'
+    branches:
+      - 'master'
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - 'master'
+
+jobs:
+  docker:
+    uses: thewillyP/ReusableWorkflow/.github/workflows/main.yml@main
+    with:
+      image_name: rnn-test
+      tag: 1.0.${{ github.run_number }}
+    secrets: inherit
