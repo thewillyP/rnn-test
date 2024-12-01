@@ -27,16 +27,16 @@ class RNN(nn.Module):
         super(RNN, self).__init__()
         self.fc = nn.Linear(config.n_h, config.n_out)
 
-        rnn = nn.RNN(config.n_in, config.n_h, config.num_layers, batch_first=True)
+        self.rnn = nn.RNN(config.n_in, config.n_h, config.num_layers, batch_first=True)
         self.interface = RNNInterface(
             baseCase=lambda x: torch.zeros(config.num_layers, x.size(0), config.n_h),
-            forward=lambda x, s0: rnn(x, s0)[0][:, -1, :]
+            forward=lambda x, s0: self.rnn(x, s0)[0][:, -1, :]
         )
-        # gru = nn.GRU(config.n_in, config.n_h, config.num_layers, batch_first=True)
-        # lstm = nn.LSTM(config.n_in, config.n_h, config.num_layers, batch_first=True)
+        # self.gru = nn.GRU(config.n_in, config.n_h, config.num_layers, batch_first=True)
+        # self.lstm = nn.LSTM(config.n_in, config.n_h, config.num_layers, batch_first=True)
         # self.interface = RNNInterface(
         #     baseCase=lambda x: (torch.zeros(config.num_layers, x.size(0), config.n_h), torch.zeros(self.num_layers, x.size(0), self.hidden_size)),
-        #     forward=lambda x, s0: lstm(x, s0)[0]
+        #     forward=lambda x, s0: self.lstm(x, s0)[0]
         # )
         
     def forward(self, x):
