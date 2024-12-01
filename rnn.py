@@ -5,6 +5,7 @@ import torch.nn as nn
 import torchvision
 import torchvision.transforms as transforms
 
+torch.manual_seed(0)
 
 @dataclass
 class RnnConfig:
@@ -25,9 +26,10 @@ class RNNInterface(Generic[X, T]):
 class RNN(nn.Module):
     def __init__(self, config: RnnConfig):
         super(RNN, self).__init__()
-        self.fc = nn.Linear(config.n_h, config.n_out)
 
         self.rnn = nn.RNN(config.n_in, config.n_h, config.num_layers, batch_first=True)
+        self.fc = nn.Linear(config.n_h, config.n_out)
+
         self.interface = RNNInterface(
             baseCase=lambda x: torch.zeros(config.num_layers, x.size(0), config.n_h),
             forward=lambda x, s0: self.rnn(x, s0)[0][:, -1, :]
