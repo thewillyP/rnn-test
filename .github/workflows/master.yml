@@ -3,9 +3,9 @@ name: ci
 on:
   workflow_dispatch:
   push:
-    paths-ignore:
-      - 'README.md'
-      - '*.slurm'
+    paths:
+        - Dockerfile 
+        - .github/workflows/** 
     branches:
       - 'master'
     tags:
@@ -13,7 +13,6 @@ on:
   pull_request:
     branches:
       - 'master'
-
 jobs:
   docker:
     uses: thewillyP/ReusableWorkflow/.github/workflows/main.yml@main
