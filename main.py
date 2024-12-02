@@ -58,7 +58,8 @@ class PrettyPrintLogger(Logger):
         print(f"Saved {name} to {artifactConfig.path(name)}")
 
     def log(self, dict: dict[str, Any]):
-        print(dict)
+        for key, value in dict.items():
+            print(f"{key}: {value}")
     
     def init(self, projectName: str, config: argparse.Namespace):
         print(f"Initialized project {projectName} with config {config}")
@@ -76,6 +77,7 @@ class Config:
     numTe: int
     batch_size_tr: int
     batch_size_vl: int
+    batch_size_te: int
     t1: float
     t2: float
     num_epochs: int
@@ -98,7 +100,7 @@ def train(config: Config, logger: Logger, model: RNN):
     train_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTr)
     train_loader = getDataLoaderIO(train_ds, config.batch_size_tr)
     test_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTe)
-    test_loader = getDataLoaderIO(test_ds, config.numTe)
+    test_loader = getDataLoaderIO(test_ds, config.batch_size_te)
 
     log_datasetIO(config, logger, train_ds, "train")
     log_datasetIO(config, logger, test_ds, "test")
@@ -117,7 +119,7 @@ def train(config: Config, logger: Logger, model: RNN):
             logger.log({"loss": loss.item()
                     , "gradient_norm": gradient_norm(model)})
         
-        logger.log({"train_loss": test_loss(config, train_loader, model)})
+        logger.log({"test_loss": test_loss(config, test_loader, model)})
         if epoch % config.checkpointFrequency == 0:
             log_modelIO(config, logger, model, f"epoch_{epoch}")
             logger.log({"performance": visualize(config, model)})
@@ -189,6 +191,7 @@ def parseIO():
     parser.add_argument('--numTe', type=int, required=True, help='Number of testing samples')
     parser.add_argument('--batch_size_tr', type=int, required=True, help='Training batch size')
     parser.add_argument('--batch_size_vl', type=int, required=True, help='Validation batch size')
+    parser.add_argument('--batch_size_te', type=int, required=True, help='Testing batch size')
     parser.add_argument('--t1', type=int, required=True, help='Parameter t1')
     parser.add_argument('--t2', type=int, required=True, help='Parameter t2')
     parser.add_argument('--num_epochs', type=int, required=True, help='Number of training epochs')
@@ -253,6 +256,7 @@ def parseIO():
         numTe=args.numTe,
         batch_size_tr=args.batch_size_tr,
         batch_size_vl=args.batch_size_vl,
+        batch_size_te=args.batch_size_te,
         t1=args.t1,
         t2=args.t2,
         num_epochs=args.num_epochs,
