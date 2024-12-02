@@ -18,7 +18,7 @@ class ArtifactConfig:
 class Logger(ABC):
 
     @abstractmethod
-    def log2External(self, artifactConfig: ArtifactConfig, saveFile: Callable[[str]], name: str):
+    def log2External(self, artifactConfig: ArtifactConfig, saveFile: Callable[[str], None], name: str):
         pass
 
     @abstractmethod
@@ -35,7 +35,7 @@ class Logger(ABC):
 
 class WandbLogger(Logger):
     
-    def log2External(self, artifactConfig: ArtifactConfig, saveFile: Callable[[str]], name: str):
+    def log2External(self, artifactConfig: ArtifactConfig, saveFile: Callable[[str], None], name: str):
         path = artifactConfig.path(name)
         saveFile(path)
         artifactConfig.artifact.add_file(path)
@@ -52,7 +52,7 @@ class WandbLogger(Logger):
 
 class PrettyPrintLogger(Logger):
         
-    def log2External(self, artifactConfig: ArtifactConfig, saveFile: Callable[[str]], name: str):
+    def log2External(self, artifactConfig: ArtifactConfig, saveFile: Callable[[str], None], name: str):
         print(f"Saving {name} to {artifactConfig.path(name)}")
         saveFile(artifactConfig.path(name))
         print(f"Saved {name} to {artifactConfig.path(name)}")
@@ -150,13 +150,16 @@ def visualize(config: Config, model: RNN):
 
 
 def test_loss(config: Config, loader: DataLoader, model: RNN):
-    with torch.no_grad():  
-        def getLoss(pair):
-            inputs, targets = pair
-            predictions = model(inputs) 
-            return config.criterion(predictions, targets) * inputs.size(0)
-        total = torch.vmap(getLoss)(loader)
-        return total.sum().item() / len(loader.dataset)
+    total_loss = 0
+    total_samples = 0
+    with torch.no_grad():
+        for inputs, targets in loader:
+            predictions = model(inputs)
+            batch_loss = config.criterion(predictions, targets) * inputs.size(0)
+            total_loss += batch_loss.item()
+            total_samples += inputs.size(0)
+    
+    return total_loss / total_samples
 
 def gradient_norm(model: RNN):
     grads = [
@@ -306,9 +309,12 @@ def main():
     torch.manual_seed(config.seed)
     logger = WandbLogger() if args.mode == 'experiment' else PrettyPrintLogger()
 
-    logger.init(args)
+    logger.init(config.projectName, args)
     model = RNN(config.rnnConfig)  # IO, random 
     logger.watchPytorch(model)
     log_modelIO(config, logger, model, "init")
 
     model = train(config, logger, model)
+
+if __name__ == "__main__":
+    main()
