@@ -38,6 +38,22 @@ def initializeParameters(n_in: int, n_h: int, n_out: int
     return W_rec, W_in, b_rec, W_out, b_out
 
 
+def gru_init(rnn, fc, config):
+
+    W_in = torch.nn.init.normal_(torch.empty(3*config.n_h, config.n_in), 0, torch.sqrt(1 / torch.tensor(3*config.n_in)))
+    W_rec = torch.linalg.qr(torch.normal(0, 1, size=(3*config.n_h, config.n_h)))[0]
+    W_out = torch.nn.init.normal_(torch.empty(config.n_out, config.n_h), 0, torch.sqrt(1 / torch.tensor(config.n_h)))
+    
+    b_rec = torch.zeros(3*config.n_h)
+    b_out = torch.zeros(config.n_out)
+
+    with torch.no_grad():
+        rnn.weight_ih_l0.copy_(W_in)
+        rnn.weight_hh_l0.copy_(W_rec)
+        rnn.bias_ih_l0.copy_(b_rec)
+        rnn.bias_hh_l0.copy_(b_rec)
+        fc.weight.copy_(W_out)
+        fc.bias.copy_(b_out)
 
 @dataclass
 class RnnConfig:
@@ -62,6 +78,7 @@ class RNN(nn.Module):
         self.rnn = nn.RNN(config.n_in, config.n_h, config.num_layers, batch_first=True)
         self.fc = nn.Linear(config.n_h, config.n_out)
         
+        # gru_init(self.rnn, self.fc, config)
 
         with torch.no_grad():
             W_rec, W_in, b_rec, W_out, b_out = initializeParameters(config.n_in, config.n_h, config.n_out)
@@ -89,8 +106,8 @@ class RNN(nn.Module):
         # self.gru = nn.GRU(config.n_in, config.n_h, config.num_layers, batch_first=True)
         # self.lstm = nn.LSTM(config.n_in, config.n_h, config.num_layers, batch_first=True)
         # self.interface = RNNInterface(
-        #     baseCase=lambda x: (torch.zeros(config.num_layers, x.size(0), config.n_h), torch.zeros(self.num_layers, x.size(0), self.hidden_size)),
-        #     forward=lambda x, s0: self.lstm(x, s0)[0]
+        #     baseCase=lambda x: (torch.zeros(config.num_layers, x.size(0), config.n_h), torch.zeros(config.num_layers, x.size(0), config.n_h)),
+        #     forward=lambda x, s0: self.rnn(x, s0)[0]
         # )
         
     def forward(self, x):
