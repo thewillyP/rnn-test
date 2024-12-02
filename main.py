@@ -126,7 +126,7 @@ def train(config: Config, logger: Logger, model: RNN):
         logger.log({"test_loss": test_loss(config, test_loader, model)})
         if epoch % config.checkpointFrequency == 0:
             log_modelIO(config, logger, model, f"epoch_{epoch}")
-            logger.log({"performance": wandb.Image(visualize(config, model))})
+            logger.log({"performance": wandb.Image(visualize(config, model, test_ds))})
 
     
     return model
@@ -135,7 +135,7 @@ def train(config: Config, logger: Logger, model: RNN):
 def visualize(config: Config, model: RNN, dataset: TensorDataset):
     ts = torch.arange(0, config.seq)
     samples = min(config.performanceSamples, len(dataset))
-    test_loader = getDataLoaderIO(dataset, 1)
+    test_loader = DataLoader(dataset, batch_size=1, shuffle=False)
     
     n_cols = 3
     n_rows = (samples + n_cols - 1) // n_cols
@@ -221,7 +221,7 @@ def parseIO():
                         help="Wandb project name")
     parser.add_argument('--logger', type=str, choices=['wandb', 'prettyprint'], required=True,
                         help="Choice of logger to use")
-    parser.add_argument('performanceSamples', type=int, required=True,
+    parser.add_argument('--performance_samples', type=int, required=True,
                         help="Number of samples to visualize performance")
 
     args = parser.parse_args()
@@ -292,7 +292,7 @@ def parseIO():
         checkpointFrequency=args.checkpoint_freq,
         projectName=args.projectName,
         seed=args.seed,
-        performanceSamples=args.performanceSamples
+        performanceSamples=args.performance_samples
     )
 
     return args, config, logger
