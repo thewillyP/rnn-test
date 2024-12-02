@@ -208,6 +208,8 @@ def parseIO():
                         help="Pytorch seed")
     parser.add_argument('--projectName', type=str, required=True,
                         help="Wandb project name")
+    parser.add_argument('--logger', type=str, choices=['wandb', 'prettyprint'], required=True,
+                        help="Choice of logger to use")
 
     args = parser.parse_args()
 
@@ -241,6 +243,14 @@ def parseIO():
         case _:
             raise ValueError("Invalid task type")
     
+    match args.logger:
+        case 'wandb':
+            logger = WandbLogger()
+        case 'prettyprint':
+            logger = PrettyPrintLogger()
+        case _:
+            raise ValueError("Invalid logger type")
+    
     rnnConfig = RnnConfig(
         n_in=args.n_in,
         n_h=args.n_h,
@@ -271,7 +281,7 @@ def parseIO():
         seed=args.seed
     )
 
-    return args, config
+    return args, config, logger
 
 
 
@@ -309,9 +319,8 @@ def log_datasetIO(config: Config, logger: Logger, dataset: TensorDataset, name: 
 
 
 def main():
-    args, config = parseIO()
+    args, config, logger = parseIO()
     torch.manual_seed(config.seed)
-    logger = WandbLogger() if args.mode == 'experiment' else PrettyPrintLogger()
 
     logger.init(config.projectName, args)
     model = RNN(config.rnnConfig)  # IO, random 
