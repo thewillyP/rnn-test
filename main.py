@@ -1,9 +1,12 @@
 #%%
+from typing import Any
 from data import *
 from rnn import *
 import torch
 import wandb
 import argparse
+from abc import ABC, abstractmethod
+
 
 
 @dataclass
@@ -11,6 +14,59 @@ class ArtifactConfig:
     artifact: wandb.Artifact
     path: Callable[[str], str]
         
+
+class Logger(ABC):
+
+    @abstractmethod
+    def log2External(self, artifactConfig: ArtifactConfig, saveFile: Callable[[str]], name: str):
+        pass
+
+    @abstractmethod
+    def log(self, dict: dict[str, Any]):
+        pass
+
+    @abstractmethod
+    def init(self, projectName: str, config: argparse.Namespace):
+        pass
+
+    @abstractmethod
+    def watchPytorch(self, model: nn.Module):
+        pass
+
+class WandbLogger(Logger):
+    
+    def log2External(self, artifactConfig: ArtifactConfig, saveFile: Callable[[str]], name: str):
+        path = artifactConfig.path(name)
+        saveFile(path)
+        artifactConfig.artifact.add_file(path)
+        wandb.log_artifact(artifactConfig.artifact)
+    
+    def log(self, dict: dict[str, Any]):
+        wandb.log(dict)
+    
+    def init(self, projectName: str, config: argparse.Namespace):
+        wandb.init(project=projectName, config=config)
+    
+    def watchPytorch(self, model: nn.Module):
+        wandb.watch(model, log_freq=1, log="all")
+
+class PrettyPrintLogger(Logger):
+        
+    def log2External(self, artifactConfig: ArtifactConfig, saveFile: Callable[[str]], name: str):
+        print(f"Saving {name} to {artifactConfig.path(name)}")
+        saveFile(artifactConfig.path(name))
+        print(f"Saved {name} to {artifactConfig.path(name)}")
+
+    def log(self, dict: dict[str, Any]):
+        print(dict)
+    
+    def init(self, projectName: str, config: argparse.Namespace):
+        print(f"Initialized project {projectName} with config {config}")
+    
+    def watchPytorch(self, model: nn.Module):
+        print("Model is being watched")
+
+
 @dataclass
 class Config:
     task: DatasetType
@@ -30,11 +86,12 @@ class Config:
     modelArtifact: ArtifactConfig  
     datasetArtifact: ArtifactConfig
     checkpointFrequency: int
+    projectName: str
     seed: int
 
 
 
-def train(config: Config, model: RNN):
+def train(config: Config, logger: Logger, model: RNN):
     ts = torch.arange(0, config.seq)
     dataGenerator = getRandomTask(config.task)
 
@@ -43,8 +100,8 @@ def train(config: Config, model: RNN):
     test_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTe)
     test_loader = getDataLoaderIO(test_ds, config.numTe)
 
-    log_datasetIO(config, train_ds, "train")
-    log_datasetIO(config, test_ds, "test")
+    log_datasetIO(config, logger, train_ds, "train")
+    log_datasetIO(config, logger, test_ds, "test")
 
     optimizer = config.optimizerFn(model.parameters(), lr=config.learning_rate)
 
@@ -57,13 +114,14 @@ def train(config: Config, model: RNN):
             loss.backward()
             optimizer.step()
 
-            wandb.log({"loss": loss.item()
+            logger.log({"loss": loss.item()
                     , "gradient_norm": gradient_norm(model)})
         
-        wandb.log({"test_loss": test_loss(config, test_loader, model)})
+        logger.log({"train_loss": test_loss(config, train_loader, model)})
         if epoch % config.checkpointFrequency == 0:
-            log_modelIO(config, model, f"epoch_{epoch}")
-            wandb.log({"performance": visualize(config, model)})
+            log_modelIO(config, logger, model, f"epoch_{epoch}")
+            logger.log({"performance": visualize(config, model)})
+
     
     return model
 
@@ -142,6 +200,8 @@ def parseIO():
                         help="Frequency of checkpoints during training (in epochs)")
     parser.add_argument('--seed', type=int, required=True,
                         help="Pytorch seed")
+    parser.add_argument('--projectName', type=str, required=True,
+                        help="Wandb project name")
 
     args = parser.parse_args()
 
@@ -200,6 +260,7 @@ def parseIO():
         modelArtifact=ArtifactConfig(artifact=wandb.Artifact(f"model", type="model"), path=lambda x: f"model_{x}.pt"),
         datasetArtifact=ArtifactConfig(artifact=wandb.Artifact(f"dataset", type="dataset"), path=lambda x: f"dataset_{x}.pt"),
         checkpointFrequency=args.checkpoint_freq,
+        projectName=args.projectName,
         seed=args.seed
     )
 
@@ -231,27 +292,23 @@ def parseIO():
 #         optimizerFn=torch.optim.SGD
 #     )
 
-def log_modelIO(config: Config, model: RNN, name: str):
-    log_artifactIO(config.modelArtifact.artifact, config.modelArtifact.path, lambda path: torch.save(model.state_dict(), path), name)
 
-def log_datasetIO(config: Config, dataset: TensorDataset, name: str):
-    log_artifactIO(config.datasetArtifact.artifact, config.datasetArtifact.path, lambda path: torch.save(dataset, path), name)
 
-def log_artifactIO(artifact: wandb.Artifact, getFilename: Callable[[str], str], saveFile: Callable[[str]], name: str):
-    path = getFilename(name)
-    saveFile(path)
-    artifact.add_file(path)
-    wandb.log_artifact(artifact)
+def log_modelIO(config: Config, logger: Logger, model: RNN, name: str):
+    logger.log2External(config.modelArtifact, lambda path: torch.save(model.state_dict(), path), name)
 
+def log_datasetIO(config: Config, logger: Logger, dataset: TensorDataset, name: str):
+    logger.log2External(config.datasetArtifact, lambda path: torch.save(dataset, path), name)
 
 
 def main():
     args, config = parseIO()
-    wandb.init(project="Rnn-Test", config=args)
     torch.manual_seed(config.seed)
-    
-    model = RNN(config.rnnConfig)  # IO, random 
-    wandb.watch(model, log_freq=1, log="all")
-    log_modelIO(config, model, "init")
+    logger = WandbLogger() if args.mode == 'experiment' else PrettyPrintLogger()
 
-    model = train(config, model)
+    logger.init(args)
+    model = RNN(config.rnnConfig)  # IO, random 
+    logger.watchPytorch(model)
+    log_modelIO(config, logger, model, "init")
+
+    model = train(config, logger, model)
