@@ -124,7 +124,7 @@ def train(config: Config, logger: Logger, model: RNN):
         logger.log({"test_loss": test_loss(config, test_loader, model)})
         if epoch % config.checkpointFrequency == 0:
             log_modelIO(config, logger, model, f"epoch_{epoch}")
-            logger.log({"performance": visualize(config, model)})
+            logger.log({"performance": wandb.Image(visualize(config, model))})
 
     
     return model
