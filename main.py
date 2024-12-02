@@ -7,6 +7,7 @@ import wandb
 import argparse
 from abc import ABC, abstractmethod
 import os
+from toolz import take
 
 
 @dataclass
@@ -92,6 +93,7 @@ class Config:
     checkpointFrequency: int
     projectName: str
     seed: int
+    performanceSamples: int
 
 
 
@@ -130,28 +132,35 @@ def train(config: Config, logger: Logger, model: RNN):
     return model
 
 
-def visualize(config: Config, model: RNN):
+def visualize(config: Config, model: RNN, dataset: TensorDataset):
     ts = torch.arange(0, config.seq)
-    dataGenerator = getRandomTask(config.task)
-    test_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, 1)
-    test_loader = getDataLoaderIO(test_ds, 1)
-    xs, ys = next(iter(test_loader))
-    predicts = model(xs)
+    samples = min(config.performanceSamples, len(dataset))
+    test_loader = getDataLoaderIO(dataset, 1)
+    
+    n_cols = 3
+    n_rows = (samples + n_cols - 1) // n_cols
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 5 * n_rows))
+    axes = axes.flatten() 
+    
+    for i, (xs, ys) in enumerate(take(samples, test_loader)):
+        predicts = model(xs)
+        ys = ys[0]
+        predicts = predicts[0]
+        
+        ax = axes[i]
+        ax.plot(ts.detach().numpy(), ys.flatten().detach().numpy(), label='True Values')
+        ax.plot(ts.detach().numpy(), predicts.flatten().detach().numpy(), label='Predictions')
+        ax.set_xlabel('Time Steps')
+        ax.set_ylabel('Values')
+        ax.set_title(f"Predictions vs True Values for {config.task} (Sample {i+1})")
+        ax.legend()
+    # Hide any empty subplots if there are fewer samples than subplots
+    for j in range(i+1, len(axes)):
+        axes[j].axis('off')
 
-    # get the first batch only
-    ys = ys[0]
-    predicts = predicts[0]
-
-    fig, ax = plt.subplots()
-    ax.plot(ts.detach().numpy(), ys.flatten().detach().numpy(), label='True Values')
-    ax.plot(ts.detach().numpy(), predicts.flatten().detach().numpy(), label='Predictions')
-    ax.set_xlabel('Time Steps')
-    ax.set_ylabel('Values')
-    ax.set_title(f"Predictions vs True Values for {config.task}")
-    ax.legend()
-
+    fig.tight_layout()  # Adjust layout for better spacing
     return fig
-
 
 def test_loss(config: Config, loader: DataLoader, model: RNN):
     total_loss = 0
@@ -212,6 +221,8 @@ def parseIO():
                         help="Wandb project name")
     parser.add_argument('--logger', type=str, choices=['wandb', 'prettyprint'], required=True,
                         help="Choice of logger to use")
+    parser.add_argument('performanceSamples', type=int, required=True,
+                        help="Number of samples to visualize performance")
 
     args = parser.parse_args()
 
@@ -280,7 +291,8 @@ def parseIO():
         datasetArtifact=ArtifactConfig(artifact=lambda: wandb.Artifact(f"dataset", type="dataset"), path=lambda x: f"dataset_{x}.pt"),
         checkpointFrequency=args.checkpoint_freq,
         projectName=args.projectName,
-        seed=args.seed
+        seed=args.seed,
+        performanceSamples=args.performanceSamples
     )
 
     return args, config, logger
