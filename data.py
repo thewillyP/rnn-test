@@ -102,13 +102,14 @@ randomNormal = lambda ts, _: torch.randn(len(ts))
 # later in the future I can create a config file instead of having to manually change this code everytime
 
 # @curry
-def getDataLoaderIO(randFn, t1: int, t2: int, ts: torch.Tensor, numEx: int, batchSize: int):
+def getDatasetIO(randFn, t1: int, t2: int, ts: torch.Tensor, numEx: int):
     gen = lambda: createDelayAddExample(t1, t2, ts, randFn)
     XS, YS = createExamples(numEx, gen)
     ds = TensorDataset(XS, YS)
-    dl = DataLoader(ds, batch_size=batchSize, shuffle=True, drop_last=True)
-    return dl
+    return ds
 
+def getDataLoaderIO(ds: TensorDataset, batchSize: int):
+    return DataLoader(ds, batch_size=batchSize, shuffle=True, drop_last=True)
 
 
 @dataclass

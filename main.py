@@ -2,8 +2,14 @@
 from data import *
 from rnn import *
 import torch
+import wandb
+import argparse
 
-torch.manual_seed(23423)
+
+@dataclass
+class ArtifactConfig:
+    artifact: wandb.Artifact
+    path: Callable[[str], str]
         
 @dataclass
 class Config:
@@ -21,6 +27,10 @@ class Config:
     rnnConfig: RnnConfig
     criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
     optimizerFn: Callable
+    modelArtifact: ArtifactConfig  
+    datasetArtifact: ArtifactConfig
+    checkpointFrequency: int
+    seed: int
 
 
 
@@ -28,12 +38,16 @@ def train(config: Config, model: RNN):
     ts = torch.arange(0, config.seq)
     dataGenerator = getRandomTask(config.task)
 
-    train_loader = getDataLoaderIO(dataGenerator, config.t1, config.t2, ts, config.numTr, config.batch_size_tr)
-    test_loader = getDataLoaderIO(dataGenerator, config.t1, config.t2, ts, config.numTe, config.numTe)
+    train_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTr)
+    train_loader = getDataLoaderIO(train_ds, config.batch_size_tr)
+    test_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTe)
+    test_loader = getDataLoaderIO(test_ds, config.numTe)
+
+    log_datasetIO(config, train_ds, "train")
+    log_datasetIO(config, test_ds, "test")
 
     optimizer = config.optimizerFn(model.parameters(), lr=config.learning_rate)
 
-    n_total_steps = len(train_loader)
     for epoch in range(config.num_epochs):
         for i, (x, y) in enumerate(train_loader):    
             outputs = model(x)
@@ -42,9 +56,13 @@ def train(config: Config, model: RNN):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            
-            if (i+1) % 1 == 0:
-                print (f'Epoch [{epoch+1}/{config.num_epochs}], Step [{i+1}/{n_total_steps}], Loss: {loss.item():.4f}')
+
+            wandb.log({"loss": loss.item()})
+        
+        wandb.log({"test_loss": test_loss(config, test_loader, model)})
+        if epoch % config.checkpointFrequency == 0:
+            log_modelIO(config, model, f"epoch_{epoch}")
+            wandb.log({"performance": visualize(config, model)})
     
     return model
 
@@ -52,25 +70,27 @@ def train(config: Config, model: RNN):
 def visualize(config: Config, model: RNN):
     ts = torch.arange(0, config.seq)
     dataGenerator = getRandomTask(config.task)
-    test_loader = getDataLoaderIO(dataGenerator, config.t1, config.t2, ts, config.numTe, 1)
+    test_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, 1)
+    test_loader = getDataLoaderIO(test_ds, 1)
     xs, ys = next(iter(test_loader))
     predicts = model(xs)
 
+    # get the first batch only
     ys = ys[0]
     predicts = predicts[0]
 
+    fig, ax = plt.subplots()
+    ax.plot(ts.detach().numpy(), ys.flatten().detach().numpy(), label='True Values')
+    ax.plot(ts.detach().numpy(), predicts.flatten().detach().numpy(), label='Predictions')
+    ax.set_xlabel('Time Steps')
+    ax.set_ylabel('Values')
+    ax.set_title(f"Predictions vs True Values for {config.task}")
+    ax.legend()
 
-    plt.plot(ts.detach().numpy(), ys.flatten().detach().numpy(), label='True Values')
-    plt.plot(ts.detach().numpy(), predicts.flatten().detach().numpy(), label='Predictions')
-
-    plt.xlabel('Time Steps')
-    plt.ylabel('Values')
-    plt.title('Time Series Prediction vs True Values')
-    plt.legend()
-    plt.show()
+    return fig
 
 
-def test_loss(loader: DataLoader, config: Config, model: RNN):
+def test_loss(config: Config, loader: DataLoader, model: RNN):
     with torch.no_grad():  
         def getLoss(pair):
             inputs, targets = pair
@@ -79,35 +99,158 @@ def test_loss(loader: DataLoader, config: Config, model: RNN):
         total = torch.vmap(getLoss)(loader)
         return total.sum().item() / len(loader.dataset)
 
+def gradient_norm(config: Config, model: RNN):
+    grads = [
+        param.grad.detach().flatten()
+        for param in model.parameters()
+        if param.grad is not None
+    ]
+    norm = torch.cat(grads).norm()
 
 
-rc = RnnConfig(
-    n_in=2,
-    n_h=30,
-    n_out=1,
-    num_layers=1
-)
+def parseIO():
+    parser = argparse.ArgumentParser(description="Parse configuration parameters for RnnConfig and Config.")
 
-config = Config(
-    task=Random(),
-    seq=15,
-    numTr=10000, 
-    numVl=10, 
-    numTe=1000, 
-    batch_size_tr=10000, 
-    batch_size_vl=2, 
-    t1=3, 
-    t2=5,
-    num_epochs=500,
-    learning_rate=0.001,
-    rnnConfig=rc,
-    criterion=torch.functional.F.mse_loss,
-    optimizerFn=torch.optim.SGD
-)
+    # Arguments for RnnConfig
+    parser.add_argument('--n_in', type=int, required=True, help='Number of input features for the RNN')
+    parser.add_argument('--n_h', type=int, required=True, help='Number of hidden units for the RNN')
+    parser.add_argument('--n_out', type=int, required=True, help='Number of output features for the RNN')
+    parser.add_argument('--num_layers', type=int, required=True, help='Number of layers in the RNN')
 
-model = RNN(config.rnnConfig)
-model = train(config, model)
+    # Arguments for Config
+    parser.add_argument('--task', type=str, choices=['Random', 'Sparse', 'Wave'], required=True,
+                        help="Task type (Random, Sparse, or Wave)")
+    parser.add_argument('--outT', type=int, help="Output time step (required if task is Sparse)")
+    parser.add_argument('--seq', type=int, required=True, help='Sequence length')
+    parser.add_argument('--numTr', type=int, required=True, help='Number of training samples')
+    parser.add_argument('--numVl', type=int, required=True, help='Number of validation samples')
+    parser.add_argument('--numTe', type=int, required=True, help='Number of testing samples')
+    parser.add_argument('--batch_size_tr', type=int, required=True, help='Training batch size')
+    parser.add_argument('--batch_size_vl', type=int, required=True, help='Validation batch size')
+    parser.add_argument('--t1', type=int, required=True, help='Parameter t1')
+    parser.add_argument('--t2', type=int, required=True, help='Parameter t2')
+    parser.add_argument('--num_epochs', type=int, required=True, help='Number of training epochs')
+    parser.add_argument('--learning_rate', type=float, required=True, help='Learning rate')
+    parser.add_argument('--optimizerFn', type=str, choices=['Adam', 'SGD'], required=True,
+                        help="Optimizer function (Adam or SGD)")
+    parser.add_argument('--lossFn', type=str, choices=['mse'], required=True,
+                        help="Loss function (currently only mse is supported)")
+    parser.add_argument('--mode', type=str, choices=['test', 'experiment'], required=True,
+                        help="Execution mode (test or experiment)")
+    parser.add_argument('--checkpoint_freq', type=int, required=True,
+                        help="Frequency of checkpoints during training (in epochs)")
+    parser.add_argument('--seed', type=int, required=True,
+                        help="Pytorch seed")
 
-#%%
-visualize(config, model)
-# %%
+    args = parser.parse_args()
+
+    # Validate Sparse task requires outT
+    if args.task == 'Sparse' and args.outT is None:
+        parser.error("--outT is required when --task is Sparse")
+
+    match args.lossFn:
+        case 'mse':
+            loss_function = torch.functional.F.mse_loss
+        case _:
+            raise ValueError("Currently only mse is supported as a loss function")
+
+    # Determine optimizer function
+    match args.optimizerFn:
+        case 'Adam':
+            optimizer_fn = torch.optim.Adam
+        case 'SGD':
+            optimizer_fn = torch.optim.SGD
+        case _:
+            raise ValueError("Currently only Adam and SGD are supported as optimizer functions")
+
+    # Placeholder for task initialization
+    match args.task:
+        case 'Sparse':
+            task = Sparse(args.outT)
+        case 'Random':
+            task = Random()
+        case 'Wave':
+            task = Wave()
+        case _:
+            raise ValueError("Invalid task type")
+    
+    rnnConfig = RnnConfig(
+        n_in=args.n_in,
+        n_h=args.n_h,
+        n_out=args.n_out,
+        num_layers=args.num_layers
+    )
+
+    config = Config(
+        task=task,
+        seq=args.seq,
+        numTr=args.numTr,
+        numVl=args.numVl,
+        numTe=args.numTe,
+        batch_size_tr=args.batch_size_tr,
+        batch_size_vl=args.batch_size_vl,
+        t1=args.t1,
+        t2=args.t2,
+        num_epochs=args.num_epochs,
+        learning_rate=args.learning_rate,
+        rnnConfig=rnnConfig,
+        criterion=loss_function,
+        optimizerFn=optimizer_fn,
+        modelArtifact=ArtifactConfig(artifact=wandb.Artifact(f"model", type="model"), path=lambda x: f"model_{x}.pt"),
+        datasetArtifact=ArtifactConfig(artifact=wandb.Artifact(f"dataset", type="dataset"), path=lambda x: f"dataset_{x}.pt"),
+        checkpointFrequency=args.checkpoint_freq,
+        seed=args.seed
+    )
+
+    return args, config
+
+
+
+# rc = RnnConfig(
+#         n_in=2,
+#         n_h=30,
+#         n_out=1,
+#         num_layers=1
+#     )
+
+#     config = Config(
+#         task=Random(),
+#         seq=15,
+#         numTr=10000, 
+#         numVl=10, 
+#         numTe=1000, 
+#         batch_size_tr=10000, 
+#         batch_size_vl=2, 
+#         t1=3, 
+#         t2=5,
+#         num_epochs=500,
+#         learning_rate=0.001,
+#         rnnConfig=rc,
+#         criterion=torch.functional.F.mse_loss,
+#         optimizerFn=torch.optim.SGD
+#     )
+
+def log_modelIO(config: Config, model: RNN, name: str):
+    log_artifactIO(config.modelArtifact.artifact, config.modelArtifact.path, lambda path: torch.save(model.state_dict(), path), name)
+
+def log_datasetIO(config: Config, dataset: TensorDataset, name: str):
+    log_artifactIO(config.datasetArtifact.artifact, config.datasetArtifact.path, lambda path: torch.save(dataset, path), name)
+
+def log_artifactIO(artifact: wandb.Artifact, getFilename: Callable[[str], str], saveFile: Callable[[str]], name: str):
+    path = getFilename(name)
+    saveFile(path)
+    artifact.add_file(path)
+    wandb.log_artifact(artifact)
+
+
+
+def main():
+    args, config = parseIO()
+    wandb.init(project="Rnn-Test", config=args)
+    torch.manual_seed(config.seed)
+    
+    model = RNN(config.rnnConfig)  # IO, random 
+    wandb.watch(model, log_freq=1, log="all")
+    log_modelIO(config, model, "init")
+
+    model = train(config, model)
