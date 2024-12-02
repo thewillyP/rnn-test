@@ -6,12 +6,12 @@ import torch
 import wandb
 import argparse
 from abc import ABC, abstractmethod
-
+import os
 
 
 @dataclass
 class ArtifactConfig:
-    artifact: wandb.Artifact
+    artifact: Callable[[], wandb.Artifact]
     path: Callable[[str], str]
         
 
@@ -38,13 +38,15 @@ class WandbLogger(Logger):
     def log2External(self, artifactConfig: ArtifactConfig, saveFile: Callable[[str], None], name: str):
         path = artifactConfig.path(name)
         saveFile(path)
-        artifactConfig.artifact.add_file(path)
-        wandb.log_artifact(artifactConfig.artifact)
+        artifact = artifactConfig.artifact()
+        artifact.add_file(path)
+        wandb.log_artifact(artifact)
     
     def log(self, dict: dict[str, Any]):
         wandb.log(dict)
     
     def init(self, projectName: str, config: argparse.Namespace):
+        wandb.login(key=os.getenv("WANDB_API_KEY"))
         wandb.init(project=projectName, config=config)
     
     def watchPytorch(self, model: nn.Module):
@@ -274,8 +276,8 @@ def parseIO():
         rnnConfig=rnnConfig,
         criterion=loss_function,
         optimizerFn=optimizer_fn,
-        modelArtifact=ArtifactConfig(artifact=wandb.Artifact(f"model", type="model"), path=lambda x: f"model_{x}.pt"),
-        datasetArtifact=ArtifactConfig(artifact=wandb.Artifact(f"dataset", type="dataset"), path=lambda x: f"dataset_{x}.pt"),
+        modelArtifact=ArtifactConfig(artifact=lambda: wandb.Artifact(f"model", type="model"), path=lambda x: f"model_{x}.pt"),
+        datasetArtifact=ArtifactConfig(artifact=lambda: wandb.Artifact(f"dataset", type="dataset"), path=lambda x: f"dataset_{x}.pt"),
         checkpointFrequency=args.checkpoint_freq,
         projectName=args.projectName,
         seed=args.seed
