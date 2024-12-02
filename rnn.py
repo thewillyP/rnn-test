@@ -6,6 +6,39 @@ import torchvision
 import torchvision.transforms as transforms
 
 
+
+def block_orthogonal_init(size, block_size, frequency=torch.pi/8, amplitude=(0.9, 0.999)):
+    W = torch.zeros((size, size))
+    num_blocks = size // block_size
+    for i in range(num_blocks):
+        theta = torch.distributions.uniform.Uniform(-frequency, frequency).sample((1,)) # Random small rotation
+        amplitude_val = torch.distributions.uniform.Uniform(*amplitude).sample((1,))     # Random amplitude scaling
+        rotation_matrix = amplitude_val * torch.tensor([[torch.cos(theta), -torch.sin(theta)],
+                                                        [torch.sin(theta), torch.cos(theta)]])
+        
+        start = i * block_size
+        W[start:start+2, start:start+2] = rotation_matrix  # Assign 2x2 rotation matrix to block
+    return W
+
+
+def initializeParameters(n_in: int, n_h: int, n_out: int
+                        ) -> tuple[torch.nn.Parameter, torch.nn.Parameter, torch.nn.Parameter, torch.nn.Parameter, torch.nn.Parameter]:
+    
+    W_in = torch.nn.init.normal_(torch.empty(n_h, n_in), 0, torch.sqrt(1 / torch.tensor(n_in)))
+    W_rec = torch.linalg.qr(torch.normal(0, 1, size=(n_h, n_h)))[0]
+    W_out = torch.nn.init.normal_(torch.empty(n_out, n_h), 0, torch.sqrt(1 / torch.tensor(n_h)))
+    
+    b_rec = torch.zeros(n_h)
+    b_out = torch.zeros(n_out)
+
+    # W_in = torch.nn.init.normal_(torch.empty(n_h, n_in), 0, torch.sqrt(1 / torch.tensor(n_in)))
+    # W_rec = block_orthogonal_init(n_h, 2)
+    # W_out = torch.nn.init.normal_(torch.empty(n_out, n_h), 0, torch.sqrt(1 / torch.tensor(n_h)))
+
+    return W_rec, W_in, b_rec, W_out, b_out
+
+
+
 @dataclass
 class RnnConfig:
     n_in: int
@@ -28,6 +61,26 @@ class RNN(nn.Module):
 
         self.rnn = nn.RNN(config.n_in, config.n_h, config.num_layers, batch_first=True)
         self.fc = nn.Linear(config.n_h, config.n_out)
+        
+
+        with torch.no_grad():
+            W_rec, W_in, b_rec, W_out, b_out = initializeParameters(config.n_in, config.n_h, config.n_out)
+            self.rnn.weight_ih_l0.copy_(W_in)
+            self.rnn.weight_hh_l0.copy_(W_rec)
+            self.rnn.bias_ih_l0.copy_(b_rec)
+            self.rnn.bias_hh_l0.copy_(b_rec)
+            self.fc.weight.copy_(W_out)
+            self.fc.bias.copy_(b_out)
+
+        # for name, param in self.rnn.named_parameters():
+        #     if 'weight' in name:
+        #         # torch.nn.init.orthogonal_
+        #         torch.nn.init.orthogonal_(param)
+        #     elif 'bias' in name:
+        #         # torch.nn.init.uniform_(param, a=0.01, b=0.1)
+        #         torch.nn.init.zeros_(param)  # It’s often a good practice to zero the biases
+        # torch.nn.init.orthogonal_(self.fc.weight)
+        # torch.nn.init.zeros_(self.fc.bias)
 
         self.interface = RNNInterface(
             baseCase=lambda x: torch.zeros(config.num_layers, x.size(0), config.n_h),
