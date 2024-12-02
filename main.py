@@ -57,7 +57,8 @@ def train(config: Config, model: RNN):
             loss.backward()
             optimizer.step()
 
-            wandb.log({"loss": loss.item()})
+            wandb.log({"loss": loss.item()
+                    , "gradient_norm": gradient_norm(model)})
         
         wandb.log({"test_loss": test_loss(config, test_loader, model)})
         if epoch % config.checkpointFrequency == 0:
@@ -99,13 +100,13 @@ def test_loss(config: Config, loader: DataLoader, model: RNN):
         total = torch.vmap(getLoss)(loader)
         return total.sum().item() / len(loader.dataset)
 
-def gradient_norm(config: Config, model: RNN):
+def gradient_norm(model: RNN):
     grads = [
         param.grad.detach().flatten()
         for param in model.parameters()
         if param.grad is not None
     ]
-    norm = torch.cat(grads).norm()
+    return torch.linalg.norm(torch.cat(grads), 2).item()
 
 
 def parseIO():
