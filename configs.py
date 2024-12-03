@@ -7,7 +7,7 @@ params = {
     "n_out": [1],
     "num_layers": [1],
     "task": ["Random"],
-    "seq": [10, 15, 20],
+    "seq": [10, 20],
     "numVl": [1],
     "numTe": [5000],
     "batch_size_vl": [1],
@@ -17,8 +17,8 @@ params = {
     "optimizerFn": ["Adam", "SGD"],
     "lossFn": ["mse"],
     "mode": ["experiment"],
-    "checkpoint_freq": [100],
-    "seed": list(range(1, 30+1)),
+    "checkpoint_freq": [700],
+    "seed": list(range(1, 10+1)),
     "projectName": ["rnn-test"],
     "logger": ["wandb"],
     "performance_samples": [9],
@@ -28,8 +28,6 @@ params = {
 train_batch_combinations = [
     {"numTr": 1000, "batch_size_tr": 1000},
     {"numTr": 1000, "batch_size_tr": 100},
-    {"numTr": 10000, "batch_size_tr": 10000},
-    {"numTr": 10000, "batch_size_tr": 100},
     {"numTr": 50000, "batch_size_tr": 50000},
     {"numTr": 50000, "batch_size_tr": 100},
 ]
