@@ -12,14 +12,14 @@ params = {
     "numTe": [5000],
     "batch_size_vl": [1],
     "batch_size_te": [1000],
-    "num_epochs": [3500],
-    "learning_rate": [0.0001, 0.001, 0.01, 0.1, 0.5],
-    "optimizerFn": ["Adam", "SGD"],
+    "num_epochs": [35000],
+    "learning_rate": [0.001, 0.01, 0.1],
+    "optimizerFn": ["SGD"],
     "lossFn": ["mse"],
     "mode": ["experiment"],
     "checkpoint_freq": [700],
     "seed": list(range(1, 10+1)),
-    "projectName": ["rnn-test"],
+    "projectName": ["rnn-test-sgdspike"],
     "logger": ["wandb"],
     "performance_samples": [9],
 }
@@ -27,9 +27,6 @@ params = {
 # Pairing for numTr and batch_size_tr
 train_batch_combinations = [
     {"numTr": 1000, "batch_size_tr": 1000},
-    {"numTr": 1000, "batch_size_tr": 100},
-    {"numTr": 50000, "batch_size_tr": 50000},
-    {"numTr": 50000, "batch_size_tr": 100},
 ]
 
 # Convert t_combinations to dictionary style
