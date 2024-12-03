@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --mem=8G
+#SBATCH --mem=4G
 #SBATCH --time=01:00:00
 #SBATCH --job-name=rnn_experiments
 #SBATCH --gres=gpu:0
