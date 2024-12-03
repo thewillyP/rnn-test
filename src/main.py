@@ -124,7 +124,7 @@ def train(config: Config, logger: Logger, model: RNN):
                     , "gradient_norm": gradient_norm(model)})
         
         logger.log({"test_loss": test_loss(config, test_loader, model)})
-        if epoch % config.checkpointFrequency == 0:
+        if (epoch+1) % config.checkpointFrequency == 0:
             log_modelIO(config, logger, model, f"epoch_{epoch}")
             logger.log({"performance": visualize(config, model, test_ds)})
 
