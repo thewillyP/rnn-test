@@ -3,3 +3,5 @@ FROM thewillyp/devenv:master-1.0.19@sha256:fb9d0830a7239a4e977eea92ff886c9d5ca81
 WORKDIR /run
 
 COPY ./src ./
+
+COPY .git/ ./.git/
