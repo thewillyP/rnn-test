@@ -9,6 +9,8 @@
 #SBATCH --array=1
 #SBATCH --output=test.out
 #SBATCH --error=test.err
+#SBATCH --mail-type=END
+#SBATCH --mail-user=wlp9800@nyu.edu
 
 
 CONFIG=$(sed -n "$((SLURM_ARRAY_TASK_ID))p" configs_test.txt)
