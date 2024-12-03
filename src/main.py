@@ -1,7 +1,7 @@
 #%%
 from typing import Any
-from data import *
-from rnn import *
+from src.data import *
+from src.rnn import *
 import torch
 import wandb
 import argparse
