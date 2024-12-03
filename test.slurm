@@ -32,4 +32,4 @@ source /home/'"${USER}"'/.bashrc && \
 micromamba activate '"${CONDA_ENV}"' && \
 wandb offline && \
 python /rnn-test/src/main.py '"${CONFIG}"' && \
-wandb sync /rnn-test/wandb/offline-*'
+wandb sync /wandb/offline-*'

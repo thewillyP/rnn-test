@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --mem=8G
+#SBATCH --mem=4G
 #SBATCH --time=01:00:00
 #SBATCH --job-name=rnn_experiments
 #SBATCH --gres=gpu:0
@@ -29,5 +29,5 @@ grep -q "export LD_LIBRARY_PATH=\"/.singularity.d/libs\"" /home/'"${USER}"'/.bas
 source /home/'"${USER}"'/.bashrc && \
 micromamba activate '"${CONDA_ENV}"' && \
 wandb offline && \
-python /run/main.py '"${CONFIG}"' && \
-wandb sync /run/wandb/offline-run*'
+python /rnn-test/src/main.py '"${CONFIG}"' && \
+wandb sync /wandb/offline-*'
