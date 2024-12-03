@@ -126,7 +126,7 @@ def train(config: Config, logger: Logger, model: RNN):
         logger.log({"test_loss": test_loss(config, test_loader, model)})
         if epoch % config.checkpointFrequency == 0:
             log_modelIO(config, logger, model, f"epoch_{epoch}")
-            logger.log({"performance": wandb.Image(visualize(config, model, test_ds))})
+            logger.log({"performance": visualize(config, model, test_ds)})
 
     
     return model
@@ -160,7 +160,9 @@ def visualize(config: Config, model: RNN, dataset: TensorDataset):
         axes[j].axis('off')
 
     fig.tight_layout()  # Adjust layout for better spacing
-    return fig
+    img = wandb.Image(fig)
+    plt.close(fig)
+    return img
 
 def test_loss(config: Config, loader: DataLoader, model: RNN):
     total_loss = 0
