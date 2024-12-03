@@ -6,10 +6,10 @@
 #SBATCH --job-name=rnn_experiments
 #SBATCH --gres=gpu:0
 #SBATCH --cpus-per-task=6
-#SBATCH --array=1-43200
+#SBATCH --array=1
 
 
-CONFIG=$(sed -n "$((SLURM_ARRAY_TASK_ID))p" configs.txt)
+CONFIG=$(sed -n "$((SLURM_ARRAY_TASK_ID))p" configs_test.txt)
 
 
 # Changes often
