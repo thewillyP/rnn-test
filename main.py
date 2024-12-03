@@ -12,7 +12,7 @@ from toolz import take
 
 @dataclass
 class ArtifactConfig:
-    artifact: Callable[[], wandb.Artifact]
+    artifact: Callable[[str], wandb.Artifact]
     path: Callable[[str], str]
         
 
@@ -39,7 +39,7 @@ class WandbLogger(Logger):
     def log2External(self, artifactConfig: ArtifactConfig, saveFile: Callable[[str], None], name: str):
         path = artifactConfig.path(name)
         saveFile(path)
-        artifact = artifactConfig.artifact()
+        artifact = artifactConfig.artifact(wandb.run.id)
         artifact.add_file(path)
         wandb.log_artifact(artifact)
     
@@ -287,8 +287,8 @@ def parseIO():
         rnnConfig=rnnConfig,
         criterion=loss_function,
         optimizerFn=optimizer_fn,
-        modelArtifact=ArtifactConfig(artifact=lambda: wandb.Artifact(f"model", type="model"), path=lambda x: f"model_{x}.pt"),
-        datasetArtifact=ArtifactConfig(artifact=lambda: wandb.Artifact(f"dataset", type="dataset"), path=lambda x: f"dataset_{x}.pt"),
+        modelArtifact=ArtifactConfig(artifact=lambda name: wandb.Artifact(f"model_{name}", type="model"), path=lambda x: f"model_{x}.pt"),
+        datasetArtifact=ArtifactConfig(artifact=lambda name: wandb.Artifact(f"dataset_{name}", type="dataset"), path=lambda x: f"dataset_{x}.pt"),
         checkpointFrequency=args.checkpoint_freq,
         projectName=args.projectName,
         seed=args.seed,
