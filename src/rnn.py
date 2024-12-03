@@ -61,6 +61,7 @@ class RnnConfig:
     n_h: int
     n_out: int
     num_layers: int
+    scheme: InitType
 
 T = TypeVar('T')
 X = TypeVar('X')
@@ -100,7 +101,7 @@ class RNN(nn.Module):
         # torch.nn.init.zeros_(self.fc.bias)
 
         self.interface = RNNInterface(
-            baseCase=lambda x: torch.zeros(config.num_layers, x.size(0), config.n_h),
+            baseCase=getRNNInit(config.scheme)(config.num_layers, config.n_h),
             forward=lambda x, s0: self.rnn(x, s0)[0]
         )
         # self.gru = nn.GRU(config.n_in, config.n_h, config.num_layers, batch_first=True)
@@ -117,3 +118,22 @@ class RNN(nn.Module):
         return out
 
 
+
+@dataclass
+class ZeroInit:
+    pass
+
+@dataclass
+class RandomInit:
+    pass
+
+InitType = ZeroInit | RandomInit
+
+def getRNNInit(initScheme: InitType):
+    match task:
+        case ZeroInit():
+            return lambda num_layers, n_h: lambda x: torch.zeros(num_layers, x.size(0), n_h)
+        case RandomInit():
+            return lambda num_layers, n_h: lambda x: torch.randn(num_layers, x.size(0), n_h)
+        case _:
+            raise Exception("Invalid dataset type")

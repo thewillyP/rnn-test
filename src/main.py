@@ -197,6 +197,8 @@ def parseIO():
     # Arguments for Config
     parser.add_argument('--task', type=str, choices=['Random', 'Sparse', 'Wave'], required=True,
                         help="Task type (Random, Sparse, or Wave)")
+    parser.add_argument('--init_scheme', type=str, choices=['ZeroInit', 'RandomInit'], required=True,
+                        help="Rnn init scheme type (ZeroInit, or RandomInit)")
     parser.add_argument('--outT', type=int, help="Output time step (required if task is Sparse)")
     parser.add_argument('--seq', type=int, required=True, help='Sequence length')
     parser.add_argument('--numTr', type=int, required=True, help='Number of training samples')
@@ -266,11 +268,20 @@ def parseIO():
         case _:
             raise ValueError("Invalid logger type")
     
+    match args.init_scheme:
+        case 'ZeroInit':
+            scheme = ZeroInit()
+        case 'RandomInit':
+            scheme = RandomInit()
+        case _:
+            raise ValueError("Invalid init type")
+    
     rnnConfig = RnnConfig(
         n_in=args.n_in,
         n_h=args.n_h,
         n_out=args.n_out,
-        num_layers=args.num_layers
+        num_layers=args.num_layers,
+        scheme=scheme
     )
 
     config = Config(
