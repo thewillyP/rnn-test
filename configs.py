@@ -19,7 +19,7 @@ params = {
     "mode": ["experiment"],
     "checkpoint_freq": [700],
     "seed": list(range(1, 10+1)),
-    "projectName": ["rnn-test"],
+    "projectName": ["rnn-test-again"],
     "logger": ["wandb"],
     "performance_samples": [9],
 }
