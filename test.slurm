@@ -1,12 +1,14 @@
 #!/bin/bash
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --mem=6G
+#SBATCH --mem=8G
 #SBATCH --time=01:00:00
 #SBATCH --job-name=rnn_experiments
 #SBATCH --gres=gpu:0
-#SBATCH --cpus-per-task=6
+#SBATCH --cpus-per-task=4
 #SBATCH --array=1
+#SBATCH --output=test.out
+#SBATCH --error=test.err
 
 
 CONFIG=$(sed -n "$((SLURM_ARRAY_TASK_ID))p" configs_test.txt)
@@ -26,4 +28,6 @@ grep -q "source /.singularity.d/env/10-docker2singularity.sh" /home/'"${USER}"'/
 grep -q "export LD_LIBRARY_PATH=\"/.singularity.d/libs\"" /home/'"${USER}"'/.bashrc || echo "export LD_LIBRARY_PATH=\"/.singularity.d/libs\"" >> /home/'"${USER}"'/.bashrc && \
 source /home/'"${USER}"'/.bashrc && \
 micromamba activate '"${CONDA_ENV}"' && \
-python /run/main.py '"${CONFIG}"''
+wandb offline && \
+python /run/main.py '"${CONFIG}"' && \
+wandb sync /run/wandb/offline-run*'
