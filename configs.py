@@ -12,7 +12,7 @@ params = {
     "numTe": [5000],
     "batch_size_vl": [1],
     "batch_size_te": [1000],
-    "num_epochs": [100000],
+    "num_epochs": [3500],
     "learning_rate": [0.0001, 0.001, 0.01, 0.1, 0.5],
     "optimizerFn": ["Adam", "SGD"],
     "lossFn": ["mse"],
