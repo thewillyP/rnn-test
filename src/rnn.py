@@ -55,6 +55,17 @@ def gru_init(rnn, fc, config):
         fc.weight.copy_(W_out)
         fc.bias.copy_(b_out)
 
+
+@dataclass
+class ZeroInit:
+    pass
+
+@dataclass
+class RandomInit:
+    pass
+
+InitType = ZeroInit | RandomInit
+
 @dataclass
 class RnnConfig:
     n_in: int
@@ -119,21 +130,12 @@ class RNN(nn.Module):
 
 
 
-@dataclass
-class ZeroInit:
-    pass
-
-@dataclass
-class RandomInit:
-    pass
-
-InitType = ZeroInit | RandomInit
 
 def getRNNInit(initScheme: InitType):
-    match task:
+    match initScheme:
         case ZeroInit():
             return lambda num_layers, n_h: lambda x: torch.zeros(num_layers, x.size(0), n_h)
         case RandomInit():
             return lambda num_layers, n_h: lambda x: torch.randn(num_layers, x.size(0), n_h)
         case _:
-            raise Exception("Invalid dataset type")
+            raise Exception("Invalid init scheme type")
