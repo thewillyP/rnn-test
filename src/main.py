@@ -51,7 +51,7 @@ class WandbLogger(Logger):
         wandb.init(project=projectName, config=config)
     
     def watchPytorch(self, model: nn.Module):
-        wandb.watch(model, log_freq=1, log="all")
+        wandb.watch(model, log_freq=1000, log="all")
 
 class PrettyPrintLogger(Logger):
         
