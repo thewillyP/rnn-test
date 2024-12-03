@@ -19,6 +19,7 @@ CONDA_ENV=master
 
 
 singularity exec --nv --containall --no-home --cleanenv --writable-tmpfs \
+--env WANDB_API_KEY=${WANDB_API_KEY} \
 /scratch/${USER}/images/${IMAGE}.sif bash -c \
 'micromamba shell init --shell bash --root-prefix=/opt/conda && \
 grep -q "source /.singularity.d/env/10-docker2singularity.sh" /home/'"${USER}"'/.bashrc || echo "source /.singularity.d/env/10-docker2singularity.sh" >> /home/'"${USER}"'/.bashrc && \
