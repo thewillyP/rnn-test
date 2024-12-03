@@ -8,6 +8,8 @@ __pycache__/
 *.so
 *.pt
 wandb/*
+*.out
+*.err
 
 # Distribution / packaging
 .Python
