@@ -30,4 +30,6 @@ source /home/'"${USER}"'/.bashrc && \
 micromamba activate '"${CONDA_ENV}"' && \
 wandb offline && \
 python /run/main.py '"${CONFIG}"' && \
-wandb sync --include-offline /run/wandb/offline-*'
+ls /run/wandb/'
+
+# wandb sync --include-offline /run/wandb/offline-*
