@@ -30,6 +30,7 @@ grep -q "source /.singularity.d/env/10-docker2singularity.sh" /home/'"${USER}"'/
 grep -q "export LD_LIBRARY_PATH=\"/.singularity.d/libs\"" /home/'"${USER}"'/.bashrc || echo "export LD_LIBRARY_PATH=\"/.singularity.d/libs\"" >> /home/'"${USER}"'/.bashrc && \
 source /home/'"${USER}"'/.bashrc && \
 micromamba activate '"${CONDA_ENV}"' && \
+cd /rnn-test && \
 wandb offline && \
 python /rnn-test/src/main.py '"${CONFIG}"' && \
 wandb sync /wandb/offline-*'
