@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --mem=4G
-#SBATCH --time=01:30:00
+#SBATCH --mem=8G
+#SBATCH --time=02:00:00
 #SBATCH --job-name=rnn_experiments
 #SBATCH --gres=gpu:0
 #SBATCH --cpus-per-task=4
@@ -28,6 +28,7 @@ grep -q "source /.singularity.d/env/10-docker2singularity.sh" /home/'"${USER}"'/
 grep -q "export LD_LIBRARY_PATH=\"/.singularity.d/libs\"" /home/'"${USER}"'/.bashrc || echo "export LD_LIBRARY_PATH=\"/.singularity.d/libs\"" >> /home/'"${USER}"'/.bashrc && \
 source /home/'"${USER}"'/.bashrc && \
 micromamba activate '"${CONDA_ENV}"' && \
+cd /rnn-test && \
 wandb offline && \
 python /rnn-test/src/main.py '"${CONFIG}"' && \
-wandb sync /wandb/offline-*'
+wandb sync /rnn-test/wandb/offline-*'
