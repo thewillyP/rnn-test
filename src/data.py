@@ -5,6 +5,7 @@ import torch
 from torch.utils.data import TensorDataset, DataLoader
 from typing import TypeVar, Callable, Generic, Generator, Iterator
 from dataclasses import dataclass
+from records import DatasetType, Random, Sparse, Wave
 
 
 @curry
@@ -68,8 +69,6 @@ def createDelayAddExample(t1, t2, ts, getRandFn):
     x1 = randFn1(ts, t1)
     x2 = randFn2(ts, t2)
     y = torch.roll(x1, shifts=t1, dims=0) + torch.roll(x2, shifts=t2, dims=0)  # giving up on mathematically elegant y(t) = x(t - t1) + x(t - t2) bc computer can't support arbitrary precision. From now use integers only
-    mask = ts >= max(t1, t2) 
-    y = y * mask 
     return x1, x2, y
 
 
@@ -112,19 +111,6 @@ def getDataLoaderIO(ds: TensorDataset, batchSize: int):
     return DataLoader(ds, batch_size=batchSize, shuffle=True, drop_last=True)
 
 
-@dataclass
-class Random:
-    pass
-
-@dataclass
-class Sparse:
-    outT: float
-
-@dataclass
-class Wave:
-    pass
-
-DatasetType = Random | Sparse | Wave
 
 def getRandomTask(task: DatasetType):
     match task:
@@ -136,3 +122,12 @@ def getRandomTask(task: DatasetType):
             return lambda: (waveIO(waveArbitraryUniform), waveIO(waveArbitraryUniform))
         case _:
             raise Exception("Invalid dataset type")
+        
+
+def realdataset(randFn, t1: int, t2: int, ts: torch.Tensor):
+    XS1, XS2, YS = createDelayAddExample(t1, t2, ts, randFn)
+    XS = torch.stack((XS1, XS2), dim=-1)
+    ds = TensorDataset(XS, YS)
+    return ds
+
+# ds = realdataset(getRandomTask(Random()), 2, 3, torch.arange(5))

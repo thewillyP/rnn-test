@@ -8,32 +8,10 @@ import argparse
 from abc import ABC, abstractmethod
 import os
 from toolz import take
+from records import ArtifactConfig, Logger, ZeroInit, RandomInit, RnnConfig, Config, Random, Sparse, Wave
 
 
-@dataclass
-class ArtifactConfig:
-    artifact: Callable[[str], wandb.Artifact]
-    path: Callable[[str], str]
         
-
-class Logger(ABC):
-
-    @abstractmethod
-    def log2External(self, artifactConfig: ArtifactConfig, saveFile: Callable[[str], None], name: str):
-        pass
-
-    @abstractmethod
-    def log(self, dict: dict[str, Any]):
-        pass
-
-    @abstractmethod
-    def init(self, projectName: str, config: argparse.Namespace):
-        pass
-
-    @abstractmethod
-    def watchPytorch(self, model: nn.Module):
-        pass
-
 class WandbLogger(Logger):
     
     def log2External(self, artifactConfig: ArtifactConfig, saveFile: Callable[[str], None], name: str):
@@ -71,39 +49,13 @@ class PrettyPrintLogger(Logger):
         print("Model is being watched")
 
 
-@dataclass
-class Config:
-    task: DatasetType
-    seq: int
-    numTr: int
-    numVl: int
-    numTe: int
-    batch_size_tr: int
-    batch_size_vl: int
-    batch_size_te: int
-    t1: float
-    t2: float
-    num_epochs: int
-    learning_rate: float
-    rnnConfig: RnnConfig
-    criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
-    optimizerFn: Callable
-    modelArtifact: ArtifactConfig  
-    datasetArtifact: ArtifactConfig
-    checkpointFrequency: int
-    projectName: str
-    seed: int
-    performanceSamples: int
-
-
-
 def train(config: Config, logger: Logger, model: RNN):
     ts = torch.arange(0, config.seq)
     dataGenerator = getRandomTask(config.task)
 
-    train_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTr)
+    train_ds = realdataset(dataGenerator, config.t1, config.t2, ts, config.numTr)
     train_loader = getDataLoaderIO(train_ds, config.batch_size_tr)
-    test_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTe)
+    test_ds = realdataset(dataGenerator, config.t1, config.t2, ts, config.numTe)
     test_loader = getDataLoaderIO(test_ds, config.batch_size_te)
 
     log_datasetIO(config, logger, train_ds, "train")
@@ -309,32 +261,6 @@ def parseIO():
     )
 
     return args, config, logger
-
-
-
-# rc = RnnConfig(
-#         n_in=2,
-#         n_h=30,
-#         n_out=1,
-#         num_layers=1
-#     )
-
-#     config = Config(
-#         task=Random(),
-#         seq=15,
-#         numTr=10000, 
-#         numVl=10, 
-#         numTe=1000, 
-#         batch_size_tr=10000, 
-#         batch_size_vl=2, 
-#         t1=3, 
-#         t2=5,
-#         num_epochs=500,
-#         learning_rate=0.001,
-#         rnnConfig=rc,
-#         criterion=torch.functional.F.mse_loss,
-#         optimizerFn=torch.optim.SGD
-#     )
 
 
 

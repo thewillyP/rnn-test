@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torchvision
 import torchvision.transforms as transforms
-
+from records import InitType, RnnConfig, ZeroInit, RandomInit
 
 
 def block_orthogonal_init(size, block_size, frequency=torch.pi/8, amplitude=(0.9, 0.999)):
@@ -56,23 +56,7 @@ def gru_init(rnn, fc, config):
         fc.bias.copy_(b_out)
 
 
-@dataclass
-class ZeroInit:
-    pass
 
-@dataclass
-class RandomInit:
-    pass
-
-InitType = ZeroInit | RandomInit
-
-@dataclass
-class RnnConfig:
-    n_in: int
-    n_h: int
-    n_out: int
-    num_layers: int
-    scheme: InitType
 
 T = TypeVar('T')
 X = TypeVar('X')
