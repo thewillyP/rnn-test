@@ -1,6 +1,7 @@
 #%%
 from typing import Any
 from data import *
+from learning import SGD
 from rnn import *
 import torch
 import wandb
@@ -76,10 +77,16 @@ def train(config: Config, logger: Logger, model: RNN):
     log_datasetIO(config, logger, train_ds, "train")
     log_datasetIO(config, logger, test_ds, "test")
 
-    optimizer = config.optimizerFn(model.parameters(), lr=config.learning_rate)
+    sgd = SGD(config.learning_rate)
+    efficientBPTT_Vanilla_Full
+
+    # optimizer = config.optimizerFn(model.parameters(), lr=config.learning_rate)
 
     for epoch in range(config.num_epochs):
-        for i, (x, y) in enumerate(train_loader):    
+        for i, (x, y) in enumerate(train_loader):   
+
+            # def closure(inputs, targets):
+
             outputs = model(x)
             loss = config.criterion(outputs, y)
             
@@ -194,6 +201,8 @@ def parseIO():
                         help="Choice of logger to use")
     parser.add_argument('--performance_samples', type=int, required=True,
                         help="Number of samples to visualize performance")
+    parser.add_argument('--activation_fn', type=str, choices=['relu', 'tanh'], required=True,
+                        help="Activation function (relu or tanh)")
 
     args = parser.parse_args()
 
@@ -242,13 +251,22 @@ def parseIO():
             scheme = RandomInit()
         case _:
             raise ValueError("Invalid init type")
+        
+    match args.activation_fn:
+        case 'relu':
+            activation_fn = torch.relu
+        case 'tanh':
+            activation_fn = torch.tanh
+        case _:
+            raise ValueError("Invalid activation function")
     
     rnnConfig = RnnConfig(
         n_in=args.n_in,
         n_h=args.n_h,
         n_out=args.n_out,
         num_layers=args.num_layers,
-        scheme=scheme
+        scheme=scheme,
+        activation=activation_fn
     )
 
     config = Config(

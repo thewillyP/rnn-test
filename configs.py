@@ -23,6 +23,7 @@ params = {
     "logger": ["wandb"],
     "performance_samples": [9],
     "init_scheme": ['RandomInit'],
+    "activation_fn": ['relu', 'tanh'],
 }
 
 # Pairing for numTr and batch_size_tr

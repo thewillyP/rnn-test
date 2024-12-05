@@ -102,32 +102,27 @@ class HyperParameterOhoStateInterpreter(HasHyperParameter[OhoState[A, B, C], C])
     def putHyperParameter(self, s, env):
         return OhoState(env.activation, env.parameter, s)
 
-class OhoStateInterpreter(ActivationOhoStateInterpreter, ParameterOhoStateInterpreter, HyperParameterOhoStateInterpreter):
-    pass
-
-
-@dataclass(frozen=True)
-class OhoData(Generic[A, B, C, D]):
-    trainingInput: A
-    trainingLabel: B
-    validationInput: C
-    validationLabel: D
-
-class TrainingInputOhoDataInterpreter(HasTrainingInput[OhoData[A, B, C, D], A]):
+# Need to endow on tuple bc input needs to be vectorized to handle batch
+class TrainingInputOhoDataInterpreter(HasTrainingInput[tuple[A, B, C, D], A]):
     def getTrainingInput(self, data):
-        return data.trainingInput
+        trainingInput, _, _, _ = data
+        return trainingInput
 
-class TrainingLabelOhoDataInterpreter(HasTrainingLabel[OhoData[A, B, C, D], B]):
+class TrainingLabelOhoDataInterpreter(HasTrainingLabel[tuple[A, B, C, D], B]):
     def getTrainingLabel(self, data):
-        return data.trainingLabel
+        _, trainingLabel, _, _ = data
+        return trainingLabel
 
-class ValidationInputOhoDataInterpreter(HasValidationInput[OhoData[A, B, C, D], C]):
+class ValidationInputOhoDataInterpreter(HasValidationInput[tuple[A, B, C, D], C]):
     def getValidationInput(self, data):
-        return data.validationInput
+        _, _, validationInput, _ = data
+        return validationInput
 
-class ValidationLabelOhoDataInterpreter(HasValidationLabel[OhoData[A, B, C, D], D]):
+class ValidationLabelOhoDataInterpreter(HasValidationLabel[tuple[A, B, C, D], D]):
     def getValidationLabel(self, data):
-        return data.validationLabel
+        _, _, _, validationLabel = data
+        return validationLabel
 
-class OhoDataInterpreter(TrainingInputOhoDataInterpreter, TrainingLabelOhoDataInterpreter, ValidationInputOhoDataInterpreter, ValidationLabelOhoDataInterpreter):
+
+class OhoStateInterpreter(ActivationOhoStateInterpreter, ParameterOhoStateInterpreter, HyperParameterOhoStateInterpreter, TrainingInputOhoDataInterpreter, TrainingLabelOhoDataInterpreter, ValidationInputOhoDataInterpreter, ValidationLabelOhoDataInterpreter):
     pass

@@ -44,6 +44,18 @@ class RandomInit:
 
 InitType = ZeroInit | RandomInit
 
+
+# @dataclass(frozen=True)
+# class RELU:
+#     pass
+
+# @dataclass(frozen=True)
+# class TANH:
+#     pass
+
+# ActivationFnType = RELU | TANH
+
+
 @dataclass(frozen=True)
 class RnnConfig:
     n_in: int
@@ -51,6 +63,7 @@ class RnnConfig:
     n_out: int
     num_layers: int
     scheme: InitType
+    activation: Callable[[torch.Tensor], torch.Tensor]
 
 
 @dataclass(frozen=True)

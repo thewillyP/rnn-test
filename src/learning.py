@@ -1,8 +1,9 @@
 from typing import Callable, TypeVar, Iterator, Union
 import torch
-from records import RnnConfig
+from records import RnnConfig, ActivationFnType, RELU, TANH
 from objectalgebra import HasActivation, HasParameter, HasTrainingInput, HasTrainingLabel
 from func import foldr, scan0, fst, snd
+import itertools
 
 T = TypeVar('T')
 E = TypeVar('E')
@@ -38,15 +39,19 @@ def averageGradient(  xs: Iterator[X]
     grads_avg = grads / len(xs)
     return env, grads_avg
 
+def splitTimeSeries(chunkSize: int, bptt: Callable[[Iterator[Iterator[X]], ENV], ENV]) -> Callable[[Iterator[X], ENV], ENV]:
+    def splitTimeSeries_(xs: Iterator[X], env: ENV) -> ENV:
+        xs_ = itertools.batched(xs, chunkSize)  #! Inefficient, always going to loop twice. 
+        return bptt(xs_, env)
+    return splitTimeSeries_
+
 
 def rnnStep(  config: RnnConfig
-            , activation: Callable[[torch.Tensor], torch.Tensor]
             , x: torch.Tensor
             , a: torch.Tensor
-            , w_rec: torch.Tensor
-            , alpha) -> torch.Tensor:
+            , w_rec: torch.Tensor) -> torch.Tensor:
     w_rec = torch.reshape(w_rec, (config.n_h, config.n_h+config.n_in+1))
-    return (1 - alpha) * a + alpha * activation(w_rec @ torch.cat((x, a, torch.tensor([1.0]))))
+    return (1 - config.alpha) * a + config.alpha * config.activation(w_rec @ torch.cat((x, a, torch.tensor([1.0]))))
 
 def rnnReadout(   config: RnnConfig
                 , a: torch.Tensor
@@ -60,16 +65,14 @@ def rnnSplitParameters(parameters: torch.Tensor, config: RnnConfig) -> tuple[tor
     return w_rec, w_out
 
 
-def rnnActivation_Vanilla(activationFn: Callable[[torch.Tensor], torch.Tensor]):
-    def rnnActivation_Vanilla_(t: Union[HasActivation[ENV, torch.Tensor], HasParameter[ENV, RNN_PARAM]]) -> Callable[[torch.Tensor, ENV], ENV]:
-        def rnnActivation_Vanilla__(x: torch.Tensor, env: ENV) -> ENV:
-            a = t.getActivation(env)
-            parameters, config = t.getParameter(env)
-            w_rec, _ = rnnSplitParameters(parameters, config)
-            a_ = rnnStep(config, activationFn, x, a, w_rec, config.alpha)
-            return t.putActivation(a_, env)
-        return rnnActivation_Vanilla__
-    return rnnActivation_Vanilla_
+def rnnActivation_Vanilla(t: Union[HasActivation[ENV, torch.Tensor], HasParameter[ENV, RNN_PARAM]]) -> Callable[[torch.Tensor, ENV], ENV]:
+    def rnnActivation_Vanilla__(x: torch.Tensor, env: ENV) -> ENV:
+        a = t.getActivation(env)
+        parameters, config = t.getParameter(env)
+        w_rec, _ = rnnSplitParameters(parameters, config)
+        a_ = rnnStep(config, x, a, w_rec)
+        return t.putActivation(a_, env)
+    return rnnActivation_Vanilla__
 
 
 def rnnPrediction_Vanilla(algebra: Union[HasActivation[ENV, torch.Tensor], HasParameter[ENV, RNN_PARAM]]) -> Callable[[ENV], torch.Tensor]:
@@ -82,13 +85,12 @@ def rnnPrediction_Vanilla(algebra: Union[HasActivation[ENV, torch.Tensor], HasPa
 
 
 def truncatedRNN_Vanilla( criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
-                        , activationFn: Callable[[torch.Tensor], torch.Tensor]
                         , algebra: Union[
                             HasActivation[ENV, torch.Tensor]
                             , HasParameter[ENV, RNN_PARAM]
                             , HasTrainingInput[DATA, torch.Tensor]
                             , HasTrainingLabel[DATA, torch.Tensor]]):
-    actv = rnnActivation_Vanilla(activationFn)(algebra)
+    actv = rnnActivation_Vanilla(algebra)
     predict = rnnPrediction_Vanilla(algebra)
     def step(data: DATA, envWithLoss: tuple[ENV, torch.Tensor]) -> tuple[ENV, torch.Tensor]:
         x, y = algebra.getTrainingInput(data), algebra.getTrainingLabel(data)
@@ -153,24 +155,35 @@ def efficientBPTT(optimizer: Callable[[torch.Tensor, torch.Tensor], torch.Tensor
 
 def efficientBPTT_Vanilla(optimizer: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
                         , criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
-                        , activationFn: Callable[[torch.Tensor], torch.Tensor]
                         , algebra: Union[
                             HasActivation[ENV, torch.Tensor]
                             , HasParameter[ENV, RNN_PARAM]
                             , HasTrainingInput[DATA, torch.Tensor]
                             , HasTrainingLabel[DATA, torch.Tensor]]):
-    rnnLoss = truncatedRNN_Vanilla(criterion, activationFn, algebra)
+    rnnLoss = truncatedRNN_Vanilla(criterion, algebra)
     bptt = efficientBPTT(optimizer, rnnLoss, algebra)
     return bptt
 
+def efficientBPTT_Vanilla_Full(optimizer: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
+                            , criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
+                            , algebra: Union[
+                            HasActivation[ENV, torch.Tensor]
+                            , HasParameter[ENV, RNN_PARAM]
+                            , HasTrainingInput[DATA, torch.Tensor]
+                            , HasTrainingLabel[DATA, torch.Tensor]]):
+    rnnLoss = truncatedRNN_Vanilla(criterion, algebra)
+    bptt = efficientBPTT(optimizer, rnnLoss, algebra)
+    def bpttFull(xs: list[DATA], env: ENV) -> ENV:
+        return splitTimeSeries(len(xs), bptt)(xs, env)
+    return bpttFull
+
 
 # as long as I dont have the EVERYTHING is a multilayer RNN set up, I will have to manually code prediction separetly from the training. 
-def rnnPrediction_Vanilla(activationFn: Callable[[torch.Tensor], torch.Tensor]
-                        , algebra: Union[
+def rnnPrediction_Vanilla(algebra: Union[
                             HasActivation[ENV, torch.Tensor]
                             , HasParameter[ENV, RNN_PARAM]
                             , HasTrainingInput[DATA, torch.Tensor]]):
-    actv = rnnActivation_Vanilla(activationFn)(algebra)
+    actv = rnnActivation_Vanilla(algebra)
     predict = rnnPrediction_Vanilla(algebra)
 
     def step(data: DATA, env: tuple[ENV]) -> tuple[ENV]:
@@ -189,6 +202,17 @@ def SGD(learning_rate: float) -> Callable[[torch.Tensor, torch.Tensor], torch.Te
     def SGD_(param: torch.Tensor, grad: torch.Tensor) -> torch.Tensor:
         return param - learning_rate * grad
     return SGD_
+
+
+# def getActivationFn(case: ActivationFnType) -> Callable[[torch.Tensor], torch.Tensor]:
+#     match case:
+#         case RELU():
+#             return torch.relu
+#         case TANH():
+#             return torch.tanh
+#         case _:
+#             raise ValueError('Activation function not supported')
+    
 
 # def activationLayersTrans(activationFn: Callable[[torch.Tensor], torch.Tensor]):
 #     def activationTrans_(t: Union[HasActivation[MODEL, List[torch.Tensor]], HasParameter[MODEL, PARAM]]) -> Callable[[torch.Tensor, MODEL], MODEL]:
