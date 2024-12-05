@@ -49,13 +49,28 @@ class PrettyPrintLogger(Logger):
         print("Model is being watched")
 
 
+"""
+xs: Iterator[Iterator[DATA@efficientBPTT_Vanilla]],
+    env: ENV@efficientBPTT_Vanilla
+) -> ENV@efficientBPTT_Vanilla
+
+Iteratr1 = single dimension, time series split up size
+Iterator2 = actual time series
+
+[1, T, D]
+just wrap dataset in a []
+to add batch
+[B, 1, T, D]
+I just vmap
+"""
+
 def train(config: Config, logger: Logger, model: RNN):
     ts = torch.arange(0, config.seq)
     dataGenerator = getRandomTask(config.task)
 
-    train_ds = realdataset(dataGenerator, config.t1, config.t2, ts, config.numTr)
+    train_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTr)
     train_loader = getDataLoaderIO(train_ds, config.batch_size_tr)
-    test_ds = realdataset(dataGenerator, config.t1, config.t2, ts, config.numTe)
+    test_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTe)
     test_loader = getDataLoaderIO(test_ds, config.batch_size_te)
 
     log_datasetIO(config, logger, train_ds, "train")
