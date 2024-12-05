@@ -5,3 +5,5 @@ WORKDIR /
 RUN git clone https://github.com/thewillyP/rnn-test.git
 
 WORKDIR /rnn-test
+
+RUN chmod -R 777 /rnn-test
