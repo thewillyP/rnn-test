@@ -22,6 +22,7 @@ params = {
     "projectName": ["rnn-test-spikefix"],
     "logger": ["wandb"],
     "performance_samples": [9],
+    "init_scheme": ['RandomInit'],
 }
 
 # Pairing for numTr and batch_size_tr
