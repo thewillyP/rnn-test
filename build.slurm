@@ -12,7 +12,7 @@
 
 USER=wlp9800
 IMAGE="rnn-test"
-DOCKER_URL="docker://thewillyp/${IMAGE}:master-1.0.9@sha256:e42f481210ed756fd2931c7c398fde6c5e406d2f042b878618776dc750bd65bc"
+DOCKER_URL="docker://thewillyp/${IMAGE}:master-1.0.11@sha256:736287efa17f95cec81890afb446cab30c95141988f36ff47b3f1277174efdb6"
 SAVE_DIR="/scratch/${USER}/"
 
 
