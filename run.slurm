@@ -6,7 +6,7 @@
 #SBATCH --job-name=rnn_experiments
 #SBATCH --gres=gpu:0
 #SBATCH --cpus-per-task=4
-#SBATCH --array=1-480
+#SBATCH --array=1-240
 #SBATCH --output=/dev/null
 #SBATCH --error=/dev/null
 

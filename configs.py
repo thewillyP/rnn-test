@@ -13,13 +13,13 @@ params = {
     "batch_size_vl": [1],
     "batch_size_te": [1000],
     "num_epochs": [35000],
-    "learning_rate": [0.001, 0.01, 0.1],
+    "learning_rate": [0.01, 0.1],
     "optimizerFn": ["SGD"],
     "lossFn": ["mse"],
     "mode": ["experiment"],
     "checkpoint_freq": [700],
     "seed": list(range(1, 10+1)),
-    "projectName": ["rnn-test-sgdspike"],
+    "projectName": ["rnn-test-spikefix"],
     "logger": ["wandb"],
     "performance_samples": [9],
 }
@@ -32,7 +32,6 @@ train_batch_combinations = [
 # Convert t_combinations to dictionary style
 t_combinations = [
     {"t1": 1, "t2": 1},
-    {"t1": 2, "t2": 2},
     {"t1": 3, "t2": 5},
     {"t1": 5, "t2": 9}
 ]
