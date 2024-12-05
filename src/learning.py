@@ -123,21 +123,21 @@ def torchUpdateParam( envWithGrad: tuple[ENV, torch.Tensor]
     return algebra.putParameter(p_, env)
 
 
-def efficientBPTTGradient(rnnLoss: Callable[[X, ENV], tuple[ENV, torch.Tensor]]
+def efficientBPTTGradient(rnnLoss: Callable[[X, tuple[ENV, torch.Tensor]], tuple[ENV, torch.Tensor]]
                         , algebra: Union[
                             HasActivation[ENV, torch.Tensor]
                             , HasParameter[ENV, RNN_PARAM]]):
 
-    def step(data: X, envWithGrad: tuple[ENV, torch.Tensor]) -> tuple[ENV, torch.Tensor]:
+    def step(data: X, envWithGrad: tuple[ENV, torch.Tensor]) -> tuple[ENV, torch.Tensor]:  # TODO: stop assume loss starts at zero after every update
         env, grad = envWithGrad
-        env_, loss = rnnLoss(data, env)
+        env_, loss = rnnLoss(data, (env, torch.tensor(0.0)))
         grad_ = torchGradient(fst)(algebra)(loss, env_)
         return env_, grad + grad_
 
     return lambda xs, envWithGrad: averageGradient(xs, envWithGrad, foldr(step))  # TODO: stop assuming average later on
 
 def efficientBPTT(optimizer: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
-                , rnnLoss: Callable[[X, ENV], tuple[ENV, torch.Tensor]]
+                , rnnLoss: Callable[[X, tuple[ENV, torch.Tensor]], tuple[ENV, torch.Tensor]]
                 , algebra: Union[
                     HasActivation[ENV, torch.Tensor]
                     , HasParameter[ENV, RNN_PARAM]]):
@@ -160,7 +160,8 @@ def efficientBPTT_Vanilla(optimizer: Callable[[torch.Tensor, torch.Tensor], torc
                             , HasTrainingInput[DATA, torch.Tensor]
                             , HasTrainingLabel[DATA, torch.Tensor]]):
     rnnLoss = truncatedRNN_Vanilla(criterion, activationFn, algebra)
-    return efficientBPTT(optimizer, rnnLoss, algebra)
+    bptt = efficientBPTT(optimizer, rnnLoss, algebra)
+    return bptt
 
 
 # as long as I dont have the EVERYTHING is a multilayer RNN set up, I will have to manually code prediction separetly from the training. 
