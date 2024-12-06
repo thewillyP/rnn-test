@@ -69,6 +69,8 @@ def createDelayAddExample(t1, t2, ts, getRandFn):
     x1 = randFn1(ts, t1)
     x2 = randFn2(ts, t2)
     y = torch.roll(x1, shifts=t1, dims=0) + torch.roll(x2, shifts=t2, dims=0)  # giving up on mathematically elegant y(t) = x(t - t1) + x(t - t2) bc computer can't support arbitrary precision. From now use integers only
+    mask = ts >= max(t1, t2) 
+    y = y * mask 
     return x1, x2, y
 
 

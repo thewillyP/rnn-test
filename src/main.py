@@ -1,7 +1,8 @@
 #%%
 from typing import Any
 from data import *
-from learning import SGD
+from learning import SGD, efficientBPTT_Vanilla_Full
+from objectalgebra import OhoStateInterpreter
 from rnn import *
 import torch
 import wandb
@@ -77,10 +78,10 @@ def train(config: Config, logger: Logger, model: RNN):
     log_datasetIO(config, logger, train_ds, "train")
     log_datasetIO(config, logger, test_ds, "test")
 
-    sgd = SGD(config.learning_rate)
-    efficientBPTT_Vanilla_Full
+    # sgd = SGD(config.learning_rate)
+    # bptt = efficientBPTT_Vanilla_Full(sgd, config.criterion, OhoStateInterpreter())
 
-    # optimizer = config.optimizerFn(model.parameters(), lr=config.learning_rate)
+    optimizer = config.optimizerFn(model.parameters(), lr=config.learning_rate)
 
     for epoch in range(config.num_epochs):
         for i, (x, y) in enumerate(train_loader):   

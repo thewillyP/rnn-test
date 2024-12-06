@@ -3,23 +3,23 @@ import itertools
 # Parameter grid
 params = {
     "n_in": [2],
-    "n_h": [30, 200],
+    "n_h": [200, 30],
     "n_out": [1],
     "num_layers": [1],
     "task": ["Random"],
-    "seq": [10, 20],
+    "seq": [20, 30],
     "numVl": [1],
     "numTe": [5000],
     "batch_size_vl": [1],
     "batch_size_te": [1000],
     "num_epochs": [35000],
-    "learning_rate": [0.01, 0.1],
-    "optimizerFn": ["SGD"],
+    "learning_rate": [0.1],
+    "optimizerFn": ["SGD", "Adam"],
     "lossFn": ["mse"],
     "mode": ["experiment"],
     "checkpoint_freq": [700],
-    "seed": list(range(1, 10+1)),
-    "projectName": ["rnn-test-spikefix"],
+    "seed": list(range(1, 5+1)),
+    "projectName": ["rnn-test-spikefix2"],
     "logger": ["wandb"],
     "performance_samples": [9],
     "init_scheme": ['RandomInit'],
@@ -33,8 +33,6 @@ train_batch_combinations = [
 
 # Convert t_combinations to dictionary style
 t_combinations = [
-    {"t1": 1, "t2": 1},
-    {"t1": 3, "t2": 5},
     {"t1": 5, "t2": 9}
 ]
 

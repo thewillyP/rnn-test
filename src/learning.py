@@ -1,6 +1,6 @@
 from typing import Callable, TypeVar, Iterator, Union
 import torch
-from records import RnnConfig, ActivationFnType, RELU, TANH
+from records import RnnConfig
 from objectalgebra import HasActivation, HasParameter, HasTrainingInput, HasTrainingLabel
 from func import foldr, scan0, fst, snd
 import itertools
