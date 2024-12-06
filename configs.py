@@ -19,7 +19,7 @@ params = {
     "mode": ["experiment"],
     "checkpoint_freq": [5000],
     "seed": list(range(1, 5+1)),
-    "projectName": ["rnn-test-spikefix2"],
+    "projectName": ["rnn-test-spikefix3"],
     "logger": ["wandb"],
     "performance_samples": [9],
     "init_scheme": ['RandomInit'],
