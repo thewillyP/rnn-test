@@ -104,4 +104,5 @@ class Config:
     projectName: str
     seed: int
     performanceSamples: int
+    logFrequency: int
 

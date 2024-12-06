@@ -6,8 +6,9 @@
 #SBATCH --job-name=rnn_experiments
 #SBATCH --gres=gpu:0
 #SBATCH --cpus-per-task=4
-#SBATCH --array=1-80
+#SBATCH --array=1-80:15
 #SBATCH --output=/dev/null
+#SBATCH --error=/dev/null
 
 CONFIG=$(sed -n "$((SLURM_ARRAY_TASK_ID))p" configs.txt)
 
@@ -27,6 +28,8 @@ grep -q "export LD_LIBRARY_PATH=\"/.singularity.d/libs\"" /home/'"${USER}"'/.bas
 source /home/'"${USER}"'/.bashrc && \
 micromamba activate '"${CONDA_ENV}"' && \
 cd /rnn-test && \
-wandb offline && \
-python /rnn-test/src/main.py '"${CONFIG}"' && \
-wandb sync /rnn-test/wandb/offline-*'
+python /rnn-test/src/main.py '"${CONFIG}"''
+
+# wandb offline && \
+#  && \
+# wandb sync /rnn-test/wandb/offline-*

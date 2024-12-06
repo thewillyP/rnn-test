@@ -17,4 +17,6 @@ SAVE_DIR="/scratch/${USER}/"
 
 
 singularity build --force /scratch/${USER}/images/${IMAGE}.sif ${DOCKER_URL} 
-singularity overlay create --size 10240 /scratch/${USER}/images/${IMAGE}.sif
+singularity overlay create --size 25600 /scratch/${USER}/images/${IMAGE}.sif
+
+# 25 GiB

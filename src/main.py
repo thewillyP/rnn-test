@@ -1,4 +1,3 @@
-#%%
 from typing import Any
 from data import *
 from learning import SGD, efficientBPTT_Vanilla_Full
@@ -95,8 +94,9 @@ def train(config: Config, logger: Logger, model: RNN):
             loss.backward()
             optimizer.step()
 
-            logger.log({"loss": loss.item()
-                    , "gradient_norm": gradient_norm(model)})
+            if (epoch * len(train_loader) + i) % config.logFrequency == 0:
+                logger.log({"loss": loss.item()
+                        , "gradient_norm": gradient_norm(model)})
         
         logger.log({"test_loss": test_loss(config, test_loader, model)})
         if (epoch+1) % config.checkpointFrequency == 0:
@@ -204,6 +204,8 @@ def parseIO():
                         help="Number of samples to visualize performance")
     parser.add_argument('--activation_fn', type=str, choices=['relu', 'tanh'], required=True,
                         help="Activation function (relu or tanh)")
+    parser.add_argument('--log_freq', type=int, required=True,
+                        help="Frequency of logging during training (in iterations)")
 
     args = parser.parse_args()
 
@@ -291,7 +293,8 @@ def parseIO():
         checkpointFrequency=args.checkpoint_freq,
         projectName=args.projectName,
         seed=args.seed,
-        performanceSamples=args.performance_samples
+        performanceSamples=args.performance_samples,
+        logFrequency=args.log_freq
     )
 
     return args, config, logger

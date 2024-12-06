@@ -12,18 +12,19 @@ params = {
     "numTe": [5000],
     "batch_size_vl": [1],
     "batch_size_te": [1000],
-    "num_epochs": [35000],
+    "num_epochs": [35000], 
     "learning_rate": [0.1],
     "optimizerFn": ["SGD", "Adam"],
     "lossFn": ["mse"],
     "mode": ["experiment"],
-    "checkpoint_freq": [700],
+    "checkpoint_freq": [7000],
     "seed": list(range(1, 5+1)),
     "projectName": ["rnn-test-spikefix2"],
     "logger": ["wandb"],
     "performance_samples": [9],
     "init_scheme": ['RandomInit'],
     "activation_fn": ['relu', 'tanh'],
+    "log_freq": [1],
 }
 
 # Pairing for numTr and batch_size_tr
