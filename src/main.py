@@ -314,7 +314,7 @@ def main():
 
     logger.init(config.projectName, args)
     model = RNN(config.rnnConfig)  # IO, random 
-    logger.watchPytorch(model)
+    # logger.watchPytorch(model)
     log_modelIO(config, logger, model, "init")
 
     model = train(config, logger, model)
