@@ -4,6 +4,8 @@ WORKDIR /
 
 RUN git clone https://github.com/thewillyP/rnn-test.git
 
+RUN git config --global --add safe.directory /rnn-test
+
 WORKDIR /rnn-test
 
 RUN chmod -R 777 /rnn-test
