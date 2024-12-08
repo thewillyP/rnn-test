@@ -95,6 +95,7 @@ class Config:
     t2: float
     num_epochs: int
     learning_rate: float
+    l2_regularization: float
     rnnConfig: RnnConfig
     criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
     optimizerFn: Callable
@@ -105,4 +106,5 @@ class Config:
     seed: int
     performanceSamples: int
     logFrequency: int
+    meta_learning_rate: float
 

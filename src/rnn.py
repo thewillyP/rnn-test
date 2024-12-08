@@ -68,7 +68,7 @@ class RNNInterface(Generic[X, T]):
 
 # Fully connected neural network with one hidden layer
 class RNN(nn.Module):
-    def __init__(self, config: RnnConfig):
+    def __init__(self, config: RnnConfig, lr_init, lambda_l2):
         super(RNN, self).__init__()
 
         self.rnn = nn.RNN(config.n_in, config.n_h, config.num_layers, batch_first=True)
@@ -90,14 +90,26 @@ class RNN(nn.Module):
             forward=lambda x, s0: self.rnn(x, s0)[0]
         )
 
-
-        
-
         self.param_sizes = [p.numel() for p in self.parameters()]
         self.n_params = sum(self.param_sizes)
         self.param_shapes = [tuple(p.shape) for p in self.parameters()]
-        self.param_cumsum = torch.cumsum([0] + self.param_sizes)
+        self.param_cumsum = torch.cumsum(torch.tensor([0] + self.param_sizes), 0)
 
+        self.reset_jacob()
+        self.eta  = lr_init
+        self.lambda_l2 = lambda_l2
+        self.grad_norm = 0
+        self.grad_norm_vl = 0
+        self.grad_angle = 0
+        self.param_norm = 0
+        self.dFdlr_norm = 0
+        self.dFdl2_nrom = 0
+    
+    def reset_jacob(self):
+        self.dFdlr = torch.zeros(self.n_params) 
+        self.dFdl2 = torch.zeros(self.n_params)
+        self.dFdl2_norm = 0
+        self.dFdlr_norm = 0
         
     def forward(self, x):
         s0 = self.interface.baseCase(x)
@@ -105,101 +117,30 @@ class RNN(nn.Module):
         out = self.fc(out)
         return out
 
-
-class MLP(nn.Module):
-
-    def __init__(self, n_layers, layer_sizes, lr_init, lambda_l2, is_cuda=0):
-        super(MLP, self).__init__()
-
-
-        self.layer_sizes = layer_sizes
-        self.n_layers = n_layers
-        self.n_params = 0
-        for i in range(1, self.n_layers):
-            attr = 'layer_{}'.format(i)
-            layer = nn.Linear(layer_sizes[i - 1], layer_sizes[i])
-            if is_cuda: layer = layer.cuda()
-            setattr(self, attr, layer)
-
-            param_size = (layer_sizes[i - 1] + 1) * layer_sizes[i]
-            self.n_params += param_size
-
-        self.param_sizes = [p.numel() for p in self.parameters()]
-        self.param_shapes = [tuple(p.shape) for p in self.parameters()]
-        self.param_cumsum = np.cumsum([0] + self.param_sizes)
-
-        self.reset_jacob(is_cuda)
-        self.eta  = lr_init
-        self.lambda_l2 = lambda_l2
-        self.name = 'MLP'
-        self.grad_norm = 0
-        self.grad_norm_vl = 0
-        self.grad_angle = 0
-        self.param_norm = 0
-        self.dFdlr_norm = 0
-        self.dFdl2_nrom = 0
-
-    def reset_jacob(self, is_cuda=1):
-        self.dFdlr = torch.zeros(self.n_params) #np.zeros(self.n_params)
-        self.dFdl2 = torch.zeros(self.n_params) #np.zeros(self.n_params)
-        self.dFdl2_norm = 0
-        self.dFdlr_norm = 0
-        if is_cuda: 
-            self.dFdlr = self.dFdlr.cuda()
-            self.dFdl2 = self.dFdl2.cuda()
-
-    def forward(self, x, logsoftmaxF=1):
-
-        x = x.view(-1, self.layer_sizes[0])
-        for i_layer in range(1, self.n_layers):
-            attr = 'layer_{}'.format(i_layer)
-            layer = getattr(self, attr)
-            x = layer(x)
-            if i_layer < self.n_layers - 1:
-                #x = F.relu(x)
-                x = torch.tanh(x)
-        if logsoftmaxF:
-            return F.log_softmax(x, dim=1)
-        else:
-            return F.softmax(x, dim=1)
-
-    def update_dFdlr(self, Hv, param, grad, is_cuda=0, opt_type='sgd', noise=None, N=50000):
-
-        #grad = flatten_array([p.grad.data.numpy() for p in self.parameters()])
-        #tmp = np.ones(self.n_params) * 0.01 
+    def update_dFdlr(self, Hv, param, grad):
         self.Hlr = self.eta*Hv
-        self.Hlr_norm = norm(self.Hlr)
-        self.dFdlr_norm = norm(self.dFdlr)
-        self.dFdlr.data = self.dFdlr.data * (1-2*self.lambda_l2*self.eta) \
-                                - self.Hlr - grad - 2*self.lambda_l2*param
-        if opt_type == 'sgld':
-            if noise is None: noise = torch.randn(size=param.shape)
-            self.dFdlr.data = self.dFdlr.data + 0.5 * torch.sqrt(2*noise / self.eta / N)
+        self.Hlr_norm = torch.norm(self.Hlr, p=2)
+        self.dFdlr_norm = torch.norm(self.dFdlr)
+        self.dFdlr.data = self.dFdlr.data * (1-2*self.lambda_l2*self.eta) - self.Hlr - grad - 2*self.lambda_l2*param
 
-    def update_dFdlambda_l2(self, Hv, param, grad, is_cuda=0):
-       
+    def update_dFdlambda_l2(self, Hv, param):
         self.Hl2 = self.eta*Hv
-        self.Hl2_norm = norm(self.Hl2)
-        self.dFdl2_norm = norm(self.dFdl2)
-        self.dFdl2.data = self.dFdl2.data * (1-2*self.lambda_l2*self.eta) \
-                                                - self.Hl2  - 2*self.eta*param
-
-
+        self.Hl2_norm = torch.norm(self.Hl2)
+        self.dFdl2_norm = torch.norm(self.dFdl2)
+        self.dFdl2.data = self.dFdl2.data * (1-2*self.lambda_l2*self.eta) - self.Hl2  - 2*self.eta*param
+    
     def update_eta(self, mlr, val_grad):
-
-        val_grad = flatten_array(val_grad)
-        delta = val_grad.dot(self.dFdlr).data.cpu().numpy()
+        val_grad = torch.nn.utils.parameters_to_vector(val_grad)
+        delta = val_grad.dot(self.dFdlr).data.item()
         self.eta -= mlr * delta
-        self.eta = np.maximum(0.0, self.eta)
+        self.eta = max(0.0, self.eta)
 
     def update_lambda(self, mlr, val_grad):
-
-        val_grad = flatten_array(val_grad)
-        delta = val_grad.dot(self.dFdl2).data.cpu().numpy()
+        val_grad = torch.nn.utils.parameters_to_vector(val_grad)
+        delta = val_grad.dot(self.dFdl2).data.item()
         self.lambda_l2 -= mlr * delta 
-        self.lambda_l2 = np.maximum(0, self.lambda_l2)
-        self.lambda_l2 = np.minimum(0.0002, self.lambda_l2)
-
+        self.lambda_l2 = max(0, self.lambda_l2)
+        self.lambda_l2 = min(0.0002, self.lambda_l2)
 
 
 def getRNNInit(initScheme: InitType):

@@ -1,3 +1,5 @@
+from copy import deepcopy
+from itertools import cycle
 from typing import Any
 from data import *
 from learning import SGD, efficientBPTT_Vanilla_Full
@@ -65,34 +67,126 @@ to add batch
 I just vmap
 """
 
-def train(config: Config, logger: Logger, model: RNN):
-    ts = torch.arange(0, config.seq)
-    dataGenerator = getRandomTask(config.task)
+def update_optimizer_hyperparams(model, optimizer):
+    optimizer.param_groups[0]['lr'] = torch.tensor(model.eta, dtype=torch.float32).item()
+    optimizer.param_groups[0]['weight_decay'] = torch.tensor(model.lambda_l2, dtype=torch.float32).item()
+    return optimizer
 
-    train_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTr)
-    train_loader = getDataLoaderIO(train_ds, config.batch_size_tr)
-    test_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTe)
-    test_loader = getDataLoaderIO(test_ds, config.batch_size_te)
+def unflatten_array(X, N, param_shapes):
+    """Takes flattened array and returns in natural shape for network
+    parameters."""
+    return [torch.reshape(X[N[i]:N[i + 1]], s) \
+        for i, s in enumerate(param_shapes)]
 
-    log_datasetIO(config, logger, train_ds, "train")
-    log_datasetIO(config, logger, test_ds, "test")
+def flatten_array_w_0bias(X):
+    """Takes list of arrays in natural shape of the network parameters
+    and returns as a flattened 1D numpy array."""
+    vec = []
+    for x in X:
+        if len(x.shape) == 0 :
+            vec.append(torch.zeros(x.shape).flatten())
+        else:
+            vec.append(x.flatten())
+    return torch.cat(vec)
 
-    # sgd = SGD(config.learning_rate)
-    # bptt = efficientBPTT_Vanilla_Full(sgd, config.criterion, OhoStateInterpreter())
 
+def compute_HessianVectorProd(config: Config, model, dFdS, data, target):
+
+    eps_machine = torch.finfo(data.dtype).eps
+
+    ## Compute Hessian Vector product h
+    vmax_x, vmax_d = 0, 0
+
+    model_plus = type(model)(config.rnnConfig, config.learning_rate, config.l2_regularization)
+    model_plus.load_state_dict(model.state_dict()) # copy weights and stuff
+    for param, direction in zip(model_plus.parameters(), dFdS):
+        vmax_x = max(vmax_x, torch.max(torch.abs(param)).item())
+        vmax_d = max(vmax_d, torch.max(abs(direction)).item())
+        break
+
+    if vmax_d ==0: vmax_d = 1
+    Hess_est_r = (eps_machine ** 0.5) * (1+vmax_x) / vmax_d
+    Hess_est_r = max([ Hess_est_r, 0.001])
+    for param, direction in zip(model_plus.parameters(), dFdS):
+        perturbation =  Hess_est_r * direction
+        param.data.add_(perturbation)
+
+    model_plus.train()
+    output = model_plus(data)
+    loss = config.criterion(output, target)
+    loss.backward()
+
+    model_minus = type(model)(config.rnnConfig, config.learning_rate, config.l2_regularization)
+    model_minus.load_state_dict(model.state_dict()) # copy weights and stuff
+    # model_minus = model.clone()
+    for param, direction in zip(model_minus.parameters(), dFdS):
+        perturbation =  Hess_est_r * direction
+        param.data.add_(-perturbation)
+    
+    model_minus.train()
+    output = model_minus(data)
+    loss = config.criterion(output, target)
+    loss.backward()
+
+    g_plus  = get_grads(model_plus)
+    g_minus = get_grads(model_minus)
+
+    Hv = (g_plus - g_minus) / (2 * Hess_est_r)
+    return Hv 
+
+
+def get_grad_valid(config: Config, model, data, target):
+
+    val_model = deepcopy(model)
+    val_model.train()
+    output = val_model(data)
+    loss = config.criterion(output, target)
+    loss.backward()
+    grad_val = get_grads(val_model)
+    
+    return grad_val
+
+def meta_update(config: Config, data_vl, target_vl, data_tr, target_tr, model, optimizer):
+
+    #Compute Hessian Vector Product
+    param_shapes = model.param_shapes
+    dFdlr = unflatten_array(model.dFdlr, model.param_cumsum, param_shapes)
+    Hv_lr  = compute_HessianVectorProd(config, model, dFdlr, data_tr, target_tr)
+
+    dFdl2 = unflatten_array(model.dFdl2, model.param_cumsum, param_shapes)
+    Hv_l2  = compute_HessianVectorProd(config, model, dFdl2, data_tr, target_tr)
+
+    grad_valid = get_grad_valid(config, model, data_vl, target_vl)
+
+    grad = get_grads(model)
+    param = torch.nn.utils.parameters_to_vector(model.parameters()).data
+
+    #Update hyper-parameters   
+    model.update_dFdlr(Hv_lr, param, grad)
+    model.update_eta(config.meta_learning_rate, grad_valid)
+    model.update_dFdlambda_l2(Hv_l2, param)
+    model.update_lambda(config.meta_learning_rate*0.01, grad_valid)
+
+    #Update optimizer with new eta
+    optimizer = update_optimizer_hyperparams(model, optimizer)
+
+    return model, optimizer
+
+
+def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, validation_loader: Iterator, test_loader: Iterator, test_ds: TensorDataset):
     optimizer = config.optimizerFn(model.parameters(), lr=config.learning_rate)
+    optimizer = update_optimizer_hyperparams(model, optimizer)
 
     for epoch in range(config.num_epochs):
         for i, (x, y) in enumerate(train_loader):   
-
-            # def closure(inputs, targets):
-
             outputs = model(x)
             loss = config.criterion(outputs, y)
-            
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+
+            data_vl, target_vl = next(validation_loader)
+            model, optimizer = meta_update(config, data_vl, target_vl, x, y, model, optimizer)
 
             if (epoch * len(train_loader) + i) % config.logFrequency == 0:
                 logger.log({"loss": loss.item()
@@ -103,7 +197,6 @@ def train(config: Config, logger: Logger, model: RNN):
             log_modelIO(config, logger, model, f"epoch_{epoch}")
             logger.log({"performance": visualize(config, model, test_ds)})
 
-    
     return model
 
 
@@ -151,13 +244,16 @@ def test_loss(config: Config, loader: DataLoader, model: RNN):
     
     return total_loss / total_samples
 
-def gradient_norm(model: RNN):
+def get_grads(model: torch.nn.Module):
     grads = [
-        param.grad.detach().flatten()
+        param.grad.detach().flatten() if param.grad is not None else torch.zeros_like(param).flatten()
         for param in model.parameters()
-        if param.grad is not None
     ]
-    return torch.linalg.norm(torch.cat(grads), 2).item()
+    return torch.cat(grads)
+
+def gradient_norm(model: RNN):
+    grads = get_grads(model)
+    return torch.linalg.norm(grads, 2).item()
 
 
 def parseIO():
@@ -206,6 +302,8 @@ def parseIO():
                         help="Activation function (relu or tanh)")
     parser.add_argument('--log_freq', type=int, required=True,
                         help="Frequency of logging during training (in iterations)")
+    parser.add_argument('--l2_regularization', type=float, required=True, help='Learning rate')
+    parser.add_argument('--meta_learning_rate', type=float, required=True, help='Meta Learning rate')
 
     args = parser.parse_args()
 
@@ -294,7 +392,9 @@ def parseIO():
         projectName=args.projectName,
         seed=args.seed,
         performanceSamples=args.performance_samples,
-        logFrequency=args.log_freq
+        logFrequency=args.log_freq,
+        l2_regularization=args.l2_regularization,
+        meta_learning_rate=args.meta_learning_rate
     )
 
     return args, config, logger
@@ -313,11 +413,29 @@ def main():
     torch.manual_seed(config.seed)
 
     logger.init(config.projectName, args)
-    model = RNN(config.rnnConfig)  # IO, random 
+    model = RNN(config.rnnConfig, config.learning_rate, config.l2_regularization) # Random IO 
     # logger.watchPytorch(model)
     log_modelIO(config, logger, model, "init")
 
-    model = train(config, logger, model)
+
+    ts = torch.arange(0, config.seq)
+    dataGenerator = getRandomTask(config.task)
+
+    train_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTr)
+    train_loader = getDataLoaderIO(train_ds, config.batch_size_tr)
+    test_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTe)
+    test_loader = getDataLoaderIO(test_ds, config.batch_size_te)
+    valid_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numVl)
+    valid_loader = getDataLoaderIO(valid_ds, config.batch_size_vl)
+
+    log_datasetIO(config, logger, train_ds, "train")
+    log_datasetIO(config, logger, test_ds, "test")
+    log_datasetIO(config, logger, valid_ds, "valid")
+
+
+    model = train(config, logger, model, train_loader, cycle(valid_loader), test_loader, test_ds)
+
+
 
 if __name__ == "__main__":
     main()
