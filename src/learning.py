@@ -1,7 +1,7 @@
 from typing import Callable, TypeVar, Iterator, Union
 import torch
 from records import RnnConfig
-from objectalgebra import HasActivation, HasParameter, HasTrainingInput, HasTrainingLabel
+from objectalgebra import HasActivation, HasParameter, HasTrainingInput, HasTrainingLabel, HasValidationInput, HasValidationLabel
 from func import foldr, scan0, fst, snd
 import itertools
 
@@ -41,7 +41,7 @@ def averageGradient(  xs: Iterator[X]
 
 def splitTimeSeries(chunkSize: int, bptt: Callable[[Iterator[Iterator[X]], ENV], ENV]) -> Callable[[Iterator[X], ENV], ENV]:
     def splitTimeSeries_(xs: Iterator[X], env: ENV) -> ENV:
-        xs_ = itertools.batched(xs, chunkSize)  #! Inefficient, always going to loop twice. 
+        xs_ = itertools.batched(xs, chunkSize)  #! Inefficient, always going to loop twice. bc first create TUPLE of chunkSize which does a loop once
         return bptt(xs_, env)
     return splitTimeSeries_
 
@@ -70,7 +70,7 @@ def rnnActivation_Vanilla(t: Union[HasActivation[ENV, torch.Tensor], HasParamete
         a = t.getActivation(env)
         parameters, config = t.getParameter(env)
         w_rec, _ = rnnSplitParameters(parameters, config)
-        a_ = rnnStep(config, x, a, w_rec)
+        a_ = rnnStep(config, x, a, w_rec)  # batch x and a, not config or w_rec
         return t.putActivation(a_, env)
     return rnnActivation_Vanilla__
 
@@ -80,7 +80,7 @@ def rnnPrediction_Vanilla(algebra: Union[HasActivation[ENV, torch.Tensor], HasPa
         a = algebra.getActivation(env)
         parameters, config = algebra.getParameter(env)
         _, w_out = rnnSplitParameters(parameters, config)
-        return rnnReadout(config, a, w_out)
+        return rnnReadout(config, a, w_out)  # batch a, not config or w_out
     return rnnPrediction_Vanilla_
 
 
@@ -96,7 +96,7 @@ def truncatedRNN_Vanilla( criterion: Callable[[torch.Tensor, torch.Tensor], torc
         x, y = algebra.getTrainingInput(data), algebra.getTrainingLabel(data)
         env, loss = envWithLoss
         env_ = actv(x, env)
-        return env_, loss + criterion(predict(env_), y)
+        return env_, loss + criterion(predict(env_), y)  # vmap on criterion
     return foldr(step)
 
 
@@ -132,21 +132,27 @@ def efficientBPTTGradient(rnnLoss: Callable[[X, tuple[ENV, torch.Tensor]], tuple
 
     def step(data: X, envWithGrad: tuple[ENV, torch.Tensor]) -> tuple[ENV, torch.Tensor]:  # TODO: stop assume loss starts at zero after every update
         env, grad = envWithGrad
-        env_, loss = rnnLoss(data, (env, torch.tensor(0.0)))
-        grad_ = torchGradient(fst)(algebra)(loss, env_)
+        env_, loss = rnnLoss(data, (env, torch.tensor(0.0)))  # need to make loss match batch dimension?
+        grad_ = torchGradient(fst)(algebra)(loss, env_)  # need to vmap gradient
         return env_, grad + grad_
 
-    return lambda xs, envWithGrad: averageGradient(xs, envWithGrad, foldr(step))  # TODO: stop assuming average later on
+    return lambda xs, envWithGrad: averageGradient(xs, envWithGrad, foldr(step))  # TODO: stop assuming average later on bc what if just want sum
+
+# f: [[(1,1), (1,1)]] -> [[1, 1]] -> [[((1, 1), 1)]]
+
+# def wrap():
+#     (zip(inner1, inner2) for inner1, inner2 in zip([[1, 2], [3, 4]], [[5, 6], [7, 8]]))
 
 def efficientBPTT(optimizer: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
                 , rnnLoss: Callable[[X, tuple[ENV, torch.Tensor]], tuple[ENV, torch.Tensor]]
                 , algebra: Union[
                     HasActivation[ENV, torch.Tensor]
                     , HasParameter[ENV, RNN_PARAM]]):
+
     def update(xs: Iterator[X]
             , env: ENV) -> ENV:
         parameters, _ = algebra.getParameter(env)
-        envWithGrad = (env, torch.zeros_like(parameters))
+        envWithGrad = (env, torch.zeros_like(parameters))  # need to batch this
         env_, grad_avg = efficientBPTTGradient(rnnLoss, algebra)(xs, envWithGrad)
         return torchUpdateParam((env_, grad_avg), optimizer, fst, lambda p_, rnnP: (p_, snd(rnnP)), algebra) 
     return update
@@ -164,17 +170,17 @@ def efficientBPTT_Vanilla(optimizer: Callable[[torch.Tensor, torch.Tensor], torc
     bptt = efficientBPTT(optimizer, rnnLoss, algebra)
     return bptt
 
-def efficientBPTT_Vanilla_Full(optimizer: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
+def efficientBPTT_Vanilla_Full(truncation: int
+                            , optimizer: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
                             , criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
                             , algebra: Union[
                             HasActivation[ENV, torch.Tensor]
                             , HasParameter[ENV, RNN_PARAM]
                             , HasTrainingInput[DATA, torch.Tensor]
                             , HasTrainingLabel[DATA, torch.Tensor]]):
-    rnnLoss = truncatedRNN_Vanilla(criterion, algebra)
-    bptt = efficientBPTT(optimizer, rnnLoss, algebra)
-    def bpttFull(xs: list[DATA], env: ENV) -> ENV:
-        return splitTimeSeries(len(xs), bptt)(xs, env)
+    bptt = efficientBPTT_Vanilla(optimizer, criterion, algebra)
+    def bpttFull(xs: Iterator[DATA], env: ENV) -> ENV:
+        return splitTimeSeries(truncation, bptt)(xs, env)
     return bpttFull
 
 

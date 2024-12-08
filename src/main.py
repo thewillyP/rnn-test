@@ -9,7 +9,7 @@ import argparse
 from abc import ABC, abstractmethod
 import os
 from toolz import take
-from records import ArtifactConfig, Logger, ZeroInit, RandomInit, RnnConfig, Config, Random, Sparse, Wave
+from records import ArtifactConfig, Logger, ZeroInit, RandomInit, RnnConfig, Config, Random, Sparse, Wave, EfficientBPTT, RNNLearningType
 
 
         
@@ -77,14 +77,17 @@ def train(config: Config, logger: Logger, model: RNN):
     log_datasetIO(config, logger, train_ds, "train")
     log_datasetIO(config, logger, test_ds, "test")
 
-    # sgd = SGD(config.learning_rate)
+    sgd = SGD(config.learning_rate)
+    match config.rnnLearningAlgorithm:
+        case EfficientBPTT(truncation):
+            learner = efficientBPTT_Vanilla_Full(truncation, sgd, config.criterion, OhoStateInterpreter())
     # bptt = efficientBPTT_Vanilla_Full(sgd, config.criterion, OhoStateInterpreter())
 
     optimizer = config.optimizerFn(model.parameters(), lr=config.learning_rate)
 
     for epoch in range(config.num_epochs):
         for i, (x, y) in enumerate(train_loader):   
-
+            time_series = zip(x, y)
             # def closure(inputs, targets):
 
             outputs = model(x)
@@ -206,12 +209,25 @@ def parseIO():
                         help="Activation function (relu or tanh)")
     parser.add_argument('--log_freq', type=int, required=True,
                         help="Frequency of logging during training (in iterations)")
+    parser.add_argument('--rnn_learner', type=str, choices=['EfficientBPTT'], required=True,
+                        help="RNN learning type (EfficientBPTT)")
+    parser.add_argument('--truncation', type=int, help="Truncation length (required if rnn_learner is EfficientBPTT)")
+
 
     args = parser.parse_args()
 
     # Validate Sparse task requires outT
     if args.task == 'Sparse' and args.outT is None:
         parser.error("--outT is required when --task is Sparse")
+
+    if args.rnn_learner == 'EfficientBPTT' and args.truncation is None:
+        parser.error("--truncation is required when --rnn_learner is EfficientBPTT")
+
+    match args.rnn_learner:
+        case 'EfficientBPTT':
+            rnn_learner = EfficientBPTT(args.truncation)
+        case _:
+            raise ValueError("Currently only EfficientBPTT is supported as a RNN learning type")
 
     match args.lossFn:
         case 'mse':
@@ -294,7 +310,8 @@ def parseIO():
         projectName=args.projectName,
         seed=args.seed,
         performanceSamples=args.performance_samples,
-        logFrequency=args.log_freq
+        logFrequency=args.log_freq,
+        rnnLearningAlgorithm=rnn_learner
     )
 
     return args, config, logger

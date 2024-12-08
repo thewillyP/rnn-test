@@ -67,6 +67,13 @@ class RnnConfig:
 
 
 @dataclass(frozen=True)
+class EfficientBPTT:
+    truncation: int
+
+RNNLearningType = EfficientBPTT
+
+
+@dataclass(frozen=True)
 class Random:
     pass
 
@@ -105,4 +112,5 @@ class Config:
     seed: int
     performanceSamples: int
     logFrequency: int
+    rnnLearningAlgorithm: RNNLearningType
 

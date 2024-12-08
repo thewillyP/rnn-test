@@ -110,8 +110,19 @@ def getDatasetIO(randFn, t1: int, t2: int, ts: torch.Tensor, numEx: int):
     return ds
 
 def getDataLoaderIO(ds: TensorDataset, batchSize: int):
-    return DataLoader(ds, batch_size=batchSize, shuffle=True, drop_last=True)
+    return DataLoader(ds, batch_size=None, shuffle=True, drop_last=True)
 
+
+def createOhoDatasetIO(randFn, t1: int, t2: int, ts: torch.Tensor, numEx_tr: int, numEx_vl: int):
+    gen = lambda: createDelayAddExample(t1, t2, ts, randFn)
+    XS_tr, YS_tr = createExamples(numEx_tr, gen)
+    XS_vl, YS_vl = createExamples(numEx_vl, gen)
+    ds = TensorDataset(XS_tr, YS_tr, XS_vl, YS_vl)
+    return ds
+
+
+def ohoDataloaderIO(ds: TensorDataset, batchSize_tr: int, batchSize_vl: int):
+    return DataLoader(ds, batch_size=None, shuffle=True, drop_last=True)
 
 
 def getRandomTask(task: DatasetType):
