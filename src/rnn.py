@@ -115,6 +115,7 @@ class RNN(nn.Module):
     def forward(self, x):
         s0 = getRNNInit(self.config.scheme)(self.config.num_layers, self.config.n_h)(x)
         out = self.rnn(x, s0)[0]
+        self.activations = out
         out = self.fc(out)
         return out
 

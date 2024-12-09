@@ -29,7 +29,7 @@ python ./src/main.py \
     --performance_samples 9 \
     --init_scheme ZeroInit \
     --activation_fn relu \
-    --log_freq 1 \
+    --log_freq 2 \
     --meta_learning_rate 0.0001 \
     --l2_regularization 0 \
     --is_oho 0
