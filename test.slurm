@@ -31,6 +31,4 @@ grep -q "export LD_LIBRARY_PATH=\"/.singularity.d/libs\"" /home/'"${USER}"'/.bas
 source /home/'"${USER}"'/.bashrc && \
 micromamba activate '"${CONDA_ENV}"' && \
 cd /rnn-test && \
-wandb offline && \
-python /rnn-test/src/main.py '"${CONFIG}"' && \
-wandb sync /wandb/offline-*'
+python /rnn-test/src/main.py '"${CONFIG}"''

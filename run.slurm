@@ -6,7 +6,7 @@
 #SBATCH --job-name=rnn_experiments
 #SBATCH --gres=gpu:0
 #SBATCH --cpus-per-task=4
-#SBATCH --array=1-36%15
+#SBATCH --array=1-768%15
 #SBATCH --output="/scratch/wlp9800/logs/%x-%A-%a.out"
 #SBATCH --error="/scratch/wlp9800/logs/%x-%A-%a.err"
 
@@ -29,7 +29,3 @@ source /home/'"${USER}"'/.bashrc && \
 micromamba activate '"${CONDA_ENV}"' && \
 cd /rnn-test && \
 python /rnn-test/src/main.py '"${CONFIG}"''
-
-# wandb offline && \
-#  && \
-# wandb sync /rnn-test/wandb/offline-*
