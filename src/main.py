@@ -8,12 +8,29 @@ from rnn import *
 import torch
 import wandb
 import argparse
-from abc import ABC, abstractmethod
 import os
 from toolz import take
 from records import ArtifactConfig, Logger, ZeroInit, RandomInit, RnnConfig, Config, Random, Sparse, Wave
+from torch.utils.data import DataLoader
+from torchvision import datasets, transforms
 
+def load_mnist(configs: Config):
 
+    ## Initialize Dataset
+    dataset = datasets.MNIST('data/mnist', train=True, download=True,
+                                        transform=transforms.Compose(
+                                                [transforms.ToTensor()]))
+    train_set, valid_set = torch.utils.data.random_split(dataset,[60000 - configs.numVl, configs.numVl])
+    test_set = datasets.MNIST('data/mnist', train=False, download=True,
+                                                        transform=transforms.Compose(
+                                                                [transforms.ToTensor()]))
+
+    data_loader_tr = DataLoader(train_set, batch_size=configs.batch_size_tr, shuffle=True)
+    data_loader_vl = DataLoader(valid_set, batch_size=configs.batch_size_vl, shuffle=True)
+    data_loader_te = DataLoader(test_set, batch_size=configs.batch_size_te, shuffle=True)
+
+    data_loader_vl = cycle(data_loader_vl)
+    return data_loader_tr, data_loader_vl, data_loader_te, test_set
         
 class WandbLogger(Logger):
     
@@ -191,10 +208,11 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
                         , "learning_rate": optimizer.param_groups[0]['lr']
                         , "l2_regularization": optimizer.param_groups[0]['weight_decay']})
         
-        logger.log({"test_loss": test_loss(config, test_loader, model)})
+        logger.log({"test_loss": test_loss(config, test_loader, model),
+                    "test_accuracy": test_accuracy(model, test_loader)})
         if (epoch+1) % config.checkpointFrequency == 0:
             log_modelIO(config, logger, model, f"epoch_{epoch}")
-            logger.log({"performance": visualize(config, model, test_ds)})
+            # logger.log({"performance": visualize(config, model, test_ds)})
 
     return model
 
@@ -243,6 +261,32 @@ def test_loss(config: Config, loader: DataLoader, model: RNN):
     
     return total_loss / total_samples
 
+import torch
+from torch.utils.data import DataLoader
+
+def test_accuracy(model, dataloader):
+    correct = 0
+    total = 0
+
+    with torch.no_grad():  # Disable gradient calculation for faster computation
+        for data in dataloader:
+            inputs, labels = data  # Unpack inputs and labels
+            
+            # Forward pass
+            outputs = model(inputs)
+            
+            # Get predictions (index of max logit)
+            _, predicted = torch.max(outputs, 1)
+            
+            # Update correct predictions count and total samples count
+            correct += (predicted == labels).sum().item()
+            total += labels.size(0)
+    
+    accuracy = 100 * correct / total
+    return accuracy
+
+
+
 def get_grads(model: torch.nn.Module):
     grads = [
         param.grad.detach().flatten()
@@ -284,7 +328,7 @@ def parseIO():
     parser.add_argument('--learning_rate', type=float, required=True, help='Learning rate')
     parser.add_argument('--optimizerFn', type=str, choices=['Adam', 'SGD'], required=True,
                         help="Optimizer function (Adam or SGD)")
-    parser.add_argument('--lossFn', type=str, choices=['mse'], required=True,
+    parser.add_argument('--lossFn', type=str, choices=['mse', 'cross_entropy'], required=True,
                         help="Loss function (currently only mse is supported)")
     parser.add_argument('--mode', type=str, choices=['test', 'experiment'], required=True,
                         help="Execution mode (test or experiment)")
@@ -323,6 +367,8 @@ def parseIO():
     match args.lossFn:
         case 'mse':
             loss_function = torch.functional.F.mse_loss
+        case 'cross_entropy':
+            loss_function = torch.functional.F.cross_entropy
         case _:
             raise ValueError("Currently only mse is supported as a loss function")
 
@@ -424,24 +470,26 @@ def main():
     torch.manual_seed(config.seed)
 
     logger.init(config.projectName, args)
-    model = RNN(config.rnnConfig, config.learning_rate, config.l2_regularization) # Random IO 
+    # model = RNN(config.rnnConfig, config.learning_rate, config.l2_regularization) # Random IO 
+    model = MLP(config.rnnConfig, 5, [784, 128, 128, 128, 10], config.learning_rate, config.l2_regularization) # Random IO
     # logger.watchPytorch(model)
     log_modelIO(config, logger, model, "init")
 
 
-    ts = torch.arange(0, config.seq)
-    dataGenerator = getRandomTask(config.task)
+    # ts = torch.arange(0, config.seq)
+    # dataGenerator = getRandomTask(config.task)
 
-    train_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTr)
-    train_loader = getDataLoaderIO(train_ds, config.batch_size_tr)
-    test_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTe)
-    test_loader = getDataLoaderIO(test_ds, config.batch_size_te)
-    valid_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numVl)
-    valid_loader = getDataLoaderIO(valid_ds, config.batch_size_vl)
+    # train_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTr)
+    # train_loader = getDataLoaderIO(train_ds, config.batch_size_tr)
+    # test_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTe)
+    # test_loader = getDataLoaderIO(test_ds, config.batch_size_te)
+    # valid_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numVl)
+    # valid_loader = getDataLoaderIO(valid_ds, config.batch_size_vl)
 
-    log_datasetIO(config, logger, train_ds, "train")
-    log_datasetIO(config, logger, test_ds, "test")
-    log_datasetIO(config, logger, valid_ds, "valid")
+    # log_datasetIO(config, logger, train_ds, "train")
+    # log_datasetIO(config, logger, test_ds, "test")
+    # log_datasetIO(config, logger, valid_ds, "valid")
+    train_loader, valid_loader, test_loader, test_ds = load_mnist(config)
 
 
     model = train(config, logger, model, train_loader, cycle(valid_loader), test_loader, test_ds)
