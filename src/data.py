@@ -5,7 +5,7 @@ import torch
 from torch.utils.data import TensorDataset, DataLoader
 from typing import TypeVar, Callable, Generic, Generator, Iterator
 from dataclasses import dataclass
-from records import DatasetType, Random, Sparse, Wave
+from records import DatasetType, Random, Sparse, Wave, Uniform, Normal
 
 
 @curry
@@ -116,8 +116,12 @@ def getDataLoaderIO(ds: TensorDataset, batchSize: int):
 
 def getRandomTask(task: DatasetType):
     match task:
-        case Random():
-            return lambda: (randomNormal, randomNormal)
+        case Random(randType):
+            match randType:
+                case Uniform():
+                    return lambda: (randomUniform, randomUniform)
+                case Normal():
+                    return lambda: (randomNormal, randomNormal)
         case Sparse(outT):
             return lambda: sparseIO(sparseUniformConstOutT(outT))
         case Wave():

@@ -139,6 +139,7 @@ def get_grad_valid(config: Config, model, data, target):
     output = val_model(data)
     loss = config.criterion(output, target)
     loss.backward()
+    # torch.nn.utils.clip_grad_norm_(val_model.parameters(), 3)
     grad_val = get_grads(val_model)
     
     return grad_val
@@ -167,7 +168,7 @@ def meta_update(config: Config, data_vl, target_vl, data_tr, target_tr, model, o
         model.update_lambda(config.meta_learning_rate*0.01, grad_valid)
         optimizer = update_optimizer_hyperparams(model, optimizer)
 
-    return model, optimizer
+    return model, optimizer, grad_valid
 
 
 def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, validation_loader: Iterator, test_loader: Iterator, test_ds: TensorDataset):
@@ -180,16 +181,20 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
             loss = config.criterion(outputs, y)
             optimizer.zero_grad()
             loss.backward()
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), 3)
             optimizer.step()
 
             data_vl, target_vl = next(validation_loader)
-            model, optimizer = meta_update(config, data_vl, target_vl, x, y, model, optimizer)
+            model, optimizer, grad_valid = meta_update(config, data_vl, target_vl, x, y, model, optimizer)
 
             if (epoch * len(train_loader) + i) % config.logFrequency == 0:
                 logger.log({"loss": loss.item()
                         , "gradient_norm": gradient_norm(model)
                         , "learning_rate": optimizer.param_groups[0]['lr']
-                        , "l2_regularization": optimizer.param_groups[0]['weight_decay']})
+                        , "l2_regularization": optimizer.param_groups[0]['weight_decay']
+                        , "validation_gradient_norm": torch.linalg.norm(grad_valid, 2).item()
+                        , "dFdlr_tensor_norm": torch.linalg.norm(model.dFdlr, 2).item()
+                        , "dFdl2_tensor_norm": torch.linalg.norm(model.dFdl2, 2).item()})
         
         logger.log({"test_loss": test_loss(config, test_loader, model)})
         if (epoch+1) % config.checkpointFrequency == 0:
@@ -268,6 +273,8 @@ def parseIO():
     # Arguments for Config
     parser.add_argument('--task', type=str, choices=['Random', 'Sparse', 'Wave'], required=True,
                         help="Task type (Random, Sparse, or Wave)")
+    parser.add_argument('--randomType', type=str, choices=['Uniform', 'Normal'], required=False,
+                        help="Random type (Uniform or Normal)")
     parser.add_argument('--init_scheme', type=str, choices=['ZeroInit', 'RandomInit'], required=True,
                         help="Rnn init scheme type (ZeroInit, or RandomInit)")
     parser.add_argument('--outT', type=int, help="Output time step (required if task is Sparse)")
@@ -312,6 +319,9 @@ def parseIO():
     if args.task == 'Sparse' and args.outT is None:
         parser.error("--outT is required when --task is Sparse")
     
+    if args.task == 'Random' and args.randomType is None:
+        parser.error("--randomType is required when --task is Random")
+    
     match args.is_oho:
         case 0:
             is_oho = False
@@ -340,7 +350,14 @@ def parseIO():
         case 'Sparse':
             task = Sparse(args.outT)
         case 'Random':
-            task = Random()
+            match args.randomType:
+                case 'Uniform':
+                    randType = Uniform()
+                case 'Normal':
+                    randType = Normal()
+                case _:
+                    raise ValueError("Invalid random type")
+            task = Random(randType)
         case 'Wave':
             task = Wave()
         case _:

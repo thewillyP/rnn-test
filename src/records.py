@@ -67,8 +67,18 @@ class RnnConfig:
 
 
 @dataclass(frozen=True)
-class Random:
+class Uniform:
     pass
+
+@dataclass(frozen=True)
+class Normal:
+    pass
+
+RandomType = Uniform | Normal
+
+@dataclass(frozen=True)
+class Random:
+    random_type: RandomType
 
 @dataclass(frozen=True)
 class Sparse:
