@@ -71,6 +71,7 @@ class RNN(nn.Module):
     def __init__(self, config: RnnConfig, lr_init, lambda_l2):
         super(RNN, self).__init__()
 
+        self.config = config
         self.rnn = nn.RNN(config.n_in, config.n_h, config.num_layers, batch_first=True)
         self.fc = nn.Linear(config.n_h, config.n_out)
         
@@ -85,10 +86,10 @@ class RNN(nn.Module):
             self.fc.weight.copy_(W_out)
             self.fc.bias.copy_(b_out)
 
-        self.interface = RNNInterface(
-            baseCase=getRNNInit(config.scheme)(config.num_layers, config.n_h),
-            forward=lambda x, s0: self.rnn(x, s0)[0]
-        )
+        # self.interface = RNNInterface(
+        #     baseCase=getRNNInit(config.scheme)(config.num_layers, config.n_h),
+        #     forward=lambda x, s0: self.rnn(x, s0)[0]
+        # )
 
         self.param_sizes = [p.numel() for p in self.parameters()]
         self.n_params = sum(self.param_sizes)
@@ -112,8 +113,8 @@ class RNN(nn.Module):
         self.dFdlr_norm = 0
         
     def forward(self, x):
-        s0 = self.interface.baseCase(x)
-        out = self.interface.forward(x, s0)
+        s0 = getRNNInit(self.config.scheme)(self.config.num_layers, self.config.n_h)(x)
+        out = self.rnn(x, s0)[0]
         out = self.fc(out)
         return out
 
@@ -132,6 +133,7 @@ class RNN(nn.Module):
     def update_eta(self, mlr, val_grad):
         val_grad = torch.nn.utils.parameters_to_vector(val_grad)
         delta = val_grad.dot(self.dFdlr).data.item()
+        # delta = torch.dot(val_grad, self.dFdlr).item()
         self.eta -= mlr * delta
         self.eta = max(0.0, self.eta)
 

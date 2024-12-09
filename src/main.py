@@ -68,8 +68,8 @@ I just vmap
 """
 
 def update_optimizer_hyperparams(model, optimizer):
-    optimizer.param_groups[0]['lr'] = torch.tensor(model.eta, dtype=torch.float32).item()
-    optimizer.param_groups[0]['weight_decay'] = torch.tensor(model.lambda_l2, dtype=torch.float32).item()
+    optimizer.param_groups[0]['lr'] = model.eta
+    optimizer.param_groups[0]['weight_decay'] = model.lambda_l2
     return optimizer
 
 def unflatten_array(X, N, param_shapes):
@@ -97,8 +97,7 @@ def compute_HessianVectorProd(config: Config, model, dFdS, data, target):
     ## Compute Hessian Vector product h
     vmax_x, vmax_d = 0, 0
 
-    model_plus = type(model)(config.rnnConfig, config.learning_rate, config.l2_regularization)
-    model_plus.load_state_dict(model.state_dict()) # copy weights and stuff
+    model_plus = deepcopy(model)
     for param, direction in zip(model_plus.parameters(), dFdS):
         vmax_x = max(vmax_x, torch.max(torch.abs(param)).item())
         vmax_d = max(vmax_d, torch.max(abs(direction)).item())
@@ -116,9 +115,7 @@ def compute_HessianVectorProd(config: Config, model, dFdS, data, target):
     loss = config.criterion(output, target)
     loss.backward()
 
-    model_minus = type(model)(config.rnnConfig, config.learning_rate, config.l2_regularization)
-    model_minus.load_state_dict(model.state_dict()) # copy weights and stuff
-    # model_minus = model.clone()
+    model_minus = deepcopy(model)
     for param, direction in zip(model_minus.parameters(), dFdS):
         perturbation =  Hess_est_r * direction
         param.data.add_(-perturbation)
@@ -168,15 +165,13 @@ def meta_update(config: Config, data_vl, target_vl, data_tr, target_tr, model, o
     if config.is_oho:
         model.update_eta(config.meta_learning_rate, grad_valid)
         model.update_lambda(config.meta_learning_rate*0.01, grad_valid)
-
-    #Update optimizer with new eta
-    optimizer = update_optimizer_hyperparams(model, optimizer)
+        optimizer = update_optimizer_hyperparams(model, optimizer)
 
     return model, optimizer
 
 
 def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, validation_loader: Iterator, test_loader: Iterator, test_ds: TensorDataset):
-    optimizer = config.optimizerFn(model.parameters(), lr=config.learning_rate)
+    optimizer = config.optimizerFn(model.parameters(), lr=config.learning_rate, weight_decay=config.l2_regularization)
     optimizer = update_optimizer_hyperparams(model, optimizer)
 
     for epoch in range(config.num_epochs):
@@ -250,8 +245,9 @@ def test_loss(config: Config, loader: DataLoader, model: RNN):
 
 def get_grads(model: torch.nn.Module):
     grads = [
-        param.grad.detach().flatten() if param.grad is not None else torch.zeros_like(param).flatten()
+        param.grad.detach().flatten()
         for param in model.parameters()
+        if param.grad is not None
     ]
     return torch.cat(grads)
 

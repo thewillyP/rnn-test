@@ -117,7 +117,7 @@ def getDataLoaderIO(ds: TensorDataset, batchSize: int):
 def getRandomTask(task: DatasetType):
     match task:
         case Random():
-            return lambda: (randomUniform, randomUniform)
+            return lambda: (randomNormal, randomNormal)
         case Sparse(outT):
             return lambda: sparseIO(sparseUniformConstOutT(outT))
         case Wave():
