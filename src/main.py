@@ -163,9 +163,11 @@ def meta_update(config: Config, data_vl, target_vl, data_tr, target_tr, model, o
 
     #Update hyper-parameters   
     model.update_dFdlr(Hv_lr, param, grad)
-    model.update_eta(config.meta_learning_rate, grad_valid)
     model.update_dFdlambda_l2(Hv_l2, param)
-    model.update_lambda(config.meta_learning_rate*0.01, grad_valid)
+
+    if config.is_oho:
+        model.update_eta(config.meta_learning_rate, grad_valid)
+        model.update_lambda(config.meta_learning_rate*0.01, grad_valid)
 
     #Update optimizer with new eta
     optimizer = update_optimizer_hyperparams(model, optimizer)
@@ -190,7 +192,9 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
 
             if (epoch * len(train_loader) + i) % config.logFrequency == 0:
                 logger.log({"loss": loss.item()
-                        , "gradient_norm": gradient_norm(model)})
+                        , "gradient_norm": gradient_norm(model)
+                        , "learning_rate": optimizer.param_groups[0]['lr']
+                        , "l2_regularization": optimizer.param_groups[0]['weight_decay']})
         
         logger.log({"test_loss": test_loss(config, test_loader, model)})
         if (epoch+1) % config.checkpointFrequency == 0:
@@ -304,6 +308,7 @@ def parseIO():
                         help="Frequency of logging during training (in iterations)")
     parser.add_argument('--l2_regularization', type=float, required=True, help='Learning rate')
     parser.add_argument('--meta_learning_rate', type=float, required=True, help='Meta Learning rate')
+    parser.add_argument('--is_oho', action=argparse.BooleanOptionalAction)
 
     args = parser.parse_args()
 
@@ -394,8 +399,10 @@ def parseIO():
         performanceSamples=args.performance_samples,
         logFrequency=args.log_freq,
         l2_regularization=args.l2_regularization,
-        meta_learning_rate=args.meta_learning_rate
+        meta_learning_rate=args.meta_learning_rate,
+        is_oho=args.is_oho
     )
+
 
     return args, config, logger
 

@@ -80,6 +80,10 @@ class Wave:
 
 DatasetType = Random | Sparse | Wave
 
+# TODO make it into a separate config, make adt Type = Oho | NoOho you get the drill
+# @dataclass(frozen=True)
+# class OhoConfig:
+
 
 @dataclass(frozen=True)
 class Config:
@@ -107,4 +111,5 @@ class Config:
     performanceSamples: int
     logFrequency: int
     meta_learning_rate: float
+    is_oho: bool
 
