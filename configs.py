@@ -27,7 +27,7 @@ params = {
     "log_freq": [1],
     "meta_learning_rate": [1e-4, 1e-5],
     "l2_regularization": [0],
-    "is_oho": [0, 1],
+    "is_oho": [1, 0],
 }
 
 # Pairing for numTr and batch_size_tr
@@ -39,7 +39,7 @@ train_batch_combinations = [
 # Convert t_combinations to dictionary style
 t_combinations = [
     {"t1": 3, "t2": 5},
-    {"t1": 5, "t2": 9},
+    {"t1": 11, "t2": 14},
 ]
 
 # Generate all combinations
