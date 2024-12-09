@@ -304,13 +304,21 @@ def parseIO():
                         help="Frequency of logging during training (in iterations)")
     parser.add_argument('--l2_regularization', type=float, required=True, help='Learning rate')
     parser.add_argument('--meta_learning_rate', type=float, required=True, help='Meta Learning rate')
-    parser.add_argument('--is_oho', action=argparse.BooleanOptionalAction)
+    parser.add_argument('--is_oho', type=int, required=True, help='Is OHO')
 
     args = parser.parse_args()
 
     # Validate Sparse task requires outT
     if args.task == 'Sparse' and args.outT is None:
         parser.error("--outT is required when --task is Sparse")
+    
+    match args.is_oho:
+        case 0:
+            is_oho = False
+        case 1:
+            is_oho = True
+        case _:
+            raise ValueError("Invalid is_oho value")
 
     match args.lossFn:
         case 'mse':
@@ -396,7 +404,7 @@ def parseIO():
         logFrequency=args.log_freq,
         l2_regularization=args.l2_regularization,
         meta_learning_rate=args.meta_learning_rate,
-        is_oho=args.is_oho
+        is_oho=is_oho
     )
 
 
