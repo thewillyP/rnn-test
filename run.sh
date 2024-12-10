@@ -25,7 +25,7 @@ python ./src/main.py \
     --checkpoint_freq 100 \
     --seed 9 \
     --projectName "rnn-test-ohotest2" \
-    --logger "prettyprint" \
+    --logger "wandb" \
     --performance_samples 9 \
     --init_scheme ZeroInit \
     --activation_fn relu \

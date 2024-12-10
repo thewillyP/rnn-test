@@ -102,18 +102,22 @@ def compute_HessianVectorProd(config: Config, model, dFdS, data, target):
         vmax_x = max(vmax_x, torch.max(torch.abs(param)).item())
         vmax_d = max(vmax_d, torch.max(abs(direction)).item())
         break
+    wandb.log({"vmax_x": vmax_x, "vmax_d": vmax_d}, commit=False)
 
     if vmax_d ==0: vmax_d = 1
     Hess_est_r = (eps_machine ** 0.5) * (1+vmax_x) / vmax_d
     Hess_est_r = max([ Hess_est_r, 0.001])
-    for param, direction in zip(model_plus.parameters(), dFdS):
+    wandb.log({"Hess_est_r": Hess_est_r}, commit=False)
+    for i, (param, direction) in enumerate(zip(model_plus.parameters(), dFdS)):
         perturbation =  Hess_est_r * direction
+        wandb.log({f"perturbation_{i}": torch.linalg.norm(perturbation, 2).item()}, commit=False)
         param.data.add_(perturbation)
 
     model_plus.train()
     output = model_plus(data, model_plus.getInitialActivation(data.size(0)))
     loss = config.criterion(output, target)
     loss.backward()
+    wandb.log({"model_plus_loss": loss.item()}, commit=False)
     # xs = torch.chunk(data, 10, dim=1)
     # ys = torch.chunk(target, 10, dim=1)
     # s = model_plus.getInitialActivation(data.size(0))
@@ -132,6 +136,7 @@ def compute_HessianVectorProd(config: Config, model, dFdS, data, target):
     output = model_minus(data, model_minus.getInitialActivation(data.size(0)))
     loss = config.criterion(output, target)
     loss.backward()
+    wandb.log({"model_minus_loss": loss.item()}, commit=False)
     # xs = torch.chunk(data, 10, dim=1)
     # ys = torch.chunk(target, 10, dim=1)
     # s = model_minus.getInitialActivation(data.size(0))
@@ -143,8 +148,11 @@ def compute_HessianVectorProd(config: Config, model, dFdS, data, target):
 
     g_plus  = get_grads(model_plus)
     g_minus = get_grads(model_minus)
+    wandb.log({"g_plus_norm": torch.linalg.norm(g_plus, 2).item()}, commit=False)
+    wandb.log({"g_minus_norm": torch.linalg.norm(g_minus, 2).item()}, commit=False)
 
     Hv = (g_plus - g_minus) / (2 * Hess_est_r)
+    
     return Hv 
 
 
