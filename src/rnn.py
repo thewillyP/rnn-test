@@ -5,7 +5,7 @@ import torch.nn as nn
 import torchvision
 import torchvision.transforms as transforms
 from records import InitType, RnnConfig, ZeroInit, RandomInit, StaticRandomInit
-
+import wandb
 
 def block_orthogonal_init(size, block_size, frequency=torch.pi/8, amplitude=(0.9, 0.999)):
     W = torch.zeros((size, size))
@@ -125,8 +125,19 @@ class RNN(nn.Module):
     def update_dFdlr(self, Hv, param, grad):
         self.Hlr = self.eta*Hv
         self.Hlr_norm = torch.norm(self.Hlr, p=2)
-        self.dFdlr_norm = torch.norm(self.dFdlr)
+        self.dFdlr_norm = torch.norm(self.dFdlr, p=2)
         self.dFdlr.data = self.dFdlr.data * (1-2*self.lambda_l2*self.eta) - self.Hlr - grad - 2*self.lambda_l2*param
+        wandb.log({"dFdlr_hv_norm": torch.norm(Hv)
+                , "dFdlr_lr": self.eta
+                , "Hlr_norm": self.Hlr_norm
+                , "dFdlr_norm": self.dFdlr_norm
+                , "dFdlr_norm_vl": self.grad_norm_vl
+                , "dFdlr_coeff": (1-2*self.lambda_l2*self.eta)
+                , "dFdlr_coeff_norm": torch.norm(self.dFdlr.data * (1-2*self.lambda_l2*self.eta), p=2)
+                , "dFdlr_param_norm": torch.norm(param, p=2)
+                , "dFdlr_grad_norm": torch.norm(grad, p=2)
+                , "dFdlr_coeff_param_norm": torch.norm(2*self.lambda_l2*param, p=2)
+                }, commit=False)
 
     def update_dFdlambda_l2(self, Hv, param):
         self.Hl2 = self.eta*Hv
@@ -137,6 +148,7 @@ class RNN(nn.Module):
     def update_eta(self, mlr, val_grad):
         val_grad = torch.nn.utils.parameters_to_vector(val_grad)
         delta = val_grad.dot(self.dFdlr).data.item()
+        wandb.log({"dFdlr_dot_val_grad": delta}, commit=False)
         # delta = torch.dot(val_grad, self.dFdlr).item()
         self.eta -= mlr * delta
         self.eta = max(0.0, self.eta)

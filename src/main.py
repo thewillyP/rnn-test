@@ -167,6 +167,8 @@ def get_grad_valid(config: Config, model, data, target):
     #     s = val_model.activations[:, -1, :].clone().detach().unsqueeze(0)
 
     grad_val = get_grads(val_model)
+
+    wandb.log({"validation_loss": loss.item()}, commit=False)
     
     return grad_val
 
@@ -232,7 +234,9 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
                         , "validation_gradient_norm": torch.linalg.norm(grad_valid, 2).item()
                         , "dFdlr_tensor_norm": torch.linalg.norm(model.dFdlr, 2).item()
                         , "dFdl2_tensor_norm": torch.linalg.norm(model.dFdl2, 2).item()
-                        , "parameter_norm": torch.linalg.norm(torch.nn.utils.parameters_to_vector(model.parameters()), 2).item()}
+                        , "parameter_norm": torch.linalg.norm(torch.nn.utils.parameters_to_vector(model.parameters()), 2).item()
+                        , "iteration": epoch * len(train_loader) + i
+                        , "epoch": epoch}
                 
                 # l2 = lambda x: torch.linalg.norm(x, 2)
                 # vmapped = torch.vmap(torch.vmap(l2))(model.activations)
@@ -242,11 +246,13 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
                 logger.log(log_data)
         
         logger.log({"test_loss": test_loss(config, test_loader, model),
-                    "wave_test_loss": wave_test_loss(config, model, test_loader_)})
+                    "wave_test_loss": wave_test_loss(config, model, test_loader_),
+                    "epoch": epoch})
         if (epoch+1) % config.checkpointFrequency == 0:
             log_modelIO(config, logger, model, f"epoch_{epoch}")
             logger.log({"performance": visualize(config, model, test_ds),
-                        "wave_performance": visualize(config, model, test_ds_)})
+                        "wave_performance": visualize(config, model, test_ds_),
+                        "epoch": epoch})
 
     return model
 
