@@ -196,6 +196,10 @@ print(bptt_grad)
 
 print(rtrl_total_grad)
 
+print(bptt_W_out_Grad)
+
+print(bptt_grad - rtrl_total_grad)
+
 assert torch.allclose(bptt_grad, rtrl_total_grad)
 
 quit()
