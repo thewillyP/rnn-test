@@ -5,8 +5,8 @@ import torch
 import matplotlib.pyplot as plt
 import torchvision
 import torchvision.transforms as transforms
-from delayed_add_task import getDataLoaderIO, DatasetType, randomUniform, sparseIO, waveIO, waveArbitraryUniform, sparseUniformConstOutT, visualizeOutput
-from learning import *
+# from delayed_add_task import getDataLoaderIO, DatasetType, randomUniform, sparseIO, waveIO, waveArbitraryUniform, sparseUniformConstOutT, visualizeOutput
+# from learning import *
 from torch.utils.data import TensorDataset
 from torch.utils.data import DataLoader
 import wandb
@@ -14,7 +14,7 @@ from matplotlib.ticker import MaxNLocator
 import torch.nn as nn
 from torchvision import datasets, transforms
 from abc import ABCMeta, abstractmethod
-from typing import TypeVar, Generic
+from typing import Callable, TypeVar, Generic
 import torch.nn.functional as F
 from dataclasses import dataclass
 from torchviz import make_dot
@@ -142,6 +142,7 @@ parameters__ = parameters_ - 0.01 * grad_
 rtrlParameters = parameters.clone().requires_grad_(True)
 rtrlPrevDynamic = prevDynamic.clone().requires_grad_(True)
 rtrlIM = influenceTensor.clone().requires_grad_(True)
+rtrl_total_grad = torch.zeros(n*(n+n_in+1) + n_out*(n+1))
 for _ in range(2):
     rtrl_W_rec, rtrl_W_out = torch.split(rtrlParameters, [n*(n+n_in+1), n_out*(n+1)])
 
@@ -154,6 +155,7 @@ for _ in range(2):
 
     # Combine gradients and update parameters
     rtrl_grad = torch.squeeze(torch.cat((rtrl_W_rec_Grad, rtrl_W_out_Grad), dim=1))
+    rtrl_total_grad += rtrl_grad.detach()
     # rtrlParameters = rtrlParameters - 0.01 * rtrl_grad
 
     # Detach and require gradients for the next step
@@ -161,6 +163,42 @@ for _ in range(2):
     rtrlPrevDynamic = rtrlDynamic.detach().requires_grad_()
     rtrlIM = rtrlIM.detach().requires_grad_()
 
+# bptt
+
+bpttParameters = parameters.clone().requires_grad_(True)
+bpttPrevDynamic = prevDynamic.clone().requires_grad_(True)
+bpttLoss = 0
+for _ in range(2):
+    bptt_W_rec, bptt_W_out = torch.split(bpttParameters, [n*(n+n_in+1), n_out*(n+1)])
+
+    bpttDynamic = network(x_, bpttPrevDynamic, bptt_W_rec, 1)
+    bpttOutput = readout(bpttDynamic, bptt_W_out)
+    bpttLoss = F.mse_loss(bpttOutput, torch.tensor([1.0])) + bpttLoss
+
+    # rtrl_W_rec_Grad, rtrlIM = rtrl.getRecurrentGradient(rtrlIM, rtrlPrevDynamic, rtrlDynamic, rtrlLoss, rtrl_W_rec)
+    # rtrl_W_out_Grad = jacobian(rtrlLoss, rtrl_W_out)
+
+    # Combine gradients and update parameters
+    # rtrl_grad = torch.squeeze(torch.cat((rtrl_W_rec_Grad, rtrl_W_out_Grad), dim=1))
+    # rtrl_total_grad += rtrl_grad.detach()
+    # rtrlParameters = rtrlParameters - 0.01 * rtrl_grad
+
+    # Detach and require gradients for the next step
+    # rtrlParameters = rtrlParameters.detach().requires_grad_()
+    # rtrlPrevDynamic = rtrlDynamic.detach().requires_grad_()
+    # rtrlIM = rtrlIM.detach().requires_grad_()
+    bpttPrevDynamic = bpttDynamic
+bptt_W_rec_Grad = jacobian(bpttLoss, bptt_W_rec)
+bptt_W_out_Grad = jacobian(bpttLoss, bptt_W_out)
+bptt_grad = torch.squeeze(torch.cat((bptt_W_rec_Grad, bptt_W_out_Grad), dim=1))
+
+print(bptt_grad)
+
+print(rtrl_total_grad)
+
+assert torch.allclose(bptt_grad, rtrl_total_grad)
+
+quit()
 
 
 # assert torch.allclose(parameters__, rtrlParameters)
