@@ -111,9 +111,17 @@ def compute_HessianVectorProd(config: Config, model, dFdS, data, target):
         param.data.add_(perturbation)
 
     model_plus.train()
-    output = model_plus(data)
+    output = model_plus(data, model_plus.getInitialActivation(data.size(0)))
     loss = config.criterion(output, target)
     loss.backward()
+    # xs = torch.chunk(data, 10, dim=1)
+    # ys = torch.chunk(target, 10, dim=1)
+    # s = model_plus.getInitialActivation(data.size(0))
+    # for xi, yi in zip(xs, ys):
+    #     outputs = model_plus(xi, s)
+    #     loss = config.criterion(outputs, yi) / 10
+    #     loss.backward()
+    #     s = model_plus.activations[:, -1, :].clone().detach().unsqueeze(0)
 
     model_minus = deepcopy(model)
     for param, direction in zip(model_minus.parameters(), dFdS):
@@ -121,9 +129,17 @@ def compute_HessianVectorProd(config: Config, model, dFdS, data, target):
         param.data.add_(-perturbation)
     
     model_minus.train()
-    output = model_minus(data)
+    output = model_minus(data, model_minus.getInitialActivation(data.size(0)))
     loss = config.criterion(output, target)
     loss.backward()
+    # xs = torch.chunk(data, 10, dim=1)
+    # ys = torch.chunk(target, 10, dim=1)
+    # s = model_minus.getInitialActivation(data.size(0))
+    # for xi, yi in zip(xs, ys):
+    #     outputs = model_minus(xi, s)
+    #     loss = config.criterion(outputs, yi) / 10
+    #     loss.backward()
+    #     s = model_minus.activations[:, -1, :].clone().detach().unsqueeze(0)
 
     g_plus  = get_grads(model_plus)
     g_minus = get_grads(model_minus)
@@ -136,10 +152,20 @@ def get_grad_valid(config: Config, model, data, target):
 
     val_model = deepcopy(model)
     val_model.train()
-    output = val_model(data)
+    output = val_model(data, val_model.getInitialActivation(data.size(0)))
     loss = config.criterion(output, target)
     loss.backward()
     # torch.nn.utils.clip_grad_norm_(val_model.parameters(), 3)
+
+    # xs = torch.chunk(data, 10, dim=1)
+    # ys = torch.chunk(target, 10, dim=1)
+    # s = val_model.getInitialActivation(data.size(0))
+    # for xi, yi in zip(xs, ys):
+    #     outputs = val_model(xi, s)
+    #     loss = config.criterion(outputs, yi) / 10
+    #     loss.backward()
+    #     s = val_model.activations[:, -1, :].clone().detach().unsqueeze(0)
+
     grad_val = get_grads(val_model)
     
     return grad_val
@@ -177,18 +203,24 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
 
     for epoch in range(config.num_epochs):
         for i, (x, y) in enumerate(train_loader):   
-            outputs = model(x)
-            loss = config.criterion(outputs, y)
+            xs = torch.chunk(x, 10, dim=1)
+            ys = torch.chunk(y, 10, dim=1)
+            s = model.getInitialActivation(x.size(0))
             optimizer.zero_grad()
-            loss.backward()
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), 3)
+            real_loss = 0
+            for xi, yi in zip(xs, ys):
+                outputs = model(xi, s)
+                loss = config.criterion(outputs, yi) / 10
+                real_loss += loss.item()
+                loss.backward()
+                s = model.activations[:, -1, :].clone().detach().unsqueeze(0)
             optimizer.step()
 
             data_vl, target_vl = next(validation_loader)
             model, optimizer, grad_valid = meta_update(config, data_vl, target_vl, x, y, model, optimizer)
 
             if (epoch * len(train_loader) + i) % config.logFrequency == 0:
-                log_data = {"loss": loss.item()
+                log_data = {"loss": real_loss
                         , "gradient_norm": gradient_norm(model)
                         , "learning_rate": optimizer.param_groups[0]['lr']
                         , "l2_regularization": optimizer.param_groups[0]['weight_decay']
@@ -197,10 +229,10 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
                         , "dFdl2_tensor_norm": torch.linalg.norm(model.dFdl2, 2).item()
                         , "parameter_norm": torch.linalg.norm(torch.nn.utils.parameters_to_vector(model.parameters()), 2).item()}
                 
-                l2 = lambda x: torch.linalg.norm(x, 2)
-                vmapped = torch.vmap(torch.vmap(l2))(model.activations)
-                activations = {"activation_norms": vmapped.mean().item(), "activation_max": vmapped.max().item(), "activation_min": vmapped.min().item()}
-                log_data.update(activations)
+                # l2 = lambda x: torch.linalg.norm(x, 2)
+                # vmapped = torch.vmap(torch.vmap(l2))(model.activations)
+                # activations = {"activation_norms": vmapped.mean().item(), "activation_max": vmapped.max().item(), "activation_min": vmapped.min().item()}
+                # log_data.update(activations)
 
                 logger.log(log_data)
         
@@ -224,7 +256,7 @@ def visualize(config: Config, model: RNN, dataset: TensorDataset):
     axes = axes.flatten() 
     
     for i, (xs, ys) in enumerate(take(samples, test_loader)):
-        predicts = model(xs)
+        predicts = model(xs, model.getInitialActivation(xs.size(0)))
         ys = ys[0]
         predicts = predicts[0]
         
@@ -249,7 +281,7 @@ def test_loss(config: Config, loader: DataLoader, model: RNN):
     total_samples = 0
     with torch.no_grad():
         for inputs, targets in loader:
-            predictions = model(inputs)
+            predictions = model(inputs, model.getInitialActivation(inputs.size(0)))
             batch_loss = config.criterion(predictions, targets) * inputs.size(0)
             total_loss += batch_loss.item()
             total_samples += inputs.size(0)

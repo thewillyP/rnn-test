@@ -8,12 +8,12 @@ python ./src/main.py \
     --num_layers 1 \
     --task Random \
     --randomType Uniform \
-    --seq 10 \
-    --numTr 1000 \
-    --numVl 1000 \
+    --seq 100 \
+    --numTr 10 \
+    --numVl 10 \
     --numTe 5000 \
-    --batch_size_tr 1000 \
-    --batch_size_vl 1000 \
+    --batch_size_tr 10 \
+    --batch_size_vl 10 \
     --batch_size_te 5000 \
     --t1 3 \
     --t2 5 \
@@ -27,7 +27,7 @@ python ./src/main.py \
     --projectName "rnn-test-ohotest2" \
     --logger "wandb" \
     --performance_samples 9 \
-    --init_scheme StaticRandomInit \
+    --init_scheme ZeroInit \
     --activation_fn relu \
     --log_freq 2 \
     --meta_learning_rate 0.0001 \

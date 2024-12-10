@@ -106,7 +106,7 @@ class RNN(nn.Module):
         self.dFdlr_norm = 0
         self.dFdl2_nrom = 0
 
-        self.getInitialActivation = getRNNInit(config.scheme)(config.num_layers, config.n_h)
+        self.getInitialActivation = getRNNInit(config.scheme, config.num_layers, config.n_h)
 
     
     def reset_jacob(self):
@@ -115,8 +115,8 @@ class RNN(nn.Module):
         self.dFdl2_norm = 0
         self.dFdlr_norm = 0
         
-    def forward(self, x):
-        s0 = self.getInitialActivation(x)
+    def forward(self, x, s0):
+        # s0 = self.getInitialActivation(x)
         out = self.rnn(x, s0)[0]
         self.activations = out.clone().detach()
         out = self.fc(out)
@@ -149,14 +149,14 @@ class RNN(nn.Module):
         self.lambda_l2 = min(0.0002, self.lambda_l2)
 
 
-def getRNNInit(initScheme: InitType, num_layers: int, n_h: int) -> Callable[[torch.Tensor], torch.Tensor]:
+def getRNNInit(initScheme: InitType, num_layers: int, n_h: int) -> Callable[[int], torch.Tensor]:
     match initScheme:
         case ZeroInit():
-            return lambda x: torch.zeros(num_layers, x.size(0), n_h)
+            return lambda batch_size: torch.zeros(num_layers, batch_size, n_h)
         case RandomInit():
-            return lambda x: torch.randn(num_layers, x.size(0), n_h)
+            return lambda batch_size: torch.randn(num_layers, batch_size, n_h)
         case StaticRandomInit():
             closured = torch.randn(num_layers, 1, n_h)
-            return lambda x: closured.repeat(1, x.size(0), 1)
+            return lambda batch_size: closured.repeat(1, batch_size, 1)
         case _:
             raise Exception("Invalid init scheme type")
