@@ -210,7 +210,7 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
             real_loss = 0
             for xi, yi in zip(xs, ys):
                 outputs = model(xi, s)
-                loss = config.criterion(outputs, yi) / 10
+                loss = config.criterion(outputs, yi) / config.time_chunk_size
                 real_loss += loss.item()
                 loss.backward()
                 s = model.activations[:, -1, :].clone().detach().unsqueeze(0)
