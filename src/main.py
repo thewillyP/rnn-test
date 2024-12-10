@@ -203,8 +203,8 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
 
     for epoch in range(config.num_epochs):
         for i, (x, y) in enumerate(train_loader):   
-            xs = torch.chunk(x, 10, dim=1)
-            ys = torch.chunk(y, 10, dim=1)
+            xs = torch.chunk(x, config.time_chunk_size, dim=1)
+            ys = torch.chunk(y, config.time_chunk_size, dim=1)
             s = model.getInitialActivation(x.size(0))
             optimizer.zero_grad()
             real_loss = 0
@@ -352,6 +352,7 @@ def parseIO():
     parser.add_argument('--l2_regularization', type=float, required=True, help='Learning rate')
     parser.add_argument('--meta_learning_rate', type=float, required=True, help='Meta Learning rate')
     parser.add_argument('--is_oho', type=int, required=True, help='Is OHO')
+    parser.add_argument('--time_chunk_size', type=int, required=True, help='Time chunk size')
 
     args = parser.parse_args()
 
@@ -463,7 +464,8 @@ def parseIO():
         logFrequency=args.log_freq,
         l2_regularization=args.l2_regularization,
         meta_learning_rate=args.meta_learning_rate,
-        is_oho=is_oho
+        is_oho=is_oho,
+        time_chunk_size=args.time_chunk_size
     )
 
 

@@ -126,4 +126,5 @@ class Config:
     logFrequency: int
     meta_learning_rate: float
     is_oho: bool
+    time_chunk_size: int
 
