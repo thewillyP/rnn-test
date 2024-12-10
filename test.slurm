@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --mem=4G
-#SBATCH --time=01:30:00
+#SBATCH --mem=12G
+#SBATCH --time=06:00:00
 #SBATCH --job-name=rnn_experiments
 #SBATCH --gres=gpu:0
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=10
 #SBATCH --array=1
 #SBATCH --output=test.out
 #SBATCH --error=test.err

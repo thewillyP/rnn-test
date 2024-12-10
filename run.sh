@@ -1,6 +1,5 @@
 #!/bin/bash
 
-
 python ./src/main.py \
     --n_in 2 \
     --n_h 200 \
@@ -9,22 +8,22 @@ python ./src/main.py \
     --task Random \
     --randomType Uniform \
     --seq 100 \
-    --numTr 10 \
-    --numVl 10 \
+    --numTr 500 \
+    --numVl 500 \
     --numTe 5000 \
-    --batch_size_tr 10 \
-    --batch_size_vl 10 \
+    --batch_size_tr 500 \
+    --batch_size_vl 500 \
     --batch_size_te 5000 \
-    --t1 5 \
-    --t2 9 \
-    --num_epochs 3500 \
+    --t1 3 \
+    --t2 5 \
+    --num_epochs 10000 \
     --learning_rate 0.1 \
     --optimizerFn SGD \
     --lossFn mse \
-    --mode test \
-    --checkpoint_freq 100 \
-    --seed 9 \
-    --projectName "rnn-test-ohotest2" \
+    --mode experiment \
+    --checkpoint_freq 2000 \
+    --seed 1 \
+    --projectName "rnn-test-debug-oho" \
     --logger "wandb" \
     --performance_samples 9 \
     --init_scheme ZeroInit \
