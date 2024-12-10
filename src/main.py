@@ -110,7 +110,7 @@ def compute_HessianVectorProd(config: Config, model, dFdS, data, target, name:st
     wandb.log({f"{name}_Hess_est_r": Hess_est_r}, commit=False)
     for ((parameter_name, param), direction) in zip(model_plus.named_parameters(), dFdS):
         perturbation =  Hess_est_r * direction
-        wandb.log({f"perturbation_{parameter_name}": torch.linalg.norm(perturbation, 2).item()}, commit=False)
+        wandb.log({f"{name}_perturbation_{parameter_name}": torch.linalg.norm(perturbation, 2).item()}, commit=False)
         param.data.add_(perturbation)
 
     model_plus.train()
