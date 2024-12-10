@@ -27,7 +27,7 @@ python ./src/main.py \
     --projectName "rnn-test-ohotest2" \
     --logger "wandb" \
     --performance_samples 9 \
-    --init_scheme ZeroInit \
+    --init_scheme StaticRandomInit \
     --activation_fn relu \
     --log_freq 2 \
     --meta_learning_rate 0.0001 \

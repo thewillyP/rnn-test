@@ -198,8 +198,8 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
                         , "parameter_norm": torch.linalg.norm(torch.nn.utils.parameters_to_vector(model.parameters()), 2).item()}
                 
                 l2 = lambda x: torch.linalg.norm(x, 2)
-                vmapped = torch.vmap(l2)(model.activations)
-                activations = {f"activation_{i}": vmapped[i].item() for i in range(len(vmapped))}
+                vmapped = torch.vmap(torch.vmap(l2))(model.activations)
+                activations = {"activation_norms": vmapped.mean().item(), "activation_max": vmapped.max().item(), "activation_min": vmapped.min().item()}
                 log_data.update(activations)
 
                 logger.log(log_data)
@@ -283,7 +283,7 @@ def parseIO():
                         help="Task type (Random, Sparse, or Wave)")
     parser.add_argument('--randomType', type=str, choices=['Uniform', 'Normal'], required=False,
                         help="Random type (Uniform or Normal)")
-    parser.add_argument('--init_scheme', type=str, choices=['ZeroInit', 'RandomInit'], required=True,
+    parser.add_argument('--init_scheme', type=str, choices=['ZeroInit', 'RandomInit', 'StaticRandomInit'], required=True,
                         help="Rnn init scheme type (ZeroInit, or RandomInit)")
     parser.add_argument('--outT', type=int, help="Output time step (required if task is Sparse)")
     parser.add_argument('--seq', type=int, required=True, help='Sequence length')
@@ -384,6 +384,8 @@ def parseIO():
             scheme = ZeroInit()
         case 'RandomInit':
             scheme = RandomInit()
+        case 'StaticRandomInit':
+            scheme = StaticRandomInit()
         case _:
             raise ValueError("Invalid init type")
         

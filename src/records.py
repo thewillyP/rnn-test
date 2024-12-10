@@ -42,7 +42,11 @@ class ZeroInit:
 class RandomInit:
     pass
 
-InitType = ZeroInit | RandomInit
+@dataclass(frozen=True)
+class StaticRandomInit:
+    pass
+
+InitType = ZeroInit | RandomInit | StaticRandomInit 
 
 
 # @dataclass(frozen=True)
