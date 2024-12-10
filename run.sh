@@ -15,8 +15,8 @@ python ./src/main.py \
     --batch_size_tr 10 \
     --batch_size_vl 10 \
     --batch_size_te 5000 \
-    --t1 3 \
-    --t2 5 \
+    --t1 5 \
+    --t2 9 \
     --num_epochs 3500 \
     --learning_rate 0.1 \
     --optimizerFn SGD \
@@ -25,11 +25,12 @@ python ./src/main.py \
     --checkpoint_freq 100 \
     --seed 9 \
     --projectName "rnn-test-ohotest2" \
-    --logger "wandb" \
+    --logger "prettyprint" \
     --performance_samples 9 \
     --init_scheme ZeroInit \
     --activation_fn relu \
     --log_freq 2 \
     --meta_learning_rate 0.0001 \
     --l2_regularization 0 \
-    --is_oho 0
+    --is_oho 1 \
+    --time_chunk_size 10

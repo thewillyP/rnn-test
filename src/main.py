@@ -201,6 +201,11 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
     optimizer = config.optimizerFn(model.parameters(), lr=config.learning_rate, weight_decay=config.l2_regularization)
     optimizer = update_optimizer_hyperparams(model, optimizer)
 
+    dataGenerator_ = getRandomTask(Wave())
+    ts_ = torch.arange(0, config.seq)
+    test_ds_ = getDatasetIO(dataGenerator_, config.t1, config.t2, ts_, config.numTe)
+    test_loader_ = getDataLoaderIO(test_ds_, config.batch_size_te)
+
     for epoch in range(config.num_epochs):
         for i, (x, y) in enumerate(train_loader):   
             xs = torch.chunk(x, config.time_chunk_size, dim=1)
@@ -236,10 +241,12 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
 
                 logger.log(log_data)
         
-        logger.log({"test_loss": test_loss(config, test_loader, model)})
+        logger.log({"test_loss": test_loss(config, test_loader, model),
+                    "wave_test_loss": wave_test_loss(config, model, test_loader_)})
         if (epoch+1) % config.checkpointFrequency == 0:
             log_modelIO(config, logger, model, f"epoch_{epoch}")
-            logger.log({"performance": visualize(config, model, test_ds)})
+            logger.log({"performance": visualize(config, model, test_ds),
+                        "wave_performance": visualize(config, model, test_ds_)})
 
     return model
 
@@ -287,6 +294,19 @@ def test_loss(config: Config, loader: DataLoader, model: RNN):
             total_samples += inputs.size(0)
     
     return total_loss / total_samples
+
+def wave_test_loss(config: Config, model: RNN, test_loader: DataLoader):
+    total_loss = 0
+    total_samples = 0
+    with torch.no_grad():
+        for inputs, targets in test_loader:
+            predictions = model(inputs, model.getInitialActivation(inputs.size(0)))
+            batch_loss = config.criterion(predictions, targets) * inputs.size(0)
+            total_loss += batch_loss.item()
+            total_samples += inputs.size(0)
+    
+    return total_loss / total_samples
+
 
 def get_grads(model: torch.nn.Module):
     grads = [
