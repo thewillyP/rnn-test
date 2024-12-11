@@ -123,18 +123,18 @@ class ValidationLabelOhoDataInterpreter(HasValidationLabel[tuple[A, B, C, D], D]
         _, _, _, validationLabel = data
         return validationLabel
 
-class TestInputOhoDataInterpreter(HasTrainingInput[tuple[A, B], A]):
-    def getTrainingInput(self, data):
-        trainingInput, _ = data
-        return trainingInput
+# class TestInputOhoDataInterpreter(HasTrainingInput[tuple[A, B], A]):
+#     def getTrainingInput(self, data):
+#         trainingInput, _ = data
+#         return trainingInput
 
-class TestLabelOhoDataInterpreter(HasTrainingLabel[tuple[A, B], B]):
-    def getTrainingLabel(self, data):
-        _, trainingLabel = data
-        return trainingLabel
+# class TestLabelOhoDataInterpreter(HasTrainingLabel[tuple[A, B], B]):
+#     def getTrainingLabel(self, data):
+#         _, trainingLabel = data
+#         return trainingLabel
 
-class OhoStateInterpreterTrain(ActivationOhoStateInterpreter, ParameterOhoStateInterpreter, HyperParameterOhoStateInterpreter, TrainingInputOhoDataInterpreter, TrainingLabelOhoDataInterpreter, ValidationInputOhoDataInterpreter, ValidationLabelOhoDataInterpreter):
+class OhoStateInterpreter(ActivationOhoStateInterpreter, ParameterOhoStateInterpreter, HyperParameterOhoStateInterpreter, TrainingInputOhoDataInterpreter, TrainingLabelOhoDataInterpreter, ValidationInputOhoDataInterpreter, ValidationLabelOhoDataInterpreter):
     pass
 
-class OhoStateInterpreterTest(ActivationOhoStateInterpreter, TestInputOhoDataInterpreter, TestLabelOhoDataInterpreter):
-    pass
+# class OhoStateInterpreterTest(ActivationOhoStateInterpreter, TestInputOhoDataInterpreter, TestLabelOhoDataInterpreter):
+#     pass

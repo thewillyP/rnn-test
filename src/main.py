@@ -1,7 +1,7 @@
 from typing import Any
 from data import *
 from learning import SGD, efficientBPTT_Vanilla_Full
-from objectalgebra import OhoStateInterpreter
+from objectalgebra import OhoStateInterpreter, OhoState
 from rnn import *
 import torch
 import wandb
@@ -81,14 +81,28 @@ def train(config: Config, logger: Logger, model: RNN):
     match config.rnnLearningAlgorithm:
         case EfficientBPTT(truncation):
             learner = efficientBPTT_Vanilla_Full(truncation, sgd, config.criterion, OhoStateInterpreter())
+
+    n_h = config.rnnConfig.n_h
+    n_in = config.rnnConfig.n_in
+    n_out = config.rnnConfig.n_out
+    env = OhoState[torch.Tensor, torch.Tensor, torch.Tensor](
+        activation=torch.zeros(n_h),
+        parameter=torch.randn(n_h*(n_h+n_in+1) + n_out*(n_h+1), requires_grad=True),
+        hyperparameter=torch.tensor([config.learning_rate])
+    )
     # bptt = efficientBPTT_Vanilla_Full(sgd, config.criterion, OhoStateInterpreter())
 
     optimizer = config.optimizerFn(model.parameters(), lr=config.learning_rate)
 
     for epoch in range(config.num_epochs):
         for i, (x, y) in enumerate(train_loader):   
-            time_series = zip(x, y)
-            # def closure(inputs, targets):
+            time_series: Iterator[tuple[torch.Tensor,torch.Tensor,torch.Tensor,torch.Tensor]] = map(lambda pair: (pair[0], pair[1], None, None), zip(x, y))
+            env = learner(time_series, env)
+            env = OhoState(
+                activation=torch.zeros(config.rnnConfig.n_h),
+                parameter=env.parameter,
+                hyperparameter=env.hyperparameter
+            )
 
             outputs = model(x)
             loss = config.criterion(outputs, y)
