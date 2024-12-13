@@ -8,28 +8,28 @@ python ./src/main.py \
     --task Random \
     --randomType Uniform \
     --seq 100 \
-    --numTr 500 \
-    --numVl 500 \
+    --numTr 100 \
+    --numVl 100 \
     --numTe 5000 \
-    --batch_size_tr 500 \
-    --batch_size_vl 500 \
+    --batch_size_tr 100 \
+    --batch_size_vl 100 \
     --batch_size_te 5000 \
-    --t1 3 \
-    --t2 5 \
-    --num_epochs 10000 \
-    --learning_rate 0.1 \
+    --t1 5 \
+    --t2 9 \
+    --num_epochs 10 \
+    --learning_rate 0.01 \
     --optimizerFn SGD \
     --lossFn mse \
-    --mode experiment \
+    --mode test \
     --checkpoint_freq 2000 \
-    --seed 1 \
-    --projectName "rnn-test-debug-oho" \
-    --logger "wandb" \
+    --seed 2 \
+    --projectName "rnn-test-rnnonlytest" \
+    --logger "prettyprint" \
     --performance_samples 9 \
     --init_scheme ZeroInit \
-    --activation_fn relu \
-    --log_freq 2 \
+    --activation_fn tanh \
+    --log_freq 1 \
     --meta_learning_rate 0.0001 \
     --l2_regularization 0 \
-    --is_oho 1 \
+    --is_oho 0 \
     --time_chunk_size 10
