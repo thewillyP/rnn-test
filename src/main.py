@@ -221,6 +221,7 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
     test_loader_ = getDataLoaderIO(test_ds_, config.batch_size_te)
 
     for epoch in range(config.num_epochs):
+        the_test_loss = test_loss(config, test_loader, model)
         counter = 0
         for i, (x, y) in enumerate(train_loader):   
             xs = torch.chunk(x, config.time_chunk_size, dim=1)
@@ -233,9 +234,10 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
                 outputs = model(xi, s)
                 myloss = config.criterion(outputs, yi)
                 loss = myloss / config.time_chunk_size
-                real_loss += myloss.item() * x.size(0)
+                real_loss += myloss.item()
                 loss.backward()
                 s = model.activations[:, -1, :].clone().detach().unsqueeze(0)
+            real_loss *= x.size(0)
             optimizer.step()
 
             data_vl, target_vl = next(validation_loader)
@@ -260,8 +262,7 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
 
                 logger.log(log_data)
         
-        logger.log({"test_loss": test_loss(config, test_loader, model),
-                    "training_loss_debug": test_loss(config, train_loader, model),
+        logger.log({"test_loss": the_test_loss,
                     "wave_test_loss": wave_test_loss(config, model, test_loader_),
                     "epoch": epoch})
         if (epoch+1) % config.checkpointFrequency == 0:
