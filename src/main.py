@@ -241,14 +241,17 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
             optimizer.step()
 
             data_vl, target_vl = next(validation_loader)
-            # model, optimizer, grad_valid = meta_update(config, data_vl, target_vl, x, y, model, optimizer)
+            try:
+                model, optimizer, grad_valid = meta_update(config, data_vl, target_vl, x, y, model, optimizer)
+            except:
+                pass
 
             if (epoch * len(train_loader) + i) % config.logFrequency == 0:
                 log_data = {"loss": real_loss / counter
                         , "gradient_norm": gradient_norm(model)
                         , "learning_rate": optimizer.param_groups[0]['lr']
                         , "l2_regularization": optimizer.param_groups[0]['weight_decay']
-                        # , "validation_gradient_norm": torch.linalg.norm(grad_valid, 2).item()
+                        , "validation_gradient_norm": torch.linalg.norm(grad_valid, 2).item()
                         , "dFdlr_tensor_norm": torch.linalg.norm(model.dFdlr, 2).item()
                         , "dFdl2_tensor_norm": torch.linalg.norm(model.dFdl2, 2).item()
                         , "parameter_norm": torch.linalg.norm(torch.nn.utils.parameters_to_vector(model.parameters()), 2).item()
