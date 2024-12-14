@@ -8,12 +8,12 @@ python ./src/main.py \
     --task Random \
     --randomType Uniform \
     --seq 100 \
-    --numTr 10 \
-    --numVl 100 \
-    --numTe 10000 \
-    --batch_size_tr 10 \
-    --batch_size_vl 100 \
-    --batch_size_te 10000 \
+    --numTr 5 \
+    --numVl 5 \
+    --numTe 5000 \
+    --batch_size_tr 5 \
+    --batch_size_vl 5 \
+    --batch_size_te 5000 \
     --t1 5 \
     --t2 9 \
     --num_epochs 60 \
