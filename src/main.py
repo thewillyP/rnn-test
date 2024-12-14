@@ -221,30 +221,32 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
     test_loader_ = getDataLoaderIO(test_ds_, config.batch_size_te)
 
     for epoch in range(config.num_epochs):
+        counter = 0
         for i, (x, y) in enumerate(train_loader):   
             xs = torch.chunk(x, config.time_chunk_size, dim=1)
             ys = torch.chunk(y, config.time_chunk_size, dim=1)
             s = model.getInitialActivation(x.size(0))
             optimizer.zero_grad()
             real_loss = 0
+            counter += x.size(0)
             for xi, yi in zip(xs, ys):
                 outputs = model(xi, s)
                 myloss = config.criterion(outputs, yi)
                 loss = myloss / config.time_chunk_size
-                real_loss += myloss.item()
+                real_loss += myloss.item() * x.size(0)
                 loss.backward()
                 s = model.activations[:, -1, :].clone().detach().unsqueeze(0)
             optimizer.step()
 
             data_vl, target_vl = next(validation_loader)
-            model, optimizer, grad_valid = meta_update(config, data_vl, target_vl, x, y, model, optimizer)
+            # model, optimizer, grad_valid = meta_update(config, data_vl, target_vl, x, y, model, optimizer)
 
             if (epoch * len(train_loader) + i) % config.logFrequency == 0:
-                log_data = {"loss": real_loss
+                log_data = {"loss": real_loss / counter
                         , "gradient_norm": gradient_norm(model)
                         , "learning_rate": optimizer.param_groups[0]['lr']
                         , "l2_regularization": optimizer.param_groups[0]['weight_decay']
-                        , "validation_gradient_norm": torch.linalg.norm(grad_valid, 2).item()
+                        # , "validation_gradient_norm": torch.linalg.norm(grad_valid, 2).item()
                         , "dFdlr_tensor_norm": torch.linalg.norm(model.dFdlr, 2).item()
                         , "dFdl2_tensor_norm": torch.linalg.norm(model.dFdl2, 2).item()
                         , "parameter_norm": torch.linalg.norm(torch.nn.utils.parameters_to_vector(model.parameters()), 2).item()
@@ -259,6 +261,7 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
                 logger.log(log_data)
         
         logger.log({"test_loss": test_loss(config, test_loader, model),
+                    "training_loss_debug": test_loss(config, train_loader, model),
                     "wave_test_loss": wave_test_loss(config, model, test_loader_),
                     "epoch": epoch})
         if (epoch+1) % config.checkpointFrequency == 0:
@@ -305,6 +308,7 @@ def visualize(config: Config, model: RNN, dataset: TensorDataset):
 def test_loss(config: Config, loader: DataLoader, model: RNN):
     total_loss = 0
     total_samples = 0
+    model.eval()
     with torch.no_grad():
         for inputs, targets in loader:
             predictions = model(inputs, model.getInitialActivation(inputs.size(0)))
@@ -312,6 +316,7 @@ def test_loss(config: Config, loader: DataLoader, model: RNN):
             total_loss += batch_loss.item()
             total_samples += inputs.size(0)
     
+    model.train()
     return total_loss / total_samples
 
 def wave_test_loss(config: Config, model: RNN, test_loader: DataLoader):
@@ -412,7 +417,7 @@ def parseIO():
 
     match args.lossFn:
         case 'mse':
-            loss_function = torch.functional.F.mse_loss
+            loss_function = lambda x, y: torch.functional.F.mse_loss(x, y, reduction='none').sum(dim=1).mean(dim=0)
         case _:
             raise ValueError("Currently only mse is supported as a loss function")
 

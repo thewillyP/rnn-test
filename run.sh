@@ -8,23 +8,23 @@ python ./src/main.py \
     --task Random \
     --randomType Uniform \
     --seq 100 \
-    --numTr 100 \
+    --numTr 10 \
     --numVl 100 \
-    --numTe 5000 \
-    --batch_size_tr 100 \
+    --numTe 10000 \
+    --batch_size_tr 10 \
     --batch_size_vl 100 \
-    --batch_size_te 5000 \
+    --batch_size_te 10000 \
     --t1 5 \
     --t2 9 \
-    --num_epochs 10 \
+    --num_epochs 60 \
     --learning_rate 0.01 \
     --optimizerFn SGD \
     --lossFn mse \
-    --mode test \
-    --checkpoint_freq 2000 \
+    --mode experiment \
+    --checkpoint_freq 20 \
     --seed 2 \
     --projectName "rnn-test-rnnonlytest" \
-    --logger "prettyprint" \
+    --logger "wandb" \
     --performance_samples 9 \
     --init_scheme ZeroInit \
     --activation_fn tanh \
