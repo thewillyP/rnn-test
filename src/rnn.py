@@ -158,7 +158,7 @@ class RNN(nn.Module):
         delta = val_grad.dot(self.dFdl2).data.item()
         self.lambda_l2 -= mlr * delta 
         self.lambda_l2 = max(0, self.lambda_l2)
-        self.lambda_l2 = min(0.0002, self.lambda_l2)
+        # self.lambda_l2 = min(0.0002, self.lambda_l2)
 
 
 def getRNNInit(initScheme: InitType, num_layers: int, n_h: int) -> Callable[[int], torch.Tensor]:

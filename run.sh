@@ -16,14 +16,14 @@ python ./src/main.py \
     --batch_size_te 5000 \
     --t1 5 \
     --t2 9 \
-    --num_epochs 60 \
+    --num_epochs 200 \
     --learning_rate 0.01 \
     --optimizerFn SGD \
     --lossFn mse \
     --mode experiment \
     --checkpoint_freq 20 \
     --seed 2 \
-    --projectName "rnn-test-rnnonlytest" \
+    --projectName "mlr-test" \
     --logger "wandb" \
     --performance_samples 9 \
     --init_scheme ZeroInit \

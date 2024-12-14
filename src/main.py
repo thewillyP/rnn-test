@@ -116,18 +116,8 @@ def compute_HessianVectorProd(config: Config, model, dFdS, data, target, name:st
         param.data.add_(perturbation)
 
     model_plus.train()
-    output = model_plus(data, model_plus.getInitialActivation(data.size(0)))
-    loss = config.criterion(output, target)
-    loss.backward()
-    wandb.log({f"{name}_model_plus_loss": loss.item()}, commit=False)
-    # xs = torch.chunk(data, 10, dim=1)
-    # ys = torch.chunk(target, 10, dim=1)
-    # s = model_plus.getInitialActivation(data.size(0))
-    # for xi, yi in zip(xs, ys):
-    #     outputs = model_plus(xi, s)
-    #     loss = config.criterion(outputs, yi) / 10
-    #     loss.backward()
-    #     s = model_plus.activations[:, -1, :].clone().detach().unsqueeze(0)
+    loss = trainStepIO(config, data, target, model_plus)
+    wandb.log({f"{name}_model_plus_loss": loss}, commit=False)
 
     model_minus = deepcopy(model)
     for param, direction in zip(model_minus.parameters(), dFdS):
@@ -135,25 +125,13 @@ def compute_HessianVectorProd(config: Config, model, dFdS, data, target, name:st
         param.data.add_(-perturbation)
     
     model_minus.train()
-    output = model_minus(data, model_minus.getInitialActivation(data.size(0)))
-    loss = config.criterion(output, target)
-    loss.backward()
-    wandb.log({f"{name}_model_minus_loss": loss.item()}, commit=False)
-    # xs = torch.chunk(data, 10, dim=1)
-    # ys = torch.chunk(target, 10, dim=1)
-    # s = model_minus.getInitialActivation(data.size(0))
-    # for xi, yi in zip(xs, ys):
-    #     outputs = model_minus(xi, s)
-    #     loss = config.criterion(outputs, yi) / 10
-    #     loss.backward()
-    #     s = model_minus.activations[:, -1, :].clone().detach().unsqueeze(0)
+    loss = trainStepIO(config, data, target, model_minus)
+    wandb.log({f"{name}_model_minus_loss": loss}, commit=False)
 
     g_plus  = get_grads(model_plus)
     g_minus = get_grads(model_minus)
     wandb.log({f"{name}_g_plus_norm": torch.linalg.norm(g_plus, 2).item()}, commit=False)
     wandb.log({f"{name}_g_minus_norm": torch.linalg.norm(g_minus, 2).item()}, commit=False)
-    # wandb.log({"g_plus_norm": torch.linalg.norm(g_plus, 2).item()}, commit=False)
-    # wandb.log({"g_minus_norm": torch.linalg.norm(g_minus, 2).item()}, commit=False)
 
     Hv = (g_plus - g_minus) / (2 * Hess_est_r)
     
@@ -164,23 +142,10 @@ def get_grad_valid(config: Config, model, data, target):
 
     val_model = deepcopy(model)
     val_model.train()
-    output = val_model(data, val_model.getInitialActivation(data.size(0)))
-    loss = config.criterion(output, target)
-    loss.backward()
-    # torch.nn.utils.clip_grad_norm_(val_model.parameters(), 3)
-
-    # xs = torch.chunk(data, 10, dim=1)
-    # ys = torch.chunk(target, 10, dim=1)
-    # s = val_model.getInitialActivation(data.size(0))
-    # for xi, yi in zip(xs, ys):
-    #     outputs = val_model(xi, s)
-    #     loss = config.criterion(outputs, yi) / 10
-    #     loss.backward()
-    #     s = val_model.activations[:, -1, :].clone().detach().unsqueeze(0)
-
+    val_loss = trainStepIO(config, data, target, val_model)
     grad_val = get_grads(val_model)
 
-    wandb.log({"validation_loss": loss.item()}, commit=False)
+    wandb.log({"validation_loss": val_loss}, commit=False)
     
     return grad_val
 
@@ -205,11 +170,25 @@ def meta_update(config: Config, data_vl, target_vl, data_tr, target_tr, model, o
 
     if config.is_oho:
         model.update_eta(config.meta_learning_rate, grad_valid)
-        model.update_lambda(config.meta_learning_rate*0.01, grad_valid)
+        model.update_lambda(config.meta_learning_rate, grad_valid)
         optimizer = update_optimizer_hyperparams(model, optimizer)
 
     return model, optimizer, grad_valid
 
+
+def trainStepIO(config: Config, x, y, model):
+    xs = torch.chunk(x, config.time_chunk_size, dim=1)
+    ys = torch.chunk(y, config.time_chunk_size, dim=1)
+    s = model.getInitialActivation(x.size(0))
+    real_loss = 0
+    for xi, yi in zip(xs, ys):
+        outputs = model(xi, s)
+        myloss = config.criterion(outputs, yi)
+        loss = myloss / config.time_chunk_size
+        real_loss += myloss.item()
+        loss.backward()
+        s = model.activations[:, -1, :].clone().detach().unsqueeze(0)
+    return real_loss
 
 def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, validation_loader: Iterator, test_loader: Iterator, test_ds: TensorDataset):
     optimizer = config.optimizerFn(model.parameters(), lr=config.learning_rate, weight_decay=config.l2_regularization)
@@ -224,19 +203,10 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
         the_test_loss = test_loss(config, test_loader, model)
         counter = 0
         for i, (x, y) in enumerate(train_loader):   
-            xs = torch.chunk(x, config.time_chunk_size, dim=1)
-            ys = torch.chunk(y, config.time_chunk_size, dim=1)
-            s = model.getInitialActivation(x.size(0))
             optimizer.zero_grad()
             real_loss = 0
             counter += x.size(0)
-            for xi, yi in zip(xs, ys):
-                outputs = model(xi, s)
-                myloss = config.criterion(outputs, yi)
-                loss = myloss / config.time_chunk_size
-                real_loss += myloss.item()
-                loss.backward()
-                s = model.activations[:, -1, :].clone().detach().unsqueeze(0)
+            real_loss = trainStepIO(config, x, y, model)
             real_loss *= x.size(0)
             optimizer.step()
 
