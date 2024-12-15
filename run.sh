@@ -17,7 +17,7 @@ python ./src/main.py \
     --t1 5 \
     --t2 9 \
     --num_epochs 200 \
-    --learning_rate 0.01 \
+    --learning_rate 0.012 \
     --optimizerFn SGD \
     --lossFn mse \
     --mode experiment \
@@ -29,7 +29,7 @@ python ./src/main.py \
     --init_scheme ZeroInit \
     --activation_fn tanh \
     --log_freq 1 \
-    --meta_learning_rate 0.00025 \
-    --l2_regularization 0.1 \
+    --meta_learning_rate 0.0002 \
+    --l2_regularization 0.15 \
     --is_oho 1 \
     --time_chunk_size 10

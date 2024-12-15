@@ -6,7 +6,7 @@
 #SBATCH --job-name=rnn_experiments
 #SBATCH --gres=gpu:0
 #SBATCH --cpus-per-task=8
-#SBATCH --array=1
+#SBATCH --array=1-4
 #SBATCH --output="/scratch/wlp9800/logs/%x-%A-%a.out"
 #SBATCH --error="/scratch/wlp9800/logs/%x-%A-%a.err"
 
