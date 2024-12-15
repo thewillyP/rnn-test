@@ -2,11 +2,11 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --mem=8G
-#SBATCH --time=00:30:00
+#SBATCH --time=01:30:00
 #SBATCH --job-name=rnn_experiments
 #SBATCH --gres=gpu:0
-#SBATCH --cpus-per-task=4
-#SBATCH --array=1-5
+#SBATCH --cpus-per-task=8
+#SBATCH --array=1
 #SBATCH --output="/scratch/wlp9800/logs/%x-%A-%a.out"
 #SBATCH --error="/scratch/wlp9800/logs/%x-%A-%a.err"
 
