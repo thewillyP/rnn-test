@@ -194,10 +194,10 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
     optimizer = config.optimizerFn(model.parameters(), lr=config.learning_rate, weight_decay=config.l2_regularization)
     optimizer = update_optimizer_hyperparams(model, optimizer)
 
-    dataGenerator_ = getRandomTask(Wave())
-    ts_ = torch.arange(0, config.seq)
-    test_ds_ = getDatasetIO(dataGenerator_, config.t1, config.t2, ts_, config.numTe)
-    test_loader_ = getDataLoaderIO(test_ds_, config.batch_size_te)
+    # dataGenerator_ = getRandomTask(Wave())
+    # ts_ = torch.arange(0, config.seq)
+    # test_ds_ = getDatasetIO(dataGenerator_, config.t1, config.t2, ts_, config.numTe)
+    # test_loader_ = getDataLoaderIO(test_ds_, config.batch_size_te)
 
     for epoch in range(config.num_epochs):
         the_test_loss = test_loss(config, test_loader, model)
@@ -210,11 +210,13 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
             real_loss *= x.size(0)
             optimizer.step()
 
-            data_vl, target_vl = next(validation_loader)
-            try:
-                model, optimizer, grad_valid = meta_update(config, data_vl, target_vl, x, y, model, optimizer)
-            except:
-                pass
+            grad_valid = torch.zeros(1)
+            if config.numVl > 0:
+                data_vl, target_vl = next(validation_loader)
+                try:
+                    model, optimizer, grad_valid = meta_update(config, data_vl, target_vl, x, y, model, optimizer)
+                except:
+                    pass
 
             if (epoch * len(train_loader) + i) % config.logFrequency == 0:
                 log_data = {"loss": real_loss / counter
@@ -236,12 +238,12 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
                 logger.log(log_data)
         
         logger.log({"test_loss": the_test_loss,
-                    "wave_test_loss": wave_test_loss(config, model, test_loader_),
+                    # "wave_test_loss": wave_test_loss(config, model, test_loader_),
                     "epoch": epoch})
         if (epoch+1) % config.checkpointFrequency == 0:
             log_modelIO(config, logger, model, f"epoch_{epoch}")
             logger.log({"performance": visualize(config, model, test_ds),
-                        "wave_performance": visualize(config, model, test_ds_),
+                        # "wave_performance": visualize(config, model, test_ds_),
                         "epoch": epoch})
 
     return model
@@ -507,23 +509,35 @@ def main():
     # logger.watchPytorch(model)
     log_modelIO(config, logger, model, "init")
 
-
     ts = torch.arange(0, config.seq)
     dataGenerator = getRandomTask(config.task)
 
-    train_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTr)
-    train_loader = getDataLoaderIO(train_ds, config.batch_size_tr)
-    test_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTe)
-    test_loader = getDataLoaderIO(test_ds, config.batch_size_te)
-    valid_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numVl)
-    valid_loader = getDataLoaderIO(valid_ds, config.batch_size_vl)
+    # train_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTr)
+    # train_loader = getDataLoaderIO(train_ds, config.batch_size_tr)
+    # test_dataset = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTe)
+    # test_loader = getDataLoaderIO(test_dataset, config.batch_size_te)
+    # valid_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numVl)
+    # valid_loader = getDataLoaderIO(valid_ds, config.batch_size_vl)
 
-    log_datasetIO(config, logger, train_ds, "train")
-    log_datasetIO(config, logger, test_ds, "test")
-    log_datasetIO(config, logger, valid_ds, "valid")
+    # log_datasetIO(config, logger, train_ds, "train")
+    # log_datasetIO(config, logger, test_dataset, "test")
+    # log_datasetIO(config, logger, valid_ds, "valid")
+
+    dataset_artifact = wandb.use_artifact('wlp9800-new-york-university/mlr-test/dataset_ef1inln6:v0', type='dataset')
+    dataset_artifact_dir = dataset_artifact.download()
+    dataset = torch.load(f"{dataset_artifact_dir}/dataset_train.pt")
+
+    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [config.numTr, config.numVl])
+    train_loader = getDataLoaderIO(train_dataset, config.batch_size_tr)
+    valid_loader = getDataLoaderIO(val_dataset, config.batch_size_vl)
+
+    test_dataset_artifact = wandb.use_artifact('wlp9800-new-york-university/mlr-test/dataset_ef1inln6:v1', type='dataset')
+    test_dataset_artifact_dir = test_dataset_artifact.download()
+    test_dataset = torch.load(f"{test_dataset_artifact_dir}/dataset_test.pt")
+    test_loader = getDataLoaderIO(test_dataset, config.batch_size_te)
 
 
-    model = train(config, logger, model, train_loader, cycle(valid_loader), test_loader, test_ds)
+    model = train(config, logger, model, train_loader, cycle(valid_loader), test_loader, test_dataset)
 
 
 

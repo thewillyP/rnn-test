@@ -9,10 +9,10 @@ python ./src/main.py \
     --randomType Uniform \
     --seq 100 \
     --numTr 5 \
-    --numVl 5 \
+    --numVl 1 \
     --numTe 5000 \
     --batch_size_tr 5 \
-    --batch_size_vl 5 \
+    --batch_size_vl 1 \
     --batch_size_te 5000 \
     --t1 5 \
     --t2 9 \
@@ -29,7 +29,7 @@ python ./src/main.py \
     --init_scheme ZeroInit \
     --activation_fn tanh \
     --log_freq 1 \
-    --meta_learning_rate 0.0001 \
-    --l2_regularization 0 \
-    --is_oho 0 \
+    --meta_learning_rate 0.00025 \
+    --l2_regularization 0.1 \
+    --is_oho 1 \
     --time_chunk_size 10

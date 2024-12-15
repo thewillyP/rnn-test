@@ -110,6 +110,8 @@ def getDatasetIO(randFn, t1: int, t2: int, ts: torch.Tensor, numEx: int):
     return ds
 
 def getDataLoaderIO(ds: TensorDataset, batchSize: int):
+    if len(ds) == 0:
+        return []
     return DataLoader(ds, batch_size=batchSize, shuffle=True, drop_last=False)
 
 
