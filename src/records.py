@@ -127,4 +127,5 @@ class Config:
     meta_learning_rate: float
     is_oho: bool
     time_chunk_size: int
+    rnnInitialActivation: Callable[[int], torch.Tensor]
 

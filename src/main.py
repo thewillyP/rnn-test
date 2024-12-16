@@ -97,41 +97,45 @@ def compute_HessianVectorProd(config: Config, model, dFdS, data, target, name:st
     ## Compute Hessian Vector product h
     vmax_x, vmax_d = 0, 0
 
-    model_plus = deepcopy(model)
+    # model_plus = deepcopy(model)
+    model_plus = RNN(config.rnnConfig, config.learning_rate, config.l2_regularization)
+    model_plus.load_state_dict(model.state_dict())
     for param, direction in zip(model_plus.parameters(), dFdS):
         vmax_x = max(vmax_x, torch.max(torch.abs(param)).item())
         vmax_d = max(vmax_d, torch.max(abs(direction)).item())
         break
-    wandb.log({f"{name}_vmax_x": vmax_x, f"{name}_vmax_d": vmax_d}, commit=False)
+    # wandb.log({f"{name}_vmax_x": vmax_x, f"{name}_vmax_d": vmax_d}, commit=False)
 
     if vmax_d ==0: vmax_d = 1
     Hess_est_r = (eps_machine ** 0.5) * (1+vmax_x) / vmax_d
     Hess_est_r = max([ Hess_est_r, 0.001])
-    wandb.log({f"{name}_Hess_est_r": Hess_est_r}, commit=False)
+    # wandb.log({f"{name}_Hess_est_r": Hess_est_r}, commit=False)
     for ((parameter_name, param), direction) in zip(model_plus.named_parameters(), dFdS):
         perturbation =  Hess_est_r * direction
-        wandb.log({f"{name}_perturbation_{parameter_name}": torch.linalg.norm(perturbation, 2).item()}, commit=False)
-        wandb.log({f"{name}_peturbation_max_{parameter_name}": torch.max(perturbation).item()}, commit=False)
-        wandb.log({f"{name}_peturbation_min_{parameter_name}": torch.min(perturbation).item()}, commit=False)
+        # wandb.log({f"{name}_perturbation_{parameter_name}": torch.linalg.norm(perturbation, 2).item()}, commit=False)
+        # wandb.log({f"{name}_peturbation_max_{parameter_name}": torch.max(perturbation).item()}, commit=False)
+        # wandb.log({f"{name}_peturbation_min_{parameter_name}": torch.min(perturbation).item()}, commit=False)
         param.data.add_(perturbation)
 
     model_plus.train()
     loss = trainStepIO(config, data, target, model_plus)
-    wandb.log({f"{name}_model_plus_loss": loss}, commit=False)
+    # wandb.log({f"{name}_model_plus_loss": loss}, commit=False)
 
-    model_minus = deepcopy(model)
+    # model_minus = deepcopy(model)
+    model_minus = RNN(config.rnnConfig, config.learning_rate, config.l2_regularization)
+    model_minus.load_state_dict(model.state_dict())
     for param, direction in zip(model_minus.parameters(), dFdS):
         perturbation =  Hess_est_r * direction
         param.data.add_(-perturbation)
     
     model_minus.train()
     loss = trainStepIO(config, data, target, model_minus)
-    wandb.log({f"{name}_model_minus_loss": loss}, commit=False)
+    # wandb.log({f"{name}_model_minus_loss": loss}, commit=False)
 
     g_plus  = get_grads(model_plus)
     g_minus = get_grads(model_minus)
-    wandb.log({f"{name}_g_plus_norm": torch.linalg.norm(g_plus, 2).item()}, commit=False)
-    wandb.log({f"{name}_g_minus_norm": torch.linalg.norm(g_minus, 2).item()}, commit=False)
+    # wandb.log({f"{name}_g_plus_norm": torch.linalg.norm(g_plus, 2).item()}, commit=False)
+    # wandb.log({f"{name}_g_minus_norm": torch.linalg.norm(g_minus, 2).item()}, commit=False)
 
     Hv = (g_plus - g_minus) / (2 * Hess_est_r)
     
@@ -140,7 +144,9 @@ def compute_HessianVectorProd(config: Config, model, dFdS, data, target, name:st
 
 def get_grad_valid(config: Config, model, data, target):
 
-    val_model = deepcopy(model)
+    # val_model = deepcopy(model)
+    val_model = RNN(config.rnnConfig, config.learning_rate, config.l2_regularization)
+    val_model.load_state_dict(model.state_dict())
     val_model.train()
     val_loss = trainStepIO(config, data, target, val_model)
     grad_val = get_grads(val_model)
@@ -149,20 +155,89 @@ def get_grad_valid(config: Config, model, data, target):
     
     return grad_val
 
+
+# def make_functional(mod, disable_autograd_tracking=False):
+#     params_dict = dict(mod.named_parameters())
+#     params_names = params_dict.keys()
+#     params_values = tuple(params_dict.values())
+    
+#     stateless_mod = copy.deepcopy(mod)
+#     stateless_mod.to('meta')
+
+#     def fmodel(new_params_values, *args, **kwargs):
+#         new_params_dict = {name: value for name, value in zip(params_names, new_params_values)}
+#         return torch.func.functional_call(stateless_mod, new_params_dict, args, kwargs)
+  
+#     if disable_autograd_tracking:
+#         params_values = torch.utils._pytree.tree_map(torch.Tensor.detach, params_values)
+#     return fmodel, params_values
+
+
+def vector_to_named_parameters(vector, model):
+    # Get named parameters and their sizes
+    named_params = list(model.named_parameters())
+    param_sizes = [param.numel() for _, param in named_params]
+
+    # Generate slices for the vector
+    slices = torch.split(vector, param_sizes)
+
+    # Use dictionary comprehension with zip
+    named_params_dict = {name: slice.view(param.size()) for (name, param), slice in zip(named_params, slices)}
+    return named_params_dict
+
 def meta_update(config: Config, data_vl, target_vl, data_tr, target_tr, model, optimizer):
 
     #Compute Hessian Vector Product
-    param_shapes = model.param_shapes
-    dFdlr = unflatten_array(model.dFdlr, model.param_cumsum, param_shapes)
-    Hv_lr  = compute_HessianVectorProd(config, model, dFdlr, data_tr, target_tr, "lr")
+    
 
-    dFdl2 = unflatten_array(model.dFdl2, model.param_cumsum, param_shapes)
-    Hv_l2  = compute_HessianVectorProd(config, model, dFdl2, data_tr, target_tr, "l2")
+    def hvp(f, primals, tangents):
+        return torch.func.jvp(torch.func.grad(f), primals, tangents)[1]
+    
+    def compute_loss(params, x, y):
+        params = vector_to_named_parameters(params, model)
+        xs = torch.chunk(x, config.time_chunk_size, dim=1)
+        ys = torch.chunk(y, config.time_chunk_size, dim=1)
+        s = config.rnnInitialActivation(x.size(0))
+        loss = 0
+        for i, (xi, yi )in enumerate(zip(xs, ys)):
+            prediction, activations = torch.func.functional_call(model, params, (xi, s))
+            if i == 0:
+                ts = torch.arange(0, xi.size(1))
+                mask = ts >= max(config.t1, config.t2)
+                mask = mask.unsqueeze(-1)
+                m = torch.vmap(lambda x: x * mask)
+                yi = m(yi)
+                prediction = m(prediction)
+            myloss = config.criterion(prediction, yi)
+            loss += myloss / config.time_chunk_size
+            s = activations[:, -1, :].clone().detach().unsqueeze(0)
+        return loss.squeeze()
+    lossFn = lambda params: compute_loss(params, data_tr, target_tr)
+
+    parameters = torch.nn.utils.parameters_to_vector(model.parameters())
+
+    Hv_lr = hvp(lossFn, (parameters, ), (model.dFdlr, ))
+
+    param_shapes = model.param_shapes
+    dFdlr_test = unflatten_array(model.dFdlr, model.param_cumsum, param_shapes)
+    # Hv_lr_test  = compute_HessianVectorProd(config, model, dFdlr_test, data_tr, target_tr, "lr")
+
+    # print(Hv_lr - Hv_lr_test)
+    # assert torch.allclose(Hv_lr, Hv_lr_test)
+
+    # dFdl2_test = unflatten_array(model.dFdl2, model.param_cumsum, param_shapes)
+    # Hv_l2_test  = compute_HessianVectorProd(config, model, dFdl2_test, data_tr, target_tr, "l2")
+    Hv_l2 = hvp(lossFn, (parameters, ), (model.dFdl2, ))
+
+    # assert torch.allclose(Hv_l2, Hv_l2_test)
 
     grad_valid = get_grad_valid(config, model, data_vl, target_vl)
 
     grad = get_grads(model)
     param = torch.nn.utils.parameters_to_vector(model.parameters()).data
+
+    # print("yay")    
+    # quit()
 
     #Update hyper-parameters   
     model.update_dFdlr(Hv_lr, param, grad)
@@ -170,7 +245,7 @@ def meta_update(config: Config, data_vl, target_vl, data_tr, target_tr, model, o
 
     if config.is_oho:
         model.update_eta(config.meta_learning_rate, grad_valid)
-        model.update_lambda(config.meta_learning_rate, grad_valid)
+        # model.update_lambda(config.meta_learning_rate, grad_valid)
         optimizer = update_optimizer_hyperparams(model, optimizer)
 
     return model, optimizer, grad_valid
@@ -179,10 +254,17 @@ def meta_update(config: Config, data_vl, target_vl, data_tr, target_tr, model, o
 def trainStepIO(config: Config, x, y, model):
     xs = torch.chunk(x, config.time_chunk_size, dim=1)
     ys = torch.chunk(y, config.time_chunk_size, dim=1)
-    s = model.getInitialActivation(x.size(0))
+    s = config.rnnInitialActivation(x.size(0))
     real_loss = 0
-    for xi, yi in zip(xs, ys):
-        outputs = model(xi, s)
+    for i, (xi, yi )in enumerate(zip(xs, ys)):
+        outputs, _ = model(xi, s)
+        if i == 0:
+            ts = torch.arange(0, xi.size(1))
+            mask = ts >= max(config.t1, config.t2)
+            mask = mask.unsqueeze(-1)
+            m = torch.vmap(lambda x: x * mask)
+            yi = m(yi)
+            outputs = m(outputs)
         myloss = config.criterion(outputs, yi)
         loss = myloss / config.time_chunk_size
         real_loss += myloss.item()
@@ -190,7 +272,9 @@ def trainStepIO(config: Config, x, y, model):
         s = model.activations[:, -1, :].clone().detach().unsqueeze(0)
     return real_loss
 
+global_step = 0
 def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, validation_loader: Iterator, test_loader: Iterator, test_ds: TensorDataset):
+    global  global_step
     optimizer = config.optimizerFn(model.parameters(), lr=config.learning_rate, weight_decay=config.l2_regularization)
     optimizer = update_optimizer_hyperparams(model, optimizer)
 
@@ -209,12 +293,14 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
             real_loss = trainStepIO(config, x, y, model)
             real_loss *= x.size(0)
             optimizer.step()
+            grad_valid = torch.zeros(1)
 
             data_vl, target_vl = next(validation_loader)
-            try:
-                model, optimizer, grad_valid = meta_update(config, data_vl, target_vl, x, y, model, optimizer)
-            except:
-                pass
+            # try:
+                # if global_step > 2:
+            model, optimizer, grad_valid = meta_update(config, data_vl, target_vl, x, y, model, optimizer)
+            # except:
+            #     pass
 
             if (epoch * len(train_loader) + i) % config.logFrequency == 0:
                 log_data = {"loss": real_loss / counter
@@ -243,6 +329,7 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
             logger.log({"performance": visualize(config, model, test_ds),
                         "wave_performance": visualize(config, model, test_ds_),
                         "epoch": epoch})
+        global_step += 1
 
     return model
 
@@ -259,7 +346,7 @@ def visualize(config: Config, model: RNN, dataset: TensorDataset):
     axes = axes.flatten() 
     
     for i, (xs, ys) in enumerate(take(samples, test_loader)):
-        predicts = model(xs, model.getInitialActivation(xs.size(0)))
+        predicts, _ = model(xs, config.rnnInitialActivation(xs.size(0)))
         ys = ys[0]
         predicts = predicts[0]
         
@@ -285,7 +372,7 @@ def test_loss(config: Config, loader: DataLoader, model: RNN):
     model.eval()
     with torch.no_grad():
         for inputs, targets in loader:
-            predictions = model(inputs, model.getInitialActivation(inputs.size(0)))
+            predictions, _ = model(inputs, config.rnnInitialActivation(inputs.size(0)))
             batch_loss = config.criterion(predictions, targets) * inputs.size(0)
             total_loss += batch_loss.item()
             total_samples += inputs.size(0)
@@ -298,7 +385,7 @@ def wave_test_loss(config: Config, model: RNN, test_loader: DataLoader):
     total_samples = 0
     with torch.no_grad():
         for inputs, targets in test_loader:
-            predictions = model(inputs, model.getInitialActivation(inputs.size(0)))
+            predictions, _ = model(inputs, config.rnnInitialActivation(inputs.size(0)))
             batch_loss = config.criterion(predictions, targets) * inputs.size(0)
             total_loss += batch_loss.item()
             total_samples += inputs.size(0)
@@ -483,7 +570,8 @@ def parseIO():
         l2_regularization=args.l2_regularization,
         meta_learning_rate=args.meta_learning_rate,
         is_oho=is_oho,
-        time_chunk_size=args.time_chunk_size
+        time_chunk_size=args.time_chunk_size,
+        rnnInitialActivation=getRNNInit(rnnConfig.scheme, rnnConfig.num_layers, rnnConfig.n_h)
     )
 
 
