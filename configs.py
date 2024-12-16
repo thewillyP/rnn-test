@@ -34,7 +34,7 @@ params = {
     "init_scheme": ['StaticRandomInit'],
     "activation_fn": ['tanh'],
     "log_freq": [1],
-    "meta_learning_rate": [0.0005],
+    "meta_learning_rate": [0.0002],
     "l2_regularization": [0],
     "is_oho": [1, 0],
     "randomType": ["Uniform"],
