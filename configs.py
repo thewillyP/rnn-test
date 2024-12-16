@@ -28,7 +28,7 @@ params = {
     "mode": ["experiment"],
     "checkpoint_freq": [800],
     "seed": list(range(3, 3+1)),
-    "projectName": ["oho-rnn-generalization-gap4"],
+    "projectName": ["oho-rnn-generalization-gap5"],
     "logger": ["wandb"],
     "performance_samples": [9],
     "init_scheme": ['StaticRandomInit'],
