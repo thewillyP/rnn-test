@@ -97,7 +97,7 @@ def visualizeOutput(YS):
 
 sparseUniformConstOutT = lambda outT: SparseInitIO(lambda: torch.rand(1) - 0.5, lambda x: x, lambda: 1, lambda: outT)
 sparseUniform = SparseInitIO(lambda: torch.rand(1) - 0.5, lambda x: x, lambda: 1, lambda: torch.randint(5, 10, (1,)))
-waveArbitraryUniform = WaveInitIO(lambda: torch.rand(1), lambda: torch.rand(1)*100, lambda: torch.rand(1)*2*torch.pi, lambda: torch.rand(1)*2 - 1)
+waveArbitraryUniform = WaveInitIO(lambda: torch.rand(1)*0.25, lambda: torch.rand(1)*2, lambda: torch.rand(1)*2*torch.pi, lambda: torch.rand(1)*0.5 - 0.25)
 randomUniform = lambda ts, _: torch.rand(len(ts)) - 0.5
 randomNormal = lambda ts, _: torch.randn(len(ts))
 # later in the future I can create a config file instead of having to manually change this code everytime

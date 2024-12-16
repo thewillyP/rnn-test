@@ -16,7 +16,7 @@ python ./src/main.py \
     --batch_size_te 5000 \
     --t1 3 \
     --t2 5 \
-    --num_epochs 800 \
+    --num_epochs 200 \
     --learning_rate 0.01 \
     --optimizerFn SGD \
     --lossFn mse \
@@ -29,7 +29,7 @@ python ./src/main.py \
     --init_scheme StaticRandomInit \
     --activation_fn tanh \
     --log_freq 1 \
-    --meta_learning_rate 0.0001 \
+    --meta_learning_rate 0.0002 \
     --l2_regularization 0.0 \
     --is_oho 1 \
     --time_chunk_size 10
