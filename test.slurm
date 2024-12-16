@@ -31,4 +31,5 @@ grep -q "export LD_LIBRARY_PATH=\"/.singularity.d/libs\"" /home/'"${USER}"'/.bas
 source /home/'"${USER}"'/.bashrc && \
 micromamba activate '"${CONDA_ENV}"' && \
 cd /rnn-test && \
+git config --global --add safe.directory /rnn-test && \
 python /rnn-test/src/main.py '"${CONFIG}"''
