@@ -21,7 +21,7 @@ params = {
     "batch_size_vl": [4],
     "batch_size_te": [5000],
     "num_epochs": [1600], 
-    "learning_rates": learning_rates,
+    "learning_rate": learning_rates,
     # "learning_rate": [0.1, 0.01, 0.3],
     "optimizerFn": ["SGD"],
     "lossFn": ["mse"],
