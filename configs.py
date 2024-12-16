@@ -4,7 +4,7 @@ import torch
 torch.manual_seed(0)
 
 # sample uniform between [0.005, 0.06] learning rate
-learning_rates = torch.rand(20) * 0.055 + 0.005
+learning_rates = torch.rand(10) * 0.055 + 0.005
 
 # Parameter grid
 params = {
@@ -36,7 +36,7 @@ params = {
     "log_freq": [1],
     "meta_learning_rate": [1e-4],
     "l2_regularization": [0],
-    "is_oho": [1],
+    "is_oho": [1, 0],
     "randomType": ["Uniform"],
     "time_chunk_size": [10],
     "t1": [3],
