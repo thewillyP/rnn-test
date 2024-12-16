@@ -28,7 +28,7 @@ params = {
     "mode": ["experiment"],
     "checkpoint_freq": [800],
     "seed": list(range(3, 3+1)),
-    "projectName": ["oho-rnn-generalization-gap6"],
+    "projectName": ["oho-rnn-generalization-gap7"],
     "logger": ["wandb"],
     "performance_samples": [9],
     "init_scheme": ['StaticRandomInit'],
@@ -39,8 +39,8 @@ params = {
     "is_oho": [1, 0],
     "randomType": ["Uniform"],
     "time_chunk_size": [10],
-    "t1": [3],
-    "t2": [5],
+    "t1": [5],
+    "t2": [9],
 }
 
 # Generate all combinations
