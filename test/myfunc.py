@@ -93,6 +93,11 @@ def liftA2(f: Callable[[A, B], C], g: Callable[[D], A], h: Callable[[D], B]) -> 
         return f(g(d), h(d))
     return liftA2_
 
+def liftA2Compose(g: Callable[[E, B], C], h: Callable[[E, C], D]) -> Callable[[E, B], D]:
+    def _liftA2Compose(e: E, b: B) -> D: 
+        return h(e, g(e, b))
+    return _liftA2Compose
+
 # def liftA1(f: Callable[[B], C], g: Callable[[A], B]) -> Callable[[A], C]:
 #     return flip(compose2)
 
@@ -124,6 +129,10 @@ def foldr(f: Callable[[A, B], B]) -> Callable[[Iterator[A], B], B]:
         return reduce(flip(f), xs, x)
     return foldr_
 
+def foldl(f: Callable[[B, A], B]) -> Callable[[B, Iterator[A]], B]:
+    def foldl_(x: B, xs: Iterator[A], ) -> B:
+        return reduce(f, xs, x)
+    return foldl_
 
 def fuse(f: Callable[[X, A], B], g: Callable[[Y, B], C]) -> Callable[[tuple[X, Y], A], C]: 
     """ g . f """

@@ -65,29 +65,35 @@ class HasReadoutWeights(Generic[ENV, T, E], metaclass=ABCMeta):
         pass
 
 
-class HasTrainingInput(Generic[DATA, T], metaclass=ABCMeta):
+class HasInput(Generic[DATA, T], metaclass=ABCMeta):
     @abstractmethod
     @staticmethod
-    def getTrainingInput(data: DATA) -> T:
+    def getInput(data: DATA) -> T:
         pass
 
-class HasTrainingLabel(Generic[DATA, T], metaclass=ABCMeta):
+class HasPredictionInput(Generic[DATA, T], metaclass=ABCMeta):
     @abstractmethod
     @staticmethod
-    def getTrainingLabel(data: DATA) -> T:
+    def getPredictionInput(data: DATA) -> T:
         pass
 
-class HasValidationInput(Generic[DATA, T], metaclass=ABCMeta):
+class HasLabel(Generic[DATA, T], metaclass=ABCMeta):
     @abstractmethod
     @staticmethod
-    def getValidationInput(data: DATA) -> T:
+    def getLabel(data: DATA) -> T:
         pass
 
-class HasValidationLabel(Generic[DATA, T], metaclass=ABCMeta):
-    @abstractmethod
-    @staticmethod
-    def getValidationLabel(data: DATA) -> T:
-        pass
+# class HasValidationInput(Generic[DATA, T], metaclass=ABCMeta):
+#     @abstractmethod
+#     @staticmethod
+#     def getValidationInput(data: DATA) -> T:
+#         pass
+
+# class HasValidationLabel(Generic[DATA, T], metaclass=ABCMeta):
+#     @abstractmethod
+#     @staticmethod
+#     def getValidationLabel(data: DATA) -> T:
+#         pass
 
 
 # ============== Instance ==============
@@ -109,7 +115,7 @@ class IsActivation(HasActivation[RnnGod, ACTIVATION]):
         return env.activation
 
     @staticmethod
-    def putActivation(s: ACTIVATION, env: RnnGod) -> RnnGod:
+    def putActivation(env: RnnGod, s: ACTIVATION) -> RnnGod:
         return replace(env, activation=s)
 
 class IsParameter(HasParameter[RnnGod, PARAMETER]):
@@ -118,7 +124,7 @@ class IsParameter(HasParameter[RnnGod, PARAMETER]):
         return env.parameter
 
     @staticmethod
-    def putParameter(s: PARAMETER, env: RnnGod) -> RnnGod:
+    def putParameter(env: RnnGod, s: PARAMETER) -> RnnGod:
         return replace(env, parameter=s)
 
 class IsHyperParameter(HasHyperParameter[RnnGod, HYPERPARAMETER]):
@@ -127,7 +133,7 @@ class IsHyperParameter(HasHyperParameter[RnnGod, HYPERPARAMETER]):
         return env.hyperparameter
 
     @staticmethod
-    def putHyperParameter(s: HYPERPARAMETER, env: RnnGod) -> RnnGod:
+    def putHyperParameter(env: RnnGod, s: HYPERPARAMETER) -> RnnGod:
         return replace(env, hyperparameter=s)
 
 class IsRecurrentWeights(HasRecurrentWeights[RnnGod, PARAMETER, PARAMETER]):
@@ -150,7 +156,7 @@ class IsInfluenceTensor(HasInfluenceTensor[_BaseFutureCap, INFLUENCETENSOR]):
         return env.influenceTensor
 
     @staticmethod
-    def putInfluenceTensor(s: INFLUENCETENSOR, env: _BaseFutureCap) -> _BaseFutureCap:
+    def putInfluenceTensor(env: _BaseFutureCap, s: INFLUENCETENSOR) -> _BaseFutureCap:
         return replace(env, influenceTensor=s)
 
 class RnnInterpreter(IsActivation, IsParameter, IsHyperParameter, IsRecurrentWeights, IsReadoutWeights):

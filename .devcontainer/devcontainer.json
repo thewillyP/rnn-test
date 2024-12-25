@@ -1,0 +1,45 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/debian
+{
+	"name": "RnnTest",
+	"dockerComposeFile": "docker-compose.yml",
+	"service": "app",
+	"workspaceFolder": "/rnn-test",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-python.python",
+				"ms-python.debugpy",
+				"mhutchie.git-graph",
+				"oderwat.indent-rainbow",
+				"ms-toolsai.jupyter",
+				"njqdev.vscode-python-typehint"
+			],
+			"settings": {
+				"editor.formatOnSave": true,
+				"update.showReleaseNotes": false,
+				"git.fetchOnPull": true,
+				"git.autofetch": "all",
+				"git.pruneOnFetch": true,
+				"git.autofetchPeriod": 3600,
+				"githubPullRequests.ignoredPullRequestBranches": [
+					"main"
+				]
+			}
+		}
+	}
+	// "features": {
+	// 	"ghcr.io/devcontainers/features/python:1": {},
+	// 	"ghcr.io/rocker-org/devcontainer-features/miniforge:1": {},
+	// 	"ghcr.io/raucha/devcontainer-features/pytorch:1": {},
+	// 	"ghcr.io/hspaans/devcontainer-features/pytest:1": {}
+	// }
+	// Features to add to the dev container. More info: https://containers.dev/features.
+	// "features": {},
+	// Use 'forwardPorts' to make a list of ports inside the container available locally.
+	// "forwardPorts": [],
+	// Configure tool-specific properties.
+	// "customizations": {},
+	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
+	// "remoteUser": "root"
+}

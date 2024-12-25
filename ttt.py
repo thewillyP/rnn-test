@@ -1,7 +1,16 @@
-from dataclasses import dataclass
-import itertools 
 import torch
+from torch.func import jacrev
 
-test_3d_tesnor = torch.tensor([[[1, 2, 3], [4, 5, 6], [7, 8, 9], [1, 1, 1]], [[10, 11, 12], [13, 14, 15], [16, 17, 18], [1, 1, 1]]])
-test = torch.chunk(test_3d_tesnor, 2, dim=1)
-print(test)
+# Define a linear function f(x) = W @ x
+def my_function(x):
+    W = torch.randn(4, 3)  # Weight matrix of shape (4, 3)
+    return W @ x
+
+# Input vector (shape 3)
+x = torch.randn(3, requires_grad=True)
+
+# Compute the Jacobian matrix
+jacobian = jacrev(my_function)(x)
+
+print("Jacobian shape:", jacobian.shape)  # Shape will be (4, 3)
+print(jacobian)  # The Jacobian matrix
