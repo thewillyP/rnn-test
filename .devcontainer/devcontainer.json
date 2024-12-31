@@ -13,7 +13,8 @@
 				"mhutchie.git-graph",
 				"oderwat.indent-rainbow",
 				"ms-toolsai.jupyter",
-				"njqdev.vscode-python-typehint"
+				"njqdev.vscode-python-typehint",
+				"GitHub.copilot"
 			],
 			"settings": {
 				"editor.formatOnSave": true,

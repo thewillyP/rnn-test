@@ -2,7 +2,7 @@ from abc import ABCMeta, abstractmethod
 from typing import Callable, Generic
 from dataclasses import dataclass, replace
 from mytypes import *
-from myrecords import RnnGod, WithBaseFuture, WithBilevel, WithOhoFuture
+from myrecords import WithBaseFuture, WithBilevel, WithOhoFuture, RnnLearnable, RnnEnv, BilevelLearnable
 from util import rnnSplitParameters
 from typing import Protocol
 
@@ -64,6 +64,38 @@ class HasReadoutWeights(Generic[ENV, T, E], metaclass=ABCMeta):
     def getReadoutWeights(env: ENV, s: T) -> E:
         pass
 
+class HasLoss(Generic[ENV, T], metaclass=ABCMeta):
+    @abstractmethod
+    @staticmethod
+    def getLoss(env: ENV) -> T:
+        pass
+
+    @abstractmethod
+    @staticmethod
+    def putLoss(s: T, env: ENV) -> ENV:
+        pass
+
+class HasGradient(Generic[ENV, T], metaclass=ABCMeta):
+    @abstractmethod
+    @staticmethod
+    def getGradient(env: ENV) -> T:
+        pass
+
+    @abstractmethod
+    @staticmethod
+    def putGradient(s: T, env: ENV) -> ENV:
+        pass
+
+class HasPrediction(Generic[ENV, T], metaclass=ABCMeta):
+    @abstractmethod
+    @staticmethod
+    def getPrediction(env: ENV) -> T:
+        pass
+
+    @abstractmethod
+    @staticmethod
+    def putPrediction(s: T, env: ENV) -> ENV:
+        pass
 
 class HasInput(Generic[DATA, T], metaclass=ABCMeta):
     @abstractmethod
@@ -109,46 +141,73 @@ class HasLabel(Generic[DATA, T], metaclass=ABCMeta):
 
 
 
-class IsActivation(HasActivation[RnnGod, ACTIVATION]):
+class IsActivation(HasActivation[RnnEnv, ACTIVATION]):
     @staticmethod
-    def getActivation(env: RnnGod) -> ACTIVATION:
+    def getActivation(env: RnnEnv) -> ACTIVATION:
         return env.activation
 
     @staticmethod
-    def putActivation(env: RnnGod, s: ACTIVATION) -> RnnGod:
+    def putActivation(env: RnnEnv, s: ACTIVATION) -> RnnEnv:
         return replace(env, activation=s)
 
-class IsParameter(HasParameter[RnnGod, PARAMETER]):
+class IsParameter(HasParameter[RnnEnv, PARAMETER]):
     @staticmethod
-    def getParameter(env: RnnGod) -> PARAMETER:
+    def getParameter(env: RnnEnv) -> PARAMETER:
         return env.parameter
 
     @staticmethod
-    def putParameter(env: RnnGod, s: PARAMETER) -> RnnGod:
+    def putParameter(env: RnnEnv, s: PARAMETER) -> RnnEnv:
         return replace(env, parameter=s)
 
-class IsHyperParameter(HasHyperParameter[RnnGod, HYPERPARAMETER]):
+class IsRecurrentWeights(HasRecurrentWeights[RnnEnv, PARAMETER, PARAMETER]):
     @staticmethod
-    def getHyperParameter(env: RnnGod) -> HYPERPARAMETER:
-        return env.hyperparameter
-
-    @staticmethod
-    def putHyperParameter(env: RnnGod, s: HYPERPARAMETER) -> RnnGod:
-        return replace(env, hyperparameter=s)
-
-class IsRecurrentWeights(HasRecurrentWeights[RnnGod, PARAMETER, PARAMETER]):
-    @staticmethod
-    def getRecurrentWeights(env: RnnGod, s: PARAMETER) -> PARAMETER:
+    def getRecurrentWeights(env: RnnEnv, s: PARAMETER) -> PARAMETER:
         wrec, _ = rnnSplitParameters(env, s)
         return wrec
 
-class IsReadoutWeights(HasReadoutWeights[RnnGod, PARAMETER, PARAMETER]):
+class IsReadoutWeights(HasReadoutWeights[RnnEnv, PARAMETER, PARAMETER]):
     @staticmethod
-    def getReadoutWeights(env: RnnGod, s: PARAMETER) -> PARAMETER:
+    def getReadoutWeights(env: RnnEnv, s: PARAMETER) -> PARAMETER:
         _, wout = rnnSplitParameters(env, s)
         return wout
 
-class _BaseFutureCap(RnnGod, WithBaseFuture, Protocol): pass
+class IsHyperParameter(HasHyperParameter[RnnLearnable, HYPERPARAMETER]):
+    @staticmethod
+    def getHyperParameter(env: RnnLearnable) -> HYPERPARAMETER:
+        return env.hyperparameter
+
+    @staticmethod
+    def putHyperParameter(env: RnnLearnable, s: HYPERPARAMETER) -> RnnLearnable:
+        return replace(env, hyperparameter=s)
+
+class IsLoss(HasLoss[RnnLearnable, LOSS]):
+    @staticmethod
+    def getLoss(env: RnnLearnable) -> LOSS:
+        return env.trainLoss
+
+    @staticmethod
+    def putLoss(env: RnnLearnable, s: LOSS) -> RnnLearnable:
+        return replace(env, loss=s)
+
+class IsGradient(HasGradient[RnnLearnable, GRADIENT]):
+    @staticmethod
+    def getGradient(env: RnnLearnable) -> GRADIENT:
+        return env.trainGradient
+
+    @staticmethod
+    def putGradient(env: RnnLearnable, s: GRADIENT) -> RnnLearnable:
+        return replace(env, gradient=s)
+
+class IsPrediction(HasPrediction[RnnLearnable, PREDICTION]):
+    @staticmethod
+    def getPrediction(env: RnnLearnable) -> PREDICTION:
+        return env.trainPrediction
+
+    @staticmethod
+    def putPrediction(env: RnnLearnable, s: PREDICTION) -> RnnLearnable:
+        return replace(env, prediction=s)
+
+class _BaseFutureCap(RnnLearnable, WithBaseFuture, Protocol): pass
 
 class IsInfluenceTensor(HasInfluenceTensor[_BaseFutureCap, INFLUENCETENSOR]):
     @staticmethod
@@ -159,42 +218,71 @@ class IsInfluenceTensor(HasInfluenceTensor[_BaseFutureCap, INFLUENCETENSOR]):
     def putInfluenceTensor(env: _BaseFutureCap, s: INFLUENCETENSOR) -> _BaseFutureCap:
         return replace(env, influenceTensor=s)
 
-class RnnInterpreter(IsActivation, IsParameter, IsHyperParameter, IsRecurrentWeights, IsReadoutWeights):
+class RnnInterpreter(IsActivation, IsParameter, IsRecurrentWeights, IsReadoutWeights):
     pass
 
-class RnnWithFutureInterpreter(IsActivation, IsParameter, IsHyperParameter, IsRecurrentWeights, IsReadoutWeights, IsInfluenceTensor):
+class RnnLearnableInterpreter(IsActivation, IsParameter, IsHyperParameter, IsRecurrentWeights, IsReadoutWeights, IsLoss, IsGradient, IsPrediction):
     pass
 
-class _BilevelCap(RnnGod, WithBilevel, Protocol): pass
+class RnnWithFutureInterpreter(IsActivation, IsParameter, IsHyperParameter, IsRecurrentWeights, IsReadoutWeights, IsInfluenceTensor, IsLoss, IsGradient, IsPrediction):
+    pass
 
-class IsActivationOHO(HasActivation[_BilevelCap, PARAMETER]):
-    getActivation = staticmethod(RnnInterpreter.getParameter)
-    putActivation = staticmethod(RnnInterpreter.putParameter)
 
-class IsParameterOHO(HasParameter[_BilevelCap, HYPERPARAMETER]):
-    getParameter = staticmethod(RnnInterpreter.getHyperParameter)
-    putParameter = staticmethod(RnnInterpreter.putHyperParameter)
+class IsActivationOHO(HasActivation[BilevelLearnable, PARAMETER]):
+    getActivation = staticmethod(RnnLearnableInterpreter.getParameter)
+    putActivation = staticmethod(RnnLearnableInterpreter.putParameter)
 
-class IsHyperParameterOHO(HasHyperParameter[_BilevelCap, METAHYPERPARAMETER]):
+class IsParameterOHO(HasParameter[BilevelLearnable, HYPERPARAMETER]):
+    getParameter = staticmethod(RnnLearnableInterpreter.getHyperParameter)
+    putParameter = staticmethod(RnnLearnableInterpreter.putHyperParameter)
+
+class IsLossOHO(HasLoss[BilevelLearnable, LOSS]):
     @staticmethod
-    def getHyperParameter(env: _BilevelCap) -> METAHYPERPARAMETER:
+    def getLoss(env: BilevelLearnable) -> LOSS:
+        return env.validationLoss
+    
+    @staticmethod
+    def putLoss(s: LOSS, env: BilevelLearnable) -> BilevelLearnable:
+        return replace(env, validationLoss=s)
+
+class IsGradientOHO(HasGradient[BilevelLearnable, GRADIENT]):
+    @staticmethod
+    def getGradient(env: BilevelLearnable) -> GRADIENT:
+        return env.validationGradient
+    
+    @staticmethod
+    def putGradient(s: GRADIENT, env: BilevelLearnable) -> BilevelLearnable:
+        return replace(env, validationGradient=s)
+
+class IsPredictionOHO(HasPrediction[BilevelLearnable, PREDICTION]):
+    @staticmethod
+    def getPrediction(env: BilevelLearnable) -> PREDICTION:
+        return env.validationPrediction
+    
+    @staticmethod
+    def putPrediction(s: PREDICTION, env: BilevelLearnable) -> BilevelLearnable:
+        return replace(env, validationPrediction=s)
+
+class IsHyperParameterOHO(HasHyperParameter[BilevelLearnable, METAHYPERPARAMETER]):
+    @staticmethod
+    def getHyperParameter(env: BilevelLearnable) -> METAHYPERPARAMETER:
         return env.metaHyperparameter
     
     @staticmethod
-    def putHyperParameter(s: METAHYPERPARAMETER, env: _BilevelCap) -> _BilevelCap:
+    def putHyperParameter(s: METAHYPERPARAMETER, env: BilevelLearnable) -> BilevelLearnable:
         return replace(env, metaHyperparameter=s)
 
-class IsRecurrentWeightsOHO(HasRecurrentWeights[_BilevelCap, HYPERPARAMETER, HYPERPARAMETER]):
+class IsRecurrentWeightsOHO(HasRecurrentWeights[BilevelLearnable, HYPERPARAMETER, HYPERPARAMETER]):
     @staticmethod
-    def getRecurrentWeights(env: _BilevelCap, _: HYPERPARAMETER) -> HYPERPARAMETER:
+    def getRecurrentWeights(env: BilevelLearnable, _: HYPERPARAMETER) -> HYPERPARAMETER:
         return BilevelInterpreter.getParameter(env)
     
-class IsReadoutWeightsOHO(HasReadoutWeights[_BilevelCap, HYPERPARAMETER, HYPERPARAMETER]):
+class IsReadoutWeightsOHO(HasReadoutWeights[BilevelLearnable, HYPERPARAMETER, HYPERPARAMETER]):
     @staticmethod
-    def getReadoutWeights(env: _BilevelCap, _: HYPERPARAMETER) -> HYPERPARAMETER:
+    def getReadoutWeights(env: BilevelLearnable, _: HYPERPARAMETER) -> HYPERPARAMETER:
         return BilevelInterpreter.getParameter(env)
     
-class _OhoFutureCap(RnnGod, WithBilevel, WithOhoFuture, Protocol): pass
+class _OhoFutureCap(BilevelLearnable, WithOhoFuture, Protocol): pass
 
 class IsInfluenceTensorOHO(HasInfluenceTensor[_OhoFutureCap, INFLUENCETENSOR]):
     @staticmethod
@@ -205,10 +293,10 @@ class IsInfluenceTensorOHO(HasInfluenceTensor[_OhoFutureCap, INFLUENCETENSOR]):
     def putInfluenceTensor(s: INFLUENCETENSOR, env: _OhoFutureCap) -> _OhoFutureCap:
         return replace(env, ohoInfluenceTensor=s)
 
-class BilevelInterpreter(IsActivationOHO, IsParameterOHO, IsHyperParameterOHO, IsRecurrentWeightsOHO, IsReadoutWeightsOHO):
+class BilevelInterpreter(IsActivationOHO, IsParameterOHO, IsHyperParameterOHO, IsRecurrentWeightsOHO, IsReadoutWeightsOHO, IsLossOHO, IsGradientOHO, IsPredictionOHO):
     pass
 
-class BilevelWithOhoInterpreter(IsActivationOHO, IsParameterOHO, IsHyperParameterOHO, IsRecurrentWeightsOHO, IsReadoutWeightsOHO, IsInfluenceTensorOHO):
+class BilevelWithOhoInterpreter(IsActivationOHO, IsParameterOHO, IsHyperParameterOHO, IsRecurrentWeightsOHO, IsReadoutWeightsOHO, IsInfluenceTensorOHO, IsLossOHO, IsGradientOHO, IsPredictionOHO):
     pass
 
 # # Need to endow on tuple bc input needs to be vectorized to handle batch

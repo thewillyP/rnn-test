@@ -1,8 +1,8 @@
-from typing import Callable, TypeVar, Iterator, Protocol, Type
+from typing import Callable, TypeVar, Iterable, Protocol, Type
 import torch
 from myrecords import RnnConfig
-from myobjectalgebra import HasActivation, HasParameter, HasReadoutWeights, HasInput, HasPredictionInput, HasLabel, HasRecurrentWeights, HasHyperParameter
-from myfunc import foldr, scan0, fst, snd, liftA2Compose, foldl
+from myobjectalgebra import HasActivation, HasGradient, HasLoss, HasParameter, HasPrediction, HasReadoutWeights, HasInput, HasPredictionInput, HasLabel, HasRecurrentWeights, HasHyperParameter
+from myfunc import collapseF, flip, foldr, scan0, fst, snd, liftA2Compose, foldl
 import itertools
 from mytypes import *
 
@@ -26,15 +26,16 @@ class _ActivationData(HasInput[DATA, X], Protocol[DATA, X]):
 def activation(dialect: _Activation[ENV, ACTIV, PARAM, PARAM_T],
             dataDialect: _ActivationData[DATA, X],
             step: Callable[[X, ACTIV, PARAM_T], ACTIV],
-            env: ENV,
-            info: DATA) -> ACTIV:
+            info: DATA,
+            env: ENV) -> ENV:
     a = dialect.getActivation(env)
     x = dataDialect.getInput(info)
     w_rec = dialect.getRecurrentWeights(env, dialect.getParameter(env))
-    return step(x, a, w_rec)
+    a_ = step(x, a, w_rec)
+    return dialect.putActivation(a_, env)
 
 
-class _Prediction(HasActivation[ENV, ACTIV], HasParameter[ENV, PARAM], HasReadoutWeights[ENV, PARAM, PARAM_T], Protocol[ENV, ACTIV, PARAM, PARAM_T]):
+class _Prediction(HasActivation[ENV, ACTIV], HasParameter[ENV, PARAM], HasReadoutWeights[ENV, PARAM, PARAM_T], HasPrediction[ENV, PRED], Protocol[ENV, ACTIV, PARAM, PARAM_T]):
     pass
 
 class _PredictionData(HasPredictionInput[DATA, X], Protocol[DATA, X]):
@@ -43,96 +44,111 @@ class _PredictionData(HasPredictionInput[DATA, X], Protocol[DATA, X]):
 def prediction(dialect: _Prediction[ENV, ACTIV, PARAM, PARAM_T],
                 dataDialect: _PredictionData[DATA, X],
                 step: Callable[[X, ACTIV, PARAM_T], PRED],
-                env: ENV,
-                info: DATA) -> PRED:
+                info: DATA,
+                env: ENV) -> ENV:
     a = dialect.getActivation(env)
     x = dataDialect.getPredictionInput(info)
     w_out = dialect.getReadoutWeights(env, dialect.getParameter(env))
-    return step(x, a, w_out)
+    pred = step(x, a, w_out)
+    return dialect.putPrediction(pred, env)
 
+class _Loss(HasLoss[ENV, LOSS], HasPrediction[ENV, PRED], Protocol[ENV, PRED]):
+    pass
 
-def loss(dataDialect: HasLabel[DATA, Y],
-        step: Callable[[Y, PRED], LOSS],
-        pred: PRED,
-        info: DATA) -> LOSS:
+def loss(dialect: _Loss[ENV, PRED],
+        dataDialect: HasLabel[DATA, Y],
+        computeLoss: Callable[[Y, PRED], LOSS],
+        lossStep: Callable[[LOSS, LOSS], LOSS],
+        info: DATA,
+        env: ENV) -> ENV:
     y = dataDialect.getLabel(info)
-    return step(y, pred)
+    pred = dialect.getPrediction(env)
+    l = lossStep(dialect.getLoss(env), computeLoss(y, pred))
+    return dialect.putLoss(l, env)
 
+def reparametrizeLoss(dialect: HasLoss[ENV, LOSS],
+                step: Callable[[DATA, ENV], ENV]) -> Callable[[DATA, ENV], LOSS]:
+    def reparametrized(info: DATA, env: ENV) -> LOSS:
+        env_ = step(info, env)
+        return dialect.getLoss(env_)
+    return reparametrized
 
-def getGradient( dialect: HasParameter[ENV, PARAM],
-                lossFn: Callable[[ENV, DATA], LOSS],
-                env: ENV,
-                info: DATA) -> GRADIENT:
+class _Gradient(HasParameter[ENV, PARAM], HasGradient[ENV, GRADIENT], Protocol[ENV, PARAM]):
+    pass
+
+def getGradient( dialect: _Gradient[ENV, PARAM],
+                lossFn: Callable[[DATA, ENV], LOSS],
+                info: DATA,
+                env: ENV) -> ENV:
     def parameretrize(env: ENV, info: DATA, param: PARAM) -> LOSS:
         env_ = dialect.putParameter(param, env)
         return lossFn(env_, info)
     p = dialect.getParameter(env)
     parameretrized = lambda x, param: parameretrize(env, x, param)
-    return torch.func.jacrev(parameretrized, argnums=1)(info, p)
+    gr = torch.func.jacrev(parameretrized, argnums=1)(info, p)
+    return dialect.putGradient(gr, env)
 
-def getAverageGradient(gradientFn: Callable[[ENV, DATA], GRADIENT],
-                env: ENV,
-                infos: Iterator[DATA]) -> GRADIENT:
-    # if get empty list, means env should stay as it is, so "avg gradient" is zero
-    def fold(pair: tuple[GRADIENT, int], info: DATA) -> tuple[GRADIENT, int]:
-        
 
-# -- offlineAverageGradient ::
-# --   ( HasActivation env Activation,
-# --     HasParameter env param,
-# --     HasReccurentWeights env param Parameter,
-# --     HasReadoutWeights env param Parameter,
-# --     HasLossFn env,
-# --     HasTrainOutput info OutputFeature,
-# --     HasTrainInput info InputFeature,
-# --     HasReadoutFn env,
-# --     HasActivationFn env
-# --   ) =>
-# --   env ->
-# --   [[info]] ->
-# --   Gradient
-# -- offlineAverageGradient env xs = avg . foldr ((<>) . offlineGradient env) mempty $ xs
-# --   where
-# --     n = fromIntegral $ length xs
-# --     avg = Gradient . V.map (M.Sum . (/ n) . M.getSum) . _gradient
+# class _Activation(HasActivation[ENV, ACTIV], HasParameter[ENV, PARAM], HasRecurrentWeights[ENV, PARAM, PARAM_T], Protocol[ENV, ACTIV, PARAM, PARAM_T]):
+#     pass
 
-class _Parameter(HasParameter[ENV, PARAM], HasHyperParameter[ENV, HPARAM], Protocol[ENV, PARAM, HPARAM]):
-    pass 
+# class _ActivationData(HasInput[DATA, X], Protocol[DATA, X]):
+#     pass
 
-def updateParameter(dialect: _Parameter[ENV, PARAM, HPARAM],
-                    optimizer: Callable[[GRADIENT, PARAM, HPARAM], PARAM],
-                    gradFn: Callable[[ENV, DATA], GRADIENT],
-                    env: ENV,
-                    x: DATA) -> PARAM: 
-    gr = gradFn(env, x)
-    p = dialect.getParameter(env)
-    hp = dialect.getHyperParameter(env)
-    p_ = optimizer(gr, p, hp)
-    return p_
+# def activation(dialect: _Activation[ENV, ACTIV, PARAM, PARAM_T],
+#             dataDialect: _ActivationData[DATA, X],
+#             step: Callable[[X, ACTIV, PARAM_T], ACTIV],
+#             info: DATA,
+#             env: ENV) -> ENV:
+#     a = dialect.getActivation(env)
+#     x = dataDialect.getInput(info)
+#     w_rec = dialect.getRecurrentWeights(env, dialect.getParameter(env))
+#     a_ = step(x, a, w_rec)
+#     return dialect.putActivation(a_, env)
 
-def mapPredictions(dialect: _Prediction[ENV, ACTIV, PARAM, PARAM_T],
-                dataDialect: _PredictionData[DATA, X],
-                step: Callable[[X, ACTIV, PARAM_T], PRED],
-                pairs: Iterator[tuple[ENV, DATA]]) -> Iterator[PRED]:
-    def predictor(pair: tuple[ENV, DATA]) -> PRED:
-        env, info = pair 
-        return prediction(dialect, dataDialect, step, env, info)
-    return map(predictor, pairs)
 
-def foldLoss(dataDialect: HasLabel[DATA, Y],
-        step: Callable[[Y, PRED], LOSS],
-        pairs: Iterator[tuple[PRED, DATA]]) -> LOSS:
-    def lossful(pair: tuple[PRED, DATA], acc: LOSS) -> LOSS:
-        pred, info = pair 
-        return acc + loss(dataDialect, step, pred, info)
-    return foldr(lossful)(pairs, 0)
+# class _Prediction(HasActivation[ENV, ACTIV], HasParameter[ENV, PARAM], HasReadoutWeights[ENV, PARAM, PARAM_T], HasPrediction[ENV, PRED], Protocol[ENV, ACTIV, PARAM, PARAM_T]):
+#     pass
 
+# class _PredictionData(HasPredictionInput[DATA, X], Protocol[DATA, X]):
+#     pass
+
+# def prediction(dialect: _Prediction[ENV, ACTIV, PARAM, PARAM_T],
+#                 dataDialect: _PredictionData[DATA, X],
+#                 step: Callable[[X, ACTIV, PARAM_T], PRED],
+#                 info: DATA,
+#                 env: ENV) -> ENV:
+#     a = dialect.getActivation(env)
+#     x = dataDialect.getPredictionInput(info)
+#     w_out = dialect.getReadoutWeights(env, dialect.getParameter(env))
+#     pred = step(x, a, w_out)
+#     return dialect.putPrediction(pred, env)
 
 class _OfflinePrediction(HasActivation[ENV, ACTIV], HasParameter[ENV, PARAM], HasRecurrentWeights[ENV, PARAM, PARAM_R], HasReadoutWeights[ENV, PARAM, PARAM_O], Protocol[ENV, ACTIV, PARAM, PARAM_R, PARAM_O]):
     pass
 
 class _OfflinePredictionData(HasInput[DATA, X], HasPredictionInput[DATA, Y], Protocol[DATA, X, Y]):
     pass
+
+def doPredictions(dialect: _OfflinePrediction[ENV, ACTIV, PARAM, PARAM_R, PARAM_O],
+                dataDialect: _OfflinePredictionData[DATA, X, Y],
+                activationStep: Callable[[X, ACTIV, PARAM_R], ACTIV],
+                predictionStep: Callable[[Y, ACTIV, PARAM_O], PRED],
+                info: DATA,
+                env: ENV) -> ENV:
+    activ: Callable[[DATA, ENV], ENV] = lambda x, env: activation(dialect, dataDialect, activationStep, x, env)
+    pred: Callable[[DATA, ENV], ENV] = lambda x, env: prediction(dialect, dataDialect, predictionStep, x, env)
+    return collapseF([activ, pred])(info, env)
+
+
+def getPredictions(dialect: HasPrediction[ENV, PRED],
+                step: Callable[[DATA, ENV], ENV],
+                infos: Iterable[DATA],
+                env0: ENV) -> Iterable[PRED]:
+    scans = scan0(flip(step), env0, infos)
+    return map(dialect.getPrediction, scans)
+
+
 
 # double duty as test guy as well
 def offlinePredictions(dialect: _OfflinePrediction[ENV, ACTIV, PARAM, PARAM_R, PARAM_O],
@@ -178,6 +194,38 @@ def offlineGradient(dialect: _OfflinePrediction[ENV, ACTIV, PARAM, PARAM_R, PARA
     return getGradient(dialect, lossFn, env, infos)
 
 
+
+
+
+
+# def getAverageGradient(gradientFn: Callable[[ENV, DATA], tuple[ENV, GRADIENT]],
+#                 env0: ENV,
+#                 infos: Iterator[DATA]) -> GRADIENT:
+#     # if get empty list, means env should stay as it is, so "avg gradient" is zero
+#     def fold(pair: tuple[ENV, GRADIENT, int], info: DATA) -> tuple[ENV, GRADIENT, int]:
+#         env, running_gr, running_length = pair
+#         env_, gr_ = gradientFn(env, info)
+#         return env_, running_gr + gr_, running_length + 1
+    
+
+# -- offlineAverageGradient ::
+# --   ( HasActivation env Activation,
+# --     HasParameter env param,
+# --     HasReccurentWeights env param Parameter,
+# --     HasReadoutWeights env param Parameter,
+# --     HasLossFn env,
+# --     HasTrainOutput info OutputFeature,
+# --     HasTrainInput info InputFeature,
+# --     HasReadoutFn env,
+# --     HasActivationFn env
+# --   ) =>
+# --   env ->
+# --   [[info]] ->
+# --   Gradient
+# -- offlineAverageGradient env xs = avg . foldr ((<>) . offlineGradient env) mempty $ xs
+# --   where
+# --     n = fromIntegral $ length xs
+# --     avg = Gradient . V.map (M.Sum . (/ n) . M.getSum) . _gradient
 
 
 

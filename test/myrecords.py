@@ -18,12 +18,42 @@ class RnnConfig:
     alpha: float
     activationFn: Callable[[torch.Tensor], torch.Tensor]
 
+@dataclass(frozen=True)
+class WithTrainPrediction:
+    trainPrediction: PREDICTION
 
 @dataclass(frozen=True)
-class RnnGod(RnnConfig):
+class WithTrainLoss:
+    trainLoss: LOSS
+
+@dataclass(frozen=True)
+class WithTrainGradient:
+    trainGradient: GRADIENT
+
+@dataclass(frozen=True)
+class WithValidationPrediction:
+    validationPrediction: PREDICTION
+
+@dataclass(frozen=True)
+class WithValidationLoss:
+    validationLoss: LOSS
+
+@dataclass(frozen=True)
+class WithValidationGradient:
+    validationGradient: GRADIENT
+
+@dataclass(frozen=True)
+class WithHyperparameter:
+    hyperparameter: HYPERPARAMETER
+
+@dataclass(frozen=True)
+class RnnEnv(RnnConfig):
     activation: ACTIVATION
     parameter: PARAMETER
-    hyperparameter: HYPERPARAMETER
+
+@dataclass(frozen=True)
+class RnnLearnable(RnnEnv, WithTrainPrediction, WithTrainLoss, WithTrainGradient, WithHyperparameter):
+    pass
 
 @dataclass(frozen=True)
 class WithBaseFuture:
@@ -38,27 +68,31 @@ class WithBilevel:
     metaHyperparameter: METAHYPERPARAMETER
 
 @dataclass(frozen=True)
-class RnnBPTTState(RnnGod):
+class RnnBPTTState(RnnLearnable):
     pass
 
 @dataclass(frozen=True)
-class RnnFutureState(RnnGod, WithBaseFuture):
+class RnnFutureState(RnnLearnable, WithBaseFuture):
     pass
 
 @dataclass(frozen=True)
-class BilevelBPTTState(RnnGod, WithBilevel):
+class BilevelLearnable(RnnLearnable, WithBilevel, WithValidationPrediction, WithValidationLoss, WithValidationGradient):
     pass
 
 @dataclass(frozen=True)
-class OhoBPTTState(RnnGod, WithBilevel, WithOhoFuture):
+class BilevelBPTTState(BilevelLearnable):
     pass
 
 @dataclass(frozen=True)
-class BilevelFutureState(RnnGod, WithBaseFuture, WithBilevel):
+class OhoBPTTState(BilevelLearnable, WithOhoFuture):
     pass
 
 @dataclass(frozen=True)
-class OhoFutureState(RnnGod, WithBilevel, WithOhoFuture, WithBaseFuture):
+class BilevelFutureState(BilevelLearnable, WithBaseFuture):
+    pass
+
+@dataclass(frozen=True)
+class OhoFutureState(BilevelLearnable, WithOhoFuture, WithBaseFuture):
     pass
 
 
