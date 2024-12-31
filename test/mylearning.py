@@ -1,11 +1,12 @@
-from typing import Callable, TypeVar, Iterable, Protocol, Type
+from dataclasses import dataclass
+from typing import Callable, Generic, TypeVar, Iterable, Protocol, Type
 import torch
 from myrecords import RnnConfig
 from myobjectalgebra import HasActivation, HasGradient, HasLoss, HasParameter, HasPrediction, HasReadoutWeights, HasInput, HasPredictionInput, HasLabel, HasRecurrentWeights, HasHyperParameter
 from myfunc import collapseF, flip, foldr, scan0, fst, snd, liftA2Compose, foldl
 import itertools
 from mytypes import *
-
+from operator import add
 
 
 ACTIV = TypeVar('ACTIV')
@@ -89,98 +90,118 @@ def getGradient( dialect: _Gradient[ENV, PARAM],
     return dialect.putGradient(gr, env)
 
 
-# class _Activation(HasActivation[ENV, ACTIV], HasParameter[ENV, PARAM], HasRecurrentWeights[ENV, PARAM, PARAM_T], Protocol[ENV, ACTIV, PARAM, PARAM_T]):
+@dataclass(frozen=True)
+class OfflineRnnLibrary(Generic[ENV, DATA, ACTIV, PRED]):
+    doActivation: Callable[[DATA, ENV], ENV]
+    doPrediction: Callable[[DATA, ENV], ENV]
+    doLoss: Callable[[DATA, ENV], ENV]
+    doGradients: Callable[[Iterable[DATA], ENV], ENV]
+
+    readActivations: Callable[[Iterable[DATA], ENV], Iterable[ACTIV]]
+    readPredictions: Callable[[Iterable[DATA], ENV], Iterable[PRED]]
+    readLoss: Callable[[Iterable[DATA], ENV], LOSS]
+
+class _RnnDialect(HasActivation[ENV, ACTIV]
+                , HasParameter[ENV, PARAM]
+                , HasRecurrentWeights[ENV, PARAM, PARAM_R]
+                , HasReadoutWeights[ENV, PARAM, PARAM_O]
+                , HasPrediction[ENV, PRED]
+                , HasLoss[ENV, LOSS]
+                , HasGradient[ENV, GRADIENT]
+                , Protocol[ENV, ACTIV, PARAM, PARAM_R, PARAM_O]):
+    pass
+
+class _RnnDataDialect(HasInput[DATA, X], HasPredictionInput[DATA, Y], HasLabel[DATA, Z], Protocol[DATA, X, Y, Z]):
+    pass
+
+# because I'm doing this in a functional style, I cannot use a single function for both offline and online. If I switch to stateful loss, I can. 
+def createRnnLibrary( dialect: _RnnDialect[ENV, ACTIV, PARAM, PARAM_R, PARAM_O]
+                    , dataDialect: _RnnDataDialect[DATA, X, Y, Z]
+                    , activationStep: Callable[[X, ACTIV, PARAM_R], ACTIV]
+                    , predictionStep: Callable[[Y, ACTIV, PARAM_O], PRED]
+                    , computeLoss: Callable[[Z, PRED], LOSS]) -> OfflineRnnLibrary[ENV, DATA]:
+    actv_: Callable[[DATA, ENV], ENV] = lambda x, env: activation(dialect, dataDialect, activationStep, x, env)
+    pred_: Callable[[DATA, ENV], ENV] = lambda x, env: prediction(dialect, dataDialect, predictionStep, x, env)
+    loss_: Callable[[DATA, ENV], ENV] = lambda x, env: loss(dialect, dataDialect, computeLoss, add, x, env)
+
+    predFn = collapseF([actv_, pred_])
+    lossFn = collapseF([predFn, loss_])
+
+    totalLossFn = reparametrizeLoss(dialect, foldr(lossFn))
+    grad_: Callable[[Iterable[DATA], ENV], ENV] = lambda xs, env: getGradient(dialect, totalLossFn, xs, env)
+
+    gradFn = collapseF([lossFn, grad_])
+
+    return OfflineRnnLibrary(
+        doActivation=actv_,
+        doPrediction=predFn,
+        doLoss=lossFn,
+        doGradients=gradFn,
+        readActivations=lambda xs, env: map(dialect.getActivation, scan0(actv_, xs, env)),
+        readPredictions=lambda xs, env: map(dialect.getPrediction, scan0(predFn, xs, env)),
+        readLoss=totalLossFn
+    )
+
+
+
+# class _OfflinePrediction(HasActivation[ENV, ACTIV]
+#                         , HasParameter[ENV, PARAM]
+#                         , HasRecurrentWeights[ENV, PARAM, PARAM_R]
+#                         , HasReadoutWeights[ENV, PARAM, PARAM_O]
+#                         , HasPrediction[ENV, PRED]
+#                         , Protocol[ENV, ACTIV, PARAM, PARAM_R, PARAM_O]):
 #     pass
 
-# class _ActivationData(HasInput[DATA, X], Protocol[DATA, X]):
+# class _OfflinePredictionData(HasInput[DATA, X], HasPredictionInput[DATA, Y], Protocol[DATA, X, Y]):
 #     pass
 
-# def activation(dialect: _Activation[ENV, ACTIV, PARAM, PARAM_T],
-#             dataDialect: _ActivationData[DATA, X],
-#             step: Callable[[X, ACTIV, PARAM_T], ACTIV],
-#             info: DATA,
-#             env: ENV) -> ENV:
-#     a = dialect.getActivation(env)
-#     x = dataDialect.getInput(info)
-#     w_rec = dialect.getRecurrentWeights(env, dialect.getParameter(env))
-#     a_ = step(x, a, w_rec)
-#     return dialect.putActivation(a_, env)
-
-
-# class _Prediction(HasActivation[ENV, ACTIV], HasParameter[ENV, PARAM], HasReadoutWeights[ENV, PARAM, PARAM_T], HasPrediction[ENV, PRED], Protocol[ENV, ACTIV, PARAM, PARAM_T]):
-#     pass
-
-# class _PredictionData(HasPredictionInput[DATA, X], Protocol[DATA, X]):
-#     pass
-
-# def prediction(dialect: _Prediction[ENV, ACTIV, PARAM, PARAM_T],
-#                 dataDialect: _PredictionData[DATA, X],
-#                 step: Callable[[X, ACTIV, PARAM_T], PRED],
+# def doPredictions(dialect: _OfflinePrediction[ENV, ACTIV, PARAM, PARAM_R, PARAM_O],
+#                 dataDialect: _OfflinePredictionData[DATA, X, Y],
+#                 activationStep: Callable[[X, ACTIV, PARAM_R], ACTIV],
+#                 predictionStep: Callable[[Y, ACTIV, PARAM_O], PRED],
 #                 info: DATA,
 #                 env: ENV) -> ENV:
-#     a = dialect.getActivation(env)
-#     x = dataDialect.getPredictionInput(info)
-#     w_out = dialect.getReadoutWeights(env, dialect.getParameter(env))
-#     pred = step(x, a, w_out)
-#     return dialect.putPrediction(pred, env)
+#     activ: Callable[[DATA, ENV], ENV] = lambda x, env: activation(dialect, dataDialect, activationStep, x, env)
+#     pred: Callable[[DATA, ENV], ENV] = lambda x, env: prediction(dialect, dataDialect, predictionStep, x, env)
+#     return collapseF([activ, pred])(info, env)
 
-class _OfflinePrediction(HasActivation[ENV, ACTIV], HasParameter[ENV, PARAM], HasRecurrentWeights[ENV, PARAM, PARAM_R], HasReadoutWeights[ENV, PARAM, PARAM_O], Protocol[ENV, ACTIV, PARAM, PARAM_R, PARAM_O]):
+
+
+
+# def offlinePredictions(dialect: _OfflinePrediction[ENV, ACTIV, PARAM, PARAM_R, PARAM_O],
+#                     dataDialect: _OfflinePredictionData[DATA, X, Y],
+#                     activationStep: Callable[[X, ACTIV, PARAM_R], ACTIV],
+#                     predictionStep: Callable[[Y, ACTIV, PARAM_O], PRED],
+#                     infos: Iterable[DATA],
+#                     env0: ENV) -> Iterable[PRED]:
+#     predFn: Callable[[DATA, ENV], ENV] = lambda x, env: doPredictions(dialect, dataDialect, activationStep, predictionStep, x, env)
+#     return getPredictions(dialect, predFn, infos, env0)
+
+class _OfflineLoss(HasActivation[ENV, ACTIV]
+                        , HasParameter[ENV, PARAM]
+                        , HasRecurrentWeights[ENV, PARAM, PARAM_R]
+                        , HasReadoutWeights[ENV, PARAM, PARAM_O]
+                        , HasPrediction[ENV, PRED]
+                        , HasLoss[ENV, LOSS]
+                        , Protocol[ENV, ACTIV, PARAM, PARAM_R, PARAM_O]):
     pass
-
-class _OfflinePredictionData(HasInput[DATA, X], HasPredictionInput[DATA, Y], Protocol[DATA, X, Y]):
-    pass
-
-def doPredictions(dialect: _OfflinePrediction[ENV, ACTIV, PARAM, PARAM_R, PARAM_O],
-                dataDialect: _OfflinePredictionData[DATA, X, Y],
-                activationStep: Callable[[X, ACTIV, PARAM_R], ACTIV],
-                predictionStep: Callable[[Y, ACTIV, PARAM_O], PRED],
-                info: DATA,
-                env: ENV) -> ENV:
-    activ: Callable[[DATA, ENV], ENV] = lambda x, env: activation(dialect, dataDialect, activationStep, x, env)
-    pred: Callable[[DATA, ENV], ENV] = lambda x, env: prediction(dialect, dataDialect, predictionStep, x, env)
-    return collapseF([activ, pred])(info, env)
-
-
-def getPredictions(dialect: HasPrediction[ENV, PRED],
-                step: Callable[[DATA, ENV], ENV],
-                infos: Iterable[DATA],
-                env0: ENV) -> Iterable[PRED]:
-    scans = scan0(flip(step), env0, infos)
-    return map(dialect.getPrediction, scans)
-
-
-
-# double duty as test guy as well
-def offlinePredictions(dialect: _OfflinePrediction[ENV, ACTIV, PARAM, PARAM_R, PARAM_O],
-                    dataDialect: _OfflinePredictionData[DATA, X, Y],
-                    activationStep: Callable[[X, ACTIV, PARAM_R], ACTIV],
-                    predictionStep: Callable[[Y, ACTIV, PARAM_O], PRED],
-                    env: ENV, 
-                    infos: Iterator[DATA]) -> Iterator[PRED]:
-    def activ(e: ENV, x: DATA) -> ACTIV:
-        return activation(dialect, dataDialect, activationStep, e, x)
-    fold = liftA2Compose(activ, dialect.putActivation)
-    xs1, xs2 = itertools.tee(infos, 2)  # efficiency reason
-    activs = scan0(fold, env, xs1)
-    pairs = zip(activs, xs2)
-    preds = mapPredictions(dialect, dataDialect, predictionStep, pairs)
-    return preds
 
 class _OfflineLossData(HasInput[DATA, X], HasPredictionInput[DATA, Y], HasLabel[DATA, Z], Protocol[DATA, X, Y, Z]):
     pass
 
-def offlineLossFn(dialect: _OfflinePrediction[ENV, ACTIV, PARAM, PARAM_R, PARAM_O],
+def offlineLearnFn(dialect: _OfflineLoss[ENV, ACTIV, PARAM, PARAM_R, PARAM_O],
                     dataDialect: _OfflineLossData[DATA, X, Y, Z],
                     activationStep: Callable[[X, ACTIV, PARAM_R], ACTIV],
                     predictionStep: Callable[[Y, ACTIV, PARAM_O], PRED],
-                    lossStep: Callable[[Z, PRED], LOSS],
-                    env: ENV, 
-                    infos: Iterator[DATA]) -> LOSS:
-    xs1, xs2 = itertools.tee(infos, 2)
-    preds = offlinePredictions(dialect, dataDialect, activationStep, predictionStep, env, xs1)
-    pairs = zip(preds, xs2)
-    l = foldLoss(dataDialect, lossStep, pairs)
-    return l
+                    computeLoss: Callable[[Z, PRED], LOSS],
+                    lossStep: Callable[[LOSS, LOSS], LOSS],
+                    infos: Iterable[DATA],
+                    env: ENV) -> ENV:
+    predFn: Callable[[DATA, ENV], ENV] = lambda x, env: doPredictions(dialect, dataDialect, activationStep, predictionStep, x, env)
+    lossStepFn: Callable[[DATA, ENV], ENV] = lambda x, env: loss(dialect, dataDialect, computeLoss, lossStep, x, env)
+    lossFn = reparametrizeLoss(dialect, lossStepFn)
+    gradFn = lambda x, env: getGradient(dialect, lossFn, x, env)
+    return collapseF([predFn, lossFn, gradFn])(infos, env)
 
 def offlineGradient(dialect: _OfflinePrediction[ENV, ACTIV, PARAM, PARAM_R, PARAM_O],
                     dataDialect: _OfflineLossData[DATA, X, Y, Z],

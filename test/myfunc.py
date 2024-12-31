@@ -22,15 +22,15 @@ def liftAN(f: Callable[[B, B], B], fs: Iterable[Callable[[A], B]]) -> Callable[[
     return lambda a: reduce(f, map(lambda f: f(a), fs))
 
 @curry
-def scan(f: Callable[[T, X], T], state: T, it: Iterable[X]) -> Generator[T, None, None]:
+def scan(f: Callable[[X, T], T], it: Iterable[X], state: T) -> Generator[T, None, None]:
     yield state
     for x in it:
-        state = f(state, x)
+        state = f(x, state)
         yield state
 
-def scan0(f: Callable[[T, X], T], state: T, it: Iterable[X]) -> Generator[T, None, None]:
+def scan0(f: Callable[[X, T], T], it: Iterable[X], state: T) -> Generator[T, None, None]:
     for x in it:
-        state = f(state, x)
+        state = f(x, state)
         yield state
 
 
