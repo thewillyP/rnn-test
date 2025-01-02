@@ -14,7 +14,8 @@
 				"oderwat.indent-rainbow",
 				"ms-toolsai.jupyter",
 				"njqdev.vscode-python-typehint",
-				"GitHub.copilot"
+				"GitHub.copilot",
+				"ms-python.black-formatter"
 			],
 			"settings": {
 				"editor.formatOnSave": true,
