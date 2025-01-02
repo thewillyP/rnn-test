@@ -1,7 +1,7 @@
-from typing import Callable, Generic
+from typing import Generic
 from dataclasses import dataclass, replace
 from mytypes import *
-from myrecords import RnnBPTTState, RnnConfig, RnnFutureState, WithBaseFuture, WithBilevel, WithHyperparameter, WithOhoFuture, RnnLearnable, RnnEnv, BilevelLearnable, WithRnn, WithTrainGradient, WithTrainLoss, WithTrainPrediction, WithValidationGradient, WithValidationLoss, WithValidationPrediction
+from myrecords import RnnConfig, WithBaseFuture, WithBilevel, WithHyperparameter, WithOhoFuture, WithRnn, WithTrainGradient, WithTrainLoss, WithTrainPrediction, WithValidationGradient, WithValidationLoss, WithValidationPrediction
 from util import rnnSplitParameters
 from typing import Protocol
 
