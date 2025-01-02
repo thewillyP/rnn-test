@@ -1,13 +1,13 @@
-from typing import TypeVar, Callable, Generator, Iterable
+from typing import TypeVar, Callable, Generator, Iterator
 from functools import reduce
 from toolz.curried import curry, map, concat, compose
 import itertools
 from mytypes import *
 
-def sequenceF2(fs: Iterable[Callable[[A, B], C]]) -> Callable[[A], Iterable[Callable[[B], C]]]:
+def sequenceF2(fs: Iterator[Callable[[A, B], C]]) -> Callable[[A], Iterator[Callable[[B], C]]]:
     return lambda a: map(lambda f: curry(f)(a), fs)
 
-def collapseF(fs: Iterable[Callable[[A, B], B]]) -> Callable[[A, B], B]:
+def collapseF(fs: Iterator[Callable[[A, B], B]]) -> Callable[[A, B], B]:
     # return lambda a, b: foldr(compose2)(map(lambda f: curry(f)(a), fs), id)(b)
     def collapseF_(a: A, b: B) -> B:
         for f in fs:
@@ -15,20 +15,20 @@ def collapseF(fs: Iterable[Callable[[A, B], B]]) -> Callable[[A, B], B]:
         return b
     return collapseF_
 
-def sequenceA(fs: Iterable[Callable[[A], B]]) -> Callable[[A], Iterable[B]]:
+def sequenceA(fs: Iterator[Callable[[A], B]]) -> Callable[[A], Iterator[B]]:
     return lambda a: map(lambda f: f(a), fs)
 
-def liftAN(f: Callable[[B, B], B], fs: Iterable[Callable[[A], B]]) -> Callable[[A], B]:
+def liftAN(f: Callable[[B, B], B], fs: Iterator[Callable[[A], B]]) -> Callable[[A], B]:
     return lambda a: reduce(f, map(lambda f: f(a), fs))
 
 @curry
-def scan(f: Callable[[X, T], T], it: Iterable[X], state: T) -> Generator[T, None, None]:
+def scan(f: Callable[[X, T], T], it: Iterator[X], state: T) -> Generator[T, None, None]:
     yield state
     for x in it:
         state = f(x, state)
         yield state
 
-def scan0(f: Callable[[X, T], T], it: Iterable[X], state: T) -> Generator[T, None, None]:
+def scan0(f: Callable[[X, T], T], it: Iterator[X], state: T) -> Generator[T, None, None]:
     for x in it:
         state = f(x, state)
         yield state
@@ -51,6 +51,7 @@ def swap(f: Callable[[X, Y], T]) -> Callable[[Y, X], T]:
 def map2(f1: Callable, f2: Callable):
     return map(uncurry(lambda x, y: (f1(x), f2(y))))
 
+
 def fst(pair: tuple[X, Y]) -> X:
     x, _ = pair 
     return x
@@ -70,7 +71,7 @@ reduce_ = curry(lambda fn, x, xs: reduce(fn, xs, x))
 
 # reverse of sequenceA? which doesn't exist so custom logic
 @curry
-def traverseTuple(pair: tuple[Iterable[X], Y]) -> Iterable[tuple[X, Y]]:
+def traverseTuple(pair: tuple[Iterator[X], Y]) -> Iterator[tuple[X, Y]]:
     xs, y = pair 
     return ((x, y) for x in xs)
 
@@ -126,13 +127,13 @@ def fmap(g: Callable[[B], C], f: Callable[[A], B]) -> Callable[[A], C]:
     return fmap_
 
 
-def foldr(f: Callable[[A, B], B]) -> Callable[[Iterable[A], B], B]:
-    def foldr_(xs: Iterable[A], x: B) -> B:
+def foldr(f: Callable[[A, B], B]) -> Callable[[Iterator[A], B], B]:
+    def foldr_(xs: Iterator[A], x: B) -> B:
         return reduce(flip(f), xs, x)
     return foldr_
 
-def foldl(f: Callable[[B, A], B]) -> Callable[[B, Iterable[A]], B]:
-    def foldl_(x: B, xs: Iterable[A], ) -> B:
+def foldl(f: Callable[[B, A], B]) -> Callable[[B, Iterator[A]], B]:
+    def foldl_(x: B, xs: Iterator[A], ) -> B:
         return reduce(f, xs, x)
     return foldl_
 
