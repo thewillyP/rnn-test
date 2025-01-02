@@ -1,12 +1,16 @@
+from typing import TypeVar
 import torch
-from myrecords import RnnGod
+from myrecords import RnnConfig
+from mytypes import PARAMETER
 
-def rnnSplitParameters(rnnGod: RnnGod, parameters: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+_RNNGOD = TypeVar('_RNNGOD', bound=RnnConfig)
+
+def rnnSplitParameters(rnnGod: _RNNGOD, parameters: PARAMETER) -> tuple[PARAMETER, PARAMETER]:
     n_h = rnnGod.n_h
     n_in = rnnGod.n_in
     n_out = rnnGod.n_out
     w_rec, w_out = torch.split(parameters, [n_h*(n_h+n_in+1), n_out*(n_h+1)])
-    return w_rec, w_out
+    return PARAMETER(w_rec), PARAMETER(w_out)
 
 def jacobian(outs, inps) -> torch.Tensor:
     outs = torch.atleast_1d(outs)

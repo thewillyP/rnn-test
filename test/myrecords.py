@@ -1,7 +1,7 @@
 
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Protocol
 import torch
 from mytypes import *
 
@@ -11,7 +11,7 @@ from mytypes import *
 # Ideally you could even avoid that with a whole EC system but I'm too lazy to write that.
 
 @dataclass(frozen=True)
-class RnnConfig:
+class RnnConfig(Protocol):
     n_h: int
     n_in: int
     n_out: int
@@ -19,53 +19,57 @@ class RnnConfig:
     activationFn: Callable[[torch.Tensor], torch.Tensor]
 
 @dataclass(frozen=True)
-class WithTrainPrediction:
+class WithTrainPrediction(Protocol):
     trainPrediction: PREDICTION
 
 @dataclass(frozen=True)
-class WithTrainLoss:
+class WithTrainLoss(Protocol):
     trainLoss: LOSS
 
 @dataclass(frozen=True)
-class WithTrainGradient:
+class WithTrainGradient(Protocol):
     trainGradient: GRADIENT
 
 @dataclass(frozen=True)
-class WithValidationPrediction:
+class WithValidationPrediction(Protocol):
     validationPrediction: PREDICTION
 
 @dataclass(frozen=True)
-class WithValidationLoss:
+class WithValidationLoss(Protocol):
     validationLoss: LOSS
 
 @dataclass(frozen=True)
-class WithValidationGradient:
+class WithValidationGradient(Protocol):
     validationGradient: GRADIENT
 
 @dataclass(frozen=True)
-class WithHyperparameter:
+class WithHyperparameter(Protocol):
     hyperparameter: HYPERPARAMETER
 
 @dataclass(frozen=True)
-class RnnEnv(RnnConfig):
+class WithBaseFuture(Protocol):
+    influenceTensor: INFLUENCETENSOR
+
+@dataclass(frozen=True)
+class WithOhoFuture(Protocol):
+    ohoInfluenceTensor: INFLUENCETENSOR
+
+@dataclass(frozen=True)
+class WithBilevel(Protocol):
+    metaHyperparameter: METAHYPERPARAMETER
+
+@dataclass(frozen=True)
+class WithRnn(Protocol):
     activation: ACTIVATION
     parameter: PARAMETER
 
 @dataclass(frozen=True)
-class RnnLearnable(RnnEnv, WithTrainPrediction, WithTrainLoss, WithTrainGradient, WithHyperparameter):
+class RnnEnv(RnnConfig, WithRnn):
     pass
 
 @dataclass(frozen=True)
-class WithBaseFuture:
-    influenceTensor: INFLUENCETENSOR
-
-@dataclass(frozen=True)
-class WithOhoFuture:
-    ohoInfluenceTensor: INFLUENCETENSOR
-
-@dataclass(frozen=True)
-class WithBilevel:
-    metaHyperparameter: METAHYPERPARAMETER
+class RnnLearnable(RnnEnv, WithTrainPrediction, WithTrainLoss, WithTrainGradient, WithHyperparameter):
+    pass
 
 @dataclass(frozen=True)
 class RnnBPTTState(RnnLearnable):
