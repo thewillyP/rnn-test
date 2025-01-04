@@ -4,6 +4,7 @@ import torch
 from myobjectalgebra import (
     GetActivation,
     GetGradient,
+    GetInfluenceTensor,
     GetLoss,
     GetParameter,
     GetPrediction,
@@ -14,6 +15,7 @@ from myobjectalgebra import (
     HasRecurrentWeights,
     PutActivation,
     PutGradient,
+    PutInfluenceTensor,
     PutLoss,
     PutParameter,
     PutPrediction,
@@ -22,6 +24,8 @@ from myfunc import collapseF, flip, foldr, scan0, fst, snd, liftA2Compose, foldl
 import itertools
 from mytypes import *
 from operator import add
+from collections.abc import Collection
+
 
 from myrecords import RnnBPTTState
 
@@ -47,6 +51,10 @@ PRED_CO = TypeVar("PRED_CO", covariant=True)
 PRED_CON = TypeVar("PRED_CON", contravariant=True)
 
 
+def jacobian_matrix_product(f, primal, matrix):
+    return torch.vmap(torch.func.jvp, in_dims=(None, None, 0))(f, primal, matrix)[1]
+
+
 # literally State get
 def reparameterizeOutput(
     step: Callable[[DATA, ENV], ENV], read: Callable[[ENV], X]
@@ -69,6 +77,20 @@ def reparametrizeInput(
         return step(info, env_)
 
     return reparametrized
+
+
+def fmapState(
+    reader: Callable[[ENV], X],
+    writer: Callable[[X, ENV], ENV],
+    f: Callable[[X], X],
+) -> Callable[[DATA, ENV], ENV]:
+    def fmapped(_: DATA, env: ENV) -> ENV:
+        x = reader(env)
+        x_ = f(x)
+        env_ = writer(x_, env)
+        return env_
+
+    return fmapped
 
 
 class _Activation(
@@ -151,30 +173,37 @@ def loss(
     return dialect.putLoss(loss_, env)
 
 
-class _Gradient(
-    GetParameter[ENV, PARAM],
-    PutParameter[ENV, PARAM],
-    GetGradient[ENV, GRADIENT],
-    PutGradient[ENV, GRADIENT],
-    Protocol[ENV, PARAM],
-):
-    pass
-
-
-def getGradient(
-    dialect: _Gradient[ENV, PARAM],
-    lossFn: Callable[[DATA, ENV], LOSS],
-    foldGradient: ENDOMORPHIC[GRADIENT],
+def computeGradient(
+    lossFn: Callable[[DATA, ENV], tuple[LOSS, ENV]],
+    read_wrt: Callable[[ENV], X],
+    write_wrt: Callable[[X, ENV], ENV],
     info: DATA,
-    env: ENV,
-) -> ENV:
-    parameretrize = reparametrizeInput(lossFn, dialect.putParameter)
-    p = dialect.getParameter(env)
-    parameretrized: Callable[[DATA, PARAM], LOSS] = lambda x, param: parameretrize(
-        x, env, param
+    env0: ENV,
+) -> tuple[GRADIENT, ENV]:
+    parameretrize = reparametrizeInput(lossFn, write_wrt)
+    parameretrized: Callable[[DATA, X], tuple[LOSS, ENV]] = (
+        lambda x, param: parameretrize(x, env0, param)
     )
-    gr = torch.func.jacrev(parameretrized, argnums=1)(info, p)
-    return dialect.putGradient(foldGradient(gr, dialect.getGradient(env)), env)
+
+    wrt = read_wrt(env0)
+    gr, env1 = torch.func.jacrev(parameretrized, argnums=1, has_aux=True)(info, wrt)
+    return gr, env1
+
+
+# def getGradient(
+#     dialect: _Gradient[ENV, PARAM],
+#     lossFn: Callable[[DATA, ENV], LOSS],
+#     foldGradient: ENDOMORPHIC[GRADIENT],
+#     info: DATA,
+#     env: ENV,
+# ) -> ENV:
+#     parameretrize = reparametrizeInput(lossFn, dialect.putParameter)
+#     p = dialect.getParameter(env)
+#     parameretrized: Callable[[DATA, PARAM], LOSS] = lambda x, param: parameretrize(
+#         x, env, param
+#     )
+#     gr = torch.func.jacrev(parameretrized, argnums=1)(info, p)
+#     return dialect.putGradient(foldGradient(gr, dialect.getGradient(env)), env)
 
 
 @dataclass(frozen=True)
@@ -187,7 +216,7 @@ class RnnLibrary(Generic[ENV, DATA]):
 @dataclass(frozen=True)
 class GradientLibrary(Generic[ENV]):
     foldGradient: Callable[
-        [LOSSFN[DATA, ENV], ENDOMORPHIC[GRADIENT]], STATEM[DATA, ENV]
+        [STATEM[DATA, ENV], ENDOMORPHIC[GRADIENT]], STATEM[DATA, ENV]
     ]
 
 
@@ -202,8 +231,6 @@ class _RnnDialect(
     PutPrediction[ENV, PRED],
     PutLoss[ENV, LOSS],
     GetLoss[ENV, LOSS],
-    GetGradient[ENV, GRADIENT],
-    PutGradient[ENV, GRADIENT],
     Protocol[ENV, ACTIV, PRED, PARAM, PARAM_R, PARAM_O],
 ):
     pass
@@ -242,14 +269,37 @@ def createRnnLibrary(
     )
 
 
+class _Gradient(
+    GetParameter[ENV, PARAM],
+    PutParameter[ENV, PARAM],
+    GetGradient[ENV, GRADIENT],
+    PutGradient[ENV, GRADIENT],
+    GetLoss[ENV, LOSS],
+    Protocol[ENV, PARAM],
+):
+    pass
+
+
 def createGradientLibrary(
     dialect: _Gradient[ENV, PARAM],
 ) -> GradientLibrary[ENV]:
-    grad_: Callable[[LOSSFN[DATA, ENV], ENDOMORPHIC[GRADIENT]], STATEM[DATA, ENV]] = (
-        lambda lossFn, foldGradient: lambda x, env: getGradient(
-            dialect, lossFn, foldGradient, x, env
-        )
-    )
+    def grad_(
+        step: STATEM[DATA, ENV], foldGradient: ENDOMORPHIC[GRADIENT]
+    ) -> STATEM[DATA, ENV]:
+        def lossPair(env: ENV) -> tuple[LOSS, ENV]:
+            return dialect.getLoss(env), env
+
+        lossFn = reparameterizeOutput(step, lossPair)
+
+        def endowGrad(x: DATA, env0: ENV) -> ENV:
+            gr_old = dialect.getGradient(env0)
+            gr, env1 = computeGradient(
+                lossFn, dialect.getParameter, dialect.putParameter, x, env0
+            )
+            return dialect.putGradient(foldGradient(gr, gr_old), env1)
+
+        return endowGrad
+
     return GradientLibrary[ENV](foldGradient=grad_)
 
 
@@ -266,18 +316,131 @@ def offlineRnn(rnnLibrary: RnnLibrary[ENV, DATA]) -> STATEM[Iterator[DATA], ENV]
     return foldr(advanceRnn)
 
 
-#! Should work for both online and offline guys. Online should have Iterator[X], offline Iterator[Iterator[X]]. Responsibility of partitioning is on the user.
-def accumGradient(
+def advanceGradient(
     dialect: GetLoss[ENV, LOSS],
     advanceRnn: STATEM[DATA, ENV],
     gradLibrary: GradientLibrary[ENV],
-) -> STATEM[Iterator[DATA], ENV]:
+) -> STATEM[DATA, ENV]:
     lossFn = reparameterizeOutput(advanceRnn, dialect.getLoss)
     # we iterate twice due to functional approach to autodiff.
     advanceGrad = gradLibrary.foldGradient(lossFn, add)
     # if we used comp graph approach, order would need to be switched
-    gradFn = collapseF(iter([advanceGrad, advanceRnn]))
-    return foldr(gradFn)
+    return collapseF(iter([advanceGrad, advanceRnn]))
+
+
+class _AvgGradient(
+    GetGradient[ENV, GRADIENT],
+    PutGradient[ENV, GRADIENT],
+    Protocol[ENV],
+):
+    pass
+
+
+# online guys I should pass in 1/n always, offline guys I can foldWithLen, and then divide by n. Then pass it in.
+# ? Potential issue? We're not resetting the loss. Is that going to be an issue? Probably not, since we're taking gradients wrt new param each time.
+def weightedGradient(
+    dialect: _AvgGradient[ENV],
+    advanceRnn: Callable[[DATA, ENV], tuple[ENV, float]],
+) -> STATEM[Iterator[DATA], ENV]:
+    def weight(data: DATA, env: ENV) -> ENV:
+        env_, weight = advanceRnn(data, env)
+        grad = dialect.getGradient(env)
+        grad_ = GRADIENT(grad * weight)
+        return dialect.putGradient(grad_, env_)
+
+    return foldr(weight)
+
+
+class _RtrlDialect(
+    GetActivation[ENV, ACTIV],
+    PutActivation[ENV, ACTIV],
+    PutParameter[ENV, PARAM],
+    GetParameter[ENV, PARAM],
+    PutLoss[ENV, LOSS],
+    GetLoss[ENV, LOSS],
+    GetGradient[ENV, GRADIENT],
+    PutGradient[ENV, GRADIENT],
+    GetInfluenceTensor[ENV, INFLUENCETENSOR],
+    PutInfluenceTensor[ENV, INFLUENCETENSOR],
+    Protocol[ENV, ACTIV, PRED, PARAM, PARAM_R, PARAM_O],
+):
+    pass
+
+
+def createRTRLLibrary(
+    dialect: _RtrlDialect[ENV, ACTIV, PRED, PARAM, PARAM_R, PARAM_O],
+    dataDialect: _RnnDataDialect[DATA, X, Y, Z],
+    rnnLibrary: RnnLibrary[ENV, DATA],
+):
+
+    def getInfluenceTensor(data0: DATA, env0: ENV) -> ENV:
+
+        def reparamertrizeActivation(d: DATA, a: ACTIV, p: PARAM) -> tuple[ACTIV, ENV]:
+            _env1 = dialect.putActivation(a, env0)
+            _env2 = dialect.putParameter(p, _env1)
+            _env3 = rnnLibrary.activationStep(d, _env2)
+            return dialect.getActivation(_env3), _env3
+
+        activOnly: Callable[[DATA, ACTIV, PARAM], ACTIV] = (
+            lambda d, a, p: reparamertrizeActivation(d, a, p)[0]
+        )
+
+        a0 = dialect.getActivation(env0)
+        p0 = dialect.getParameter(env0)
+        influenceTensor = dialect.getInfluenceTensor(env0)
+
+        wrt_activ: Callable[[ACTIV], ACTIV] = lambda a: activOnly(data0, a, p0)
+
+        # I take the jvp bc 'wrt_activ' could compute a jacobian, so I'd like to 1) do a hvp 2) forward over reverse is efficient: https://jax.readthedocs.io/en/latest/notebooks/autodiff_cookbook.html
+        immediateJacobianInfluenceProduct: torch.Tensor = jacobian_matrix_product(
+            wrt_activ, a0, influenceTensor
+        )
+        # performance below really depends on the problem. For RTRL, I should use jacrev. For OHO, jacfwd. Will make this configurable later.
+        immediateInfluence, env = torch.func.jacfwd(
+            reparamertrizeActivation, argnums=2, has_aux=True
+        )(data0, a0, p0)
+
+        influenceTensor_: INFLUENCETENSOR = INFLUENCETENSOR(
+            immediateJacobianInfluenceProduct + immediateInfluence
+        )
+        env_ = dialect.putInfluenceTensor(influenceTensor_, env)
+        return env_
+
+    #! We do not accumulate loss in online pass
+    lossFn = collapseF(
+        iter(
+            [
+                getInfluenceTensor,
+                rnnLibrary.updatePrediction,
+                rnnLibrary.foldLoss(lambda _, ls: ls),
+            ]
+        )
+    )
+    # todo
+
+    # def getCreditAssignment(data0: DATA, env0: ENV) -> ENV:
+    #     def reparamertrizeLoss(d: DATA, env: ENV) -> tuple[LOSS, ENV]:
+    #         env_ = rnnLibrary.foldLoss(lambda _, ls: ls)(
+    #             d, env
+    #         )
+    #         return dialect.getLoss(env_), env_
+
+
+#!!!!!!!! WILLIAM REFER TO THIS: turn this into a forward passing guys as well
+# def getGradient(
+#     dialect: _Gradient[ENV, PARAM],
+#     lossFn: Callable[[DATA, ENV], LOSS],
+#     foldGradient: ENDOMORPHIC[GRADIENT],
+#     info: DATA,
+#     env: ENV,
+# ) -> ENV:
+#     parameretrize = reparametrizeInput(lossFn, dialect.putParameter)
+#     p = dialect.getParameter(env)
+#     parameretrized: Callable[[DATA, PARAM], LOSS] = lambda x, param: parameretrize(
+#         x, env, param
+#     )
+#     gr = torch.func.jacrev(parameretrized, argnums=1)(info, p)
+#     return dialect.putGradient(foldGradient(gr, dialect.getGradient(env)), env)
 
 
 # @dataclass(frozen=True)
