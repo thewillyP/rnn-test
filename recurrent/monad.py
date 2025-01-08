@@ -1,5 +1,5 @@
 from typing import Callable, Iterable, Tuple, TypeVar, Generic, cast
-from myfunc import foldr
+from recurrent.myfunc import foldr
 from pyrsistent import pvector, PVector
 
 R = TypeVar("R")  # Environment type

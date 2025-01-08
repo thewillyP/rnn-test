@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Callable, Generic, TypeVar, Protocol, Iterable
 import torch
-from myobjectalgebra import (
+from recurrent.objectalgebra.typeclasses import (
     GetActivation,
     GetGradient,
     GetHyperParameter,
@@ -21,25 +21,21 @@ from myobjectalgebra import (
     PutParameter,
     PutPrediction,
 )
-from myfunc import (
-    collapseF,
-    flip,
-    foldr,
-    scan0,
-    fst,
-    snd,
-    liftA2Compose,
-    foldl,
-    compose2,
-)
+
 import itertools
-from mytypes import *
+from recurrent.mytypes import *
 from operator import add
-from collections.abc import Collection
-from monad import ReaderState, State, Unit, foldM, runReader, toReader, reader, traverse
+from recurrent.monad import (
+    ReaderState,
+    State,
+    Unit,
+    foldM,
+    runReader,
+    toReader,
+    reader,
+    traverse,
+)
 
-
-from myrecords import RnnBPTTState
 
 STATEM = Callable[[DATA, ENV], ENV]
 ENDOMORPHIC = Callable[[T, T], T]
@@ -62,6 +58,8 @@ ACTIV_CO = TypeVar("ACTIV_CO", covariant=True)
 PRED_CO = TypeVar("PRED_CO", covariant=True)
 PRED_CON = TypeVar("PRED_CON", contravariant=True)
 HPARAM_CO = TypeVar("HPARAM_CO", covariant=True)
+ENV_CON = TypeVar("ENV_CON", contravariant=True)
+PARAM_CON = TypeVar("PARAM_CON", contravariant=True)
 
 PARAM_TENSOR = TypeVar("PARAM_TENSOR", bound=torch.Tensor)
 ACTIV_TENSOR = TypeVar("ACTIV_TENSOR", bound=torch.Tensor)
@@ -93,38 +91,6 @@ def reparametrizeInput(
         return step(info, env_)
 
     return reparametrized
-
-
-# literally State put
-# def reparametrizeInput(
-#     writer: Callable[[X, ENV], ENV]
-# ) -> Callable[[X], ReaderState[DATA, ENV, Z]]:
-#     return (
-#         lambda x: ReaderState[DATA, ENV, ENV]
-#         .get()
-#         .bind(lambda env: ReaderState[DATA, ENV, Unit].put(writer(x, env)))
-#     )
-
-
-def fmapState(
-    reader: Callable[[ENV], X],
-    writer: Callable[[X, ENV], ENV],
-    f: Callable[[X], X],
-) -> Callable[[DATA, ENV], ENV]:
-    def fmapped(_: DATA, env: ENV) -> ENV:
-        x = reader(env)
-        x_ = f(x)
-        env_ = writer(x_, env)
-        return env_
-
-    return fmapped
-
-
-def makeLossPair(dialect: GetLoss[ENV, LOSS]) -> Callable[[ENV], tuple[LOSS, ENV]]:
-    def lossPair(env: ENV) -> tuple[LOSS, ENV]:
-        return dialect.getLoss(env), env
-
-    return lossPair
 
 
 class _Activation(
@@ -162,10 +128,10 @@ def activation(
 
 
 class _Prediction(
-    GetActivation[ENV, ACTIV_CO],
-    GetParameter[ENV, PARAM],
-    HasReadoutWeights[ENV, PARAM, PARAM_T],
-    Protocol[ENV, ACTIV_CO, PARAM, PARAM_T, PRED_CON],
+    GetActivation[ENV_CON, ACTIV_CO],
+    GetParameter[ENV_CON, PARAM],
+    HasReadoutWeights[ENV_CON, PARAM, PARAM_T],
+    Protocol[ENV_CON, ACTIV_CO, PARAM, PARAM_T],
 ):
     pass
 
@@ -175,7 +141,7 @@ class _PredictionData(HasPredictionInput[DATA_L, X_L], Protocol[DATA_L, X_L]):
 
 
 def prediction(
-    dialect: _Prediction[ENV, ACTIV, PARAM, PARAM_T, PRED],
+    dialect: _Prediction[ENV, ACTIV, PARAM, PARAM_T],
     dataDialect: _PredictionData[DATA, X],
     step: Callable[[X, ACTIV, PARAM_T], PRED],
 ) -> ReaderState[DATA, ENV, PRED]:
@@ -241,7 +207,7 @@ class GradientLibrary(Generic[ENV, PRED, DATA]):
         self, getWeight: Callable[[DATA], float]
     ) -> ReaderState[Iterable[DATA], ENV, GRADIENT]:
         def weight(data: DATA, gr: GRADIENT) -> State[ENV, GRADIENT]:
-            runReader(self.rnnWithParamGradient)(data).fmap(
+            return runReader(self.rnnWithParamGradient)(data).fmap(
                 lambda gr_: GRADIENT(gr + gr_ * getWeight(data))
             )
 
@@ -346,7 +312,7 @@ def offlineLearning(
     rnn_with_loss = rnnLibrary.rnnStep().bind(loss(dataDialect, computeLoss))
 
     def accum_loss(d: DATA, accum: LOSS) -> State[ENV, LOSS]:
-        return runReader(rnn_with_loss)(d).fmap(lambda l: accum + l)
+        return runReader(rnn_with_loss)(d).fmap(lambda l: LOSS(accum + l))
 
     rnnWithLoss = toReader(foldM(accum_loss, LOSS(torch.tensor(0))))
 
@@ -364,9 +330,9 @@ def offlineLearning(
 class _EndowPastFacingGradient(
     GetActivation[ENV, ACTIV],
     PutActivation[ENV, ACTIV],
-    PutParameter[ENV, PARAM],
+    PutParameter[ENV, PARAM_CON],
     GetInfluenceTensor[ENV, INFLUENCETENSOR],
-    Protocol[ENV, ACTIV, PARAM],
+    Protocol[ENV, ACTIV, PARAM_CON],
 ):
     pass
 
@@ -381,7 +347,6 @@ def endowPastFacingGradient(
     ],
     rnnLibrary: RnnLibrary[ENV, PRED, DATA],
 ) -> GradientLibrary[ENV, PRED, DATA]:
-    M = ReaderState[DATA, ENV, ENV]
 
     readout_loss = rnnLibrary.updatePrediction.bind(loss(dataDialect, computeLoss))
 
@@ -405,12 +370,13 @@ def endowPastFacingGradient(
         d: DATA, env0: ENV, a: ACTIV_TENSOR, p: PARAM
     ) -> tuple[ACTIV_TENSOR, ENV]:
         doActiv = (
-            M.get()
+            ReaderState[DATA, ENV, ENV]
+            .get()
             .fmap(lambda env: dialect.putActivation(a, env))
             .fmap(lambda env: dialect.putParameter(p, env))
-            .bind(M.put)
+            .bind(ReaderState[DATA, ENV, ENV].put)
             .then(rnnLibrary.activationStep)
-            .then(M.get())
+            .then(ReaderState[DATA, ENV, ENV].get())
             .fmap(dialect.getActivation)
         )
         return doActiv.run(d, env0)
@@ -437,6 +403,47 @@ class _RtrlDialect(
 
 
 def RTRL(
+    dialect: _RtrlDialect[ENV, ACTIV_TENSOR, PARAM],
+    dataDialect: HasLabel[DATA, Z],
+    computeLoss: Callable[[Z, PRED], LOSS],
+    rnnLibrary: RnnLibrary[ENV, PRED, DATA],
+) -> GradientLibrary[ENV, PRED, DATA]:
+
+    def factory(
+        reparametrizeActivation: Callable[
+            [DATA, ENV, ACTIV_TENSOR, PARAM], tuple[ACTIV_TENSOR, ENV]
+        ]
+    ) -> ReaderState[DATA, ENV, Unit]:
+
+        def getInfluenceTensor(data0: DATA, env0: ENV) -> tuple[Unit, ENV]:
+            a0 = dialect.getActivation(env0)
+            p0 = dialect.getParameter(env0)
+            influenceTensor = dialect.getInfluenceTensor(env0)
+
+            # I take the jvp bc 'wrt_activ' could compute a jacobian, so I'd like to 1) do a hvp 2) forward over reverse is efficient: https://jax.readthedocs.io/en/latest/notebooks/autodiff_cookbook.html
+            immediateJacobianInfluenceProduct: torch.Tensor = jacobian_matrix_product(
+                lambda a: reparametrizeActivation(data0, env0, a, p0)[0],
+                a0,
+                influenceTensor,
+            )
+            # performance below really depends on the problem. For RTRL, I should use jacrev. For OHO, jacfwd. Will make this configurable later.
+            immediateInfluence, env = torch.func.jacfwd(
+                reparametrizeActivation, argnums=3, has_aux=True
+            )(data0, env0, a0, p0)
+
+            influenceTensor_ = INFLUENCETENSOR(
+                immediateJacobianInfluenceProduct + immediateInfluence
+            )
+            return Unit(), dialect.putInfluenceTensor(influenceTensor_, env)
+
+        return reader(getInfluenceTensor)
+
+    return endowPastFacingGradient(
+        dialect, dataDialect, computeLoss, factory, rnnLibrary
+    )
+
+
+def RFLO(
     dialect: _RtrlDialect[ENV, ACTIV_TENSOR, PARAM],
     dataDialect: HasLabel[DATA, Z],
     computeLoss: Callable[[Z, PRED], LOSS],

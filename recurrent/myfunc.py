@@ -2,7 +2,7 @@ from typing import TypeVar, Callable, Generator, Iterator, Iterable
 from functools import reduce
 from toolz.curried import curry, map, concat, compose
 import itertools
-from mytypes import *
+from recurrent.mytypes import *
 
 
 def sequenceF2(

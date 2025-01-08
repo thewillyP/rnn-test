@@ -2,11 +2,13 @@ from typing import Generic
 from dataclasses import dataclass, replace
 from mytypes import *
 from myrecords import (
+    RfloConfig,
     RnnConfig,
     WithBaseFuture,
     WithBilevel,
     WithHyperparameter,
     WithOhoFuture,
+    WithBaseRflo,
     WithRnn,
     WithTrainGradient,
     WithTrainLoss,
@@ -121,6 +123,12 @@ class PutPrediction(Generic[ENV, _T], Protocol):
         pass
 
 
+class GetRfloConfig(Generic[_ENV], Protocol):
+    @staticmethod
+    def getRfloConfig(env: _ENV) -> RfloConfig:
+        pass
+
+
 class HasInput(Generic[_DATA, _E], Protocol):
     @staticmethod
     def getInput(data: _DATA) -> _E:
@@ -156,12 +164,6 @@ class HasLabel(Generic[_DATA, _E], Protocol):
 
 # downside is that I need to create a whole new class that inherits all the instantiations.
 # I will just maintain and reedit my god instance interpreter. Best compromise. Not truly extensible but I have full control.
-
-# @dataclass(frozen=True)
-# class OhoState(Generic[A, B, C]):
-#     activation: A
-#     parameter: B
-#     hyperparameter: C
 
 
 @dataclass(frozen=True)
@@ -313,6 +315,23 @@ class IsInfluenceTensor(
         return replace(env, influenceTensor=s)
 
 
+@dataclass(frozen=True)
+class _RfloAlgebra(_Rnn_Future_Cap, WithBaseRflo, Protocol):
+    pass
+
+
+_RFLO_ALGEBRA = TypeVar("_RFLO_ALGEBRA", bound=_RfloAlgebra)
+
+
+class IsRflo(
+    Generic[_RFLO_ALGEBRA],
+    GetRfloConfig[_RFLO_ALGEBRA],
+):
+    @staticmethod
+    def getRfloConfig(env: _RFLO_ALGEBRA) -> RfloConfig:
+        return env.rfloConfig
+
+
 class RnnInterpreter(
     Generic[_RNN_ENV],
     IsActivation[_RNN_ENV],
@@ -337,6 +356,7 @@ class RnnLearnableInterpreter(
     pass
 
 
+# todo: messed up naming, should be past facing
 class RnnWithFutureInterpreter(
     Generic[_BASE_FUTURE_CAP],
     IsActivation[_BASE_FUTURE_CAP],
@@ -348,6 +368,14 @@ class RnnWithFutureInterpreter(
     IsLoss[_BASE_FUTURE_CAP],
     IsGradient[_BASE_FUTURE_CAP],
     IsPrediction[_BASE_FUTURE_CAP],
+):
+    pass
+
+
+class RfloInterpreter(
+    Generic[_RFLO_ALGEBRA],
+    IsRflo[_RFLO_ALGEBRA],
+    RnnWithFutureInterpreter[_RFLO_ALGEBRA],
 ):
     pass
 
