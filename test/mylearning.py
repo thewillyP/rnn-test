@@ -272,37 +272,10 @@ def batchGradients(
     return collapseF([fn_b, sum_gradients])
 
 
-# factory inputs should be Callable[[DATA, ENV], tuple[GRADIENT, ENV]], but return should be higher order
-# updateGradient: Callable[[GRADIENT, ENV], ENV]
-
-
 @dataclass(frozen=True)
 class LearningEffectsLibrary(Generic[ENV]):
     updateGradient: Callable[[GRADIENT, ENV], ENV]
     updateParameter: Callable[[ENV], ENV]
-
-
-# class _AvgGradient(
-#     GetGradient[ENV, GRADIENT],
-#     PutGradient[ENV, GRADIENT],
-#     Protocol[ENV],
-# ):
-#     pass
-
-
-# # online guys I should pass in 1/n always, offline guys I can foldWithLen, and then divide by n. Then pass it in.
-# # ? Potential issue? We're not resetting the loss. Is that going to be an issue? Probably not, since we're taking gradients wrt new param each time.
-# # need to see use case to see how to proper;y write this
-# def weightedGradient(
-#     dialect: _AvgGradient[ENV], advanceRnn: Callable[[DATA, ENV], tuple[ENV, float]]
-# ) -> STATEM[Iterable[DATA], ENV]:
-#     def weight(data: DATA, env: ENV) -> ENV:
-#         env_, weight = advanceRnn(data, env)
-#         return fmapState(
-#             dialect.getGradient, dialect.putGradient, lambda gr: GRADIENT(gr * weight)
-#         )(data, env_)
-
-#     return foldr(weight)
 
 
 class _ParameterLearn(
@@ -386,9 +359,8 @@ def offlineLearning(
     dialect: _Gradient[ENV, PRED, PARAM_TENSOR, HPARAM],
     dataDialect: HasLabel[DATA, Z],
     computeLoss: Callable[[Z, PRED], LOSS],
-    foldParameter: Callable[[GRADIENT, PARAM_TENSOR, HPARAM], PARAM_TENSOR],
     rnnLibrary: RnnLibrary[ENV, DATA],
-) -> LearningLibrary[ENV, Iterable[DATA]]:
+) -> GradientLibrary[ENV, Iterable[DATA]]:
 
     rnn_ = collapseF([rnnLibrary.activationStep, rnnLibrary.updatePrediction])
     rnn = foldr(rnn_)
