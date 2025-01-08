@@ -1,9 +1,10 @@
 from dataclasses import dataclass
-from typing import Callable, Generic, TypeVar, Iterator, Protocol, Type
+from typing import Callable, Generic, TypeVar, Protocol, Iterable
 import torch
 from myobjectalgebra import (
     GetActivation,
     GetGradient,
+    GetHyperParameter,
     GetInfluenceTensor,
     GetLoss,
     GetParameter,
@@ -49,6 +50,12 @@ Z_L = TypeVar("Z_L", covariant=True)
 ACTIV_CO = TypeVar("ACTIV_CO", covariant=True)
 PRED_CO = TypeVar("PRED_CO", covariant=True)
 PRED_CON = TypeVar("PRED_CON", contravariant=True)
+HPARAM_CO = TypeVar("HPARAM_CO", covariant=True)
+
+PARAM_TENSOR = TypeVar("PARAM_TENSOR", bound=torch.Tensor)
+ACTIV_TENSOR = TypeVar("ACTIV_TENSOR", bound=torch.Tensor)
+
+DATA_NEW = TypeVar("DATA_NEW")
 
 
 def jacobian_matrix_product(f, primal, matrix):
@@ -67,8 +74,6 @@ def reparameterizeOutput(
 
 
 # literally State put
-
-
 def reparametrizeInput(
     step: Callable[[DATA, ENV], Z], writer: Callable[[X, ENV], ENV]
 ) -> Callable[[DATA, ENV, X], Z]:
@@ -91,6 +96,13 @@ def fmapState(
         return env_
 
     return fmapped
+
+
+def makeLossPair(dialect: GetLoss[ENV, LOSS]) -> Callable[[ENV], tuple[LOSS, ENV]]:
+    def lossPair(env: ENV) -> tuple[LOSS, ENV]:
+        return dialect.getLoss(env), env
+
+    return lossPair
 
 
 class _Activation(
@@ -175,13 +187,13 @@ def loss(
 
 def computeGradient(
     lossFn: Callable[[DATA, ENV], tuple[LOSS, ENV]],
-    read_wrt: Callable[[ENV], X],
-    write_wrt: Callable[[X, ENV], ENV],
+    read_wrt: Callable[[ENV], PARAM_TENSOR],
+    write_wrt: Callable[[PARAM_TENSOR, ENV], ENV],
     info: DATA,
     env0: ENV,
 ) -> tuple[GRADIENT, ENV]:
     parameretrize = reparametrizeInput(lossFn, write_wrt)
-    parameretrized: Callable[[DATA, X], tuple[LOSS, ENV]] = (
+    parameretrized: Callable[[DATA, PARAM_TENSOR], tuple[LOSS, ENV]] = (
         lambda x, param: parameretrize(x, env0, param)
     )
 
@@ -190,34 +202,133 @@ def computeGradient(
     return gr, env1
 
 
-# def getGradient(
-#     dialect: _Gradient[ENV, PARAM],
-#     lossFn: Callable[[DATA, ENV], LOSS],
-#     foldGradient: ENDOMORPHIC[GRADIENT],
-#     info: DATA,
-#     env: ENV,
-# ) -> ENV:
-#     parameretrize = reparametrizeInput(lossFn, dialect.putParameter)
-#     p = dialect.getParameter(env)
-#     parameretrized: Callable[[DATA, PARAM], LOSS] = lambda x, param: parameretrize(
-#         x, env, param
-#     )
-#     gr = torch.func.jacrev(parameretrized, argnums=1)(info, p)
-#     return dialect.putGradient(foldGradient(gr, dialect.getGradient(env)), env)
+class _AccumGradient(
+    GetGradient[ENV, GRADIENT],
+    PutGradient[ENV, GRADIENT],
+    GetLoss[ENV, LOSS],
+    Protocol[ENV],
+):
+    pass
+
+
+def accumGradient(
+    dialect: _AccumGradient[ENV],
+    step: Callable[[DATA, ENV], ENV],
+    foldGradient: ENDOMORPHIC[GRADIENT],
+    read_wrt: Callable[[ENV], PARAM_TENSOR],
+    write_wrt: Callable[[PARAM_TENSOR, ENV], ENV],
+) -> STATEM[DATA, ENV]:
+    lossFn = reparameterizeOutput(step, makeLossPair(dialect))
+
+    def endowGrad(x: DATA, env0: ENV) -> ENV:
+        gr_old = dialect.getGradient(env0)
+        gr, env1 = computeGradient(lossFn, read_wrt, write_wrt, x, env0)
+        return dialect.putGradient(foldGradient(gr, gr_old), env1)
+
+    return endowGrad
 
 
 @dataclass(frozen=True)
 class RnnLibrary(Generic[ENV, DATA]):
     activationStep: STATEM[DATA, ENV]
     updatePrediction: STATEM[DATA, ENV]
-    foldLoss: Callable[[ENDOMORPHIC[LOSS]], STATEM[DATA, ENV]]
 
 
 @dataclass(frozen=True)
-class GradientLibrary(Generic[ENV]):
-    foldGradient: Callable[
-        [STATEM[DATA, ENV], ENDOMORPHIC[GRADIENT]], STATEM[DATA, ENV]
-    ]
+class GradientLibrary(Generic[ENV, DATA]):
+    rnn: STATEM[DATA, ENV]
+    rnnWithLoss: STATEM[DATA, ENV]
+    rnnWithParamGradient: Callable[[DATA, ENV], tuple[GRADIENT, ENV]]
+
+    def rnnWithParamGradient_Averaged(
+        self, getWeight: Callable[[DATA], float]
+    ) -> STATEM[Iterable[DATA], ENV]:
+        def weight(data: DATA, pair: tuple[GRADIENT, ENV]) -> tuple[GRADIENT, ENV]:
+            prev_gr, prev_env = pair
+            weight = getWeight(data)
+            curr_gr, curr_env = self.rnnWithParamGradient(data, prev_env)
+            return GRADIENT(prev_gr + curr_gr * weight), curr_env
+
+        return lambda xs, env: foldr(weight)(xs, (GRADIENT(torch.tensor(0)), env))
+
+
+class _LearningLibraryFactory(
+    GetGradient[ENV, GRADIENT], PutGradient[ENV, GRADIENT], Protocol[ENV]
+):
+    pass
+
+
+def batchGradients(
+    dialect: _LearningLibraryFactory[ENV],
+    step: STATEM[DATA, ENV],
+) -> STATEM[DATA, ENV]:
+
+    def sum_gradients(_: DATA, env: ENV) -> ENV:
+        gr_b = dialect.getGradient(env)
+        gr = GRADIENT(torch.sum(gr_b, dim=0))
+        return dialect.putGradient(gr, env)
+
+    fn_b = torch.vmap(step)
+    return collapseF([fn_b, sum_gradients])
+
+
+# factory inputs should be Callable[[DATA, ENV], tuple[GRADIENT, ENV]], but return should be higher order
+# updateGradient: Callable[[GRADIENT, ENV], ENV]
+
+
+@dataclass(frozen=True)
+class LearningEffectsLibrary(Generic[ENV]):
+    updateGradient: Callable[[GRADIENT, ENV], ENV]
+    updateParameter: Callable[[ENV], ENV]
+
+
+# class _AvgGradient(
+#     GetGradient[ENV, GRADIENT],
+#     PutGradient[ENV, GRADIENT],
+#     Protocol[ENV],
+# ):
+#     pass
+
+
+# # online guys I should pass in 1/n always, offline guys I can foldWithLen, and then divide by n. Then pass it in.
+# # ? Potential issue? We're not resetting the loss. Is that going to be an issue? Probably not, since we're taking gradients wrt new param each time.
+# # need to see use case to see how to proper;y write this
+# def weightedGradient(
+#     dialect: _AvgGradient[ENV], advanceRnn: Callable[[DATA, ENV], tuple[ENV, float]]
+# ) -> STATEM[Iterable[DATA], ENV]:
+#     def weight(data: DATA, env: ENV) -> ENV:
+#         env_, weight = advanceRnn(data, env)
+#         return fmapState(
+#             dialect.getGradient, dialect.putGradient, lambda gr: GRADIENT(gr * weight)
+#         )(data, env_)
+
+#     return foldr(weight)
+
+
+class _ParameterLearn(
+    GetParameter[ENV, PARAM],
+    PutParameter[ENV, PARAM],
+    GetGradient[ENV, GRADIENT],
+    PutGradient[ENV, GRADIENT],
+    GetHyperParameter[ENV, HPARAM_CO],
+    Protocol[ENV, PARAM, HPARAM_CO],
+):
+    pass
+
+
+def learningEffectsStandardFactory(
+    dialect: _ParameterLearn[ENV, PARAM_TENSOR, HPARAM],
+    foldParameter: Callable[[GRADIENT, PARAM_TENSOR, HPARAM], PARAM_TENSOR],
+) -> LearningEffectsLibrary[ENV]:
+
+    def updateParameter(env: ENV) -> ENV:
+        hp = dialect.getHyperParameter(env)
+        param = dialect.getParameter(env)
+        grad = dialect.getGradient(env)
+        param_ = foldParameter(grad, param, hp)
+        return dialect.putParameter(param_, env)
+
+    return LearningEffectsLibrary[ENV](dialect.putGradient, updateParameter)
 
 
 class _RnnDialect(
@@ -227,11 +338,8 @@ class _RnnDialect(
     GetParameter[ENV, PARAM],
     HasRecurrentWeights[ENV, PARAM, PARAM_R],
     HasReadoutWeights[ENV, PARAM, PARAM_O],
-    GetPrediction[ENV, PRED],
-    PutPrediction[ENV, PRED],
-    PutLoss[ENV, LOSS],
-    GetLoss[ENV, LOSS],
-    Protocol[ENV, ACTIV, PRED, PARAM, PARAM_R, PARAM_O],
+    PutPrediction[ENV, PRED_CON],
+    Protocol[ENV, ACTIV, PRED_CON, PARAM, PARAM_R, PARAM_O],
 ):
     pass
 
@@ -239,7 +347,6 @@ class _RnnDialect(
 class _RnnDataDialect(
     HasInput[DATA_L, X_L],
     HasPredictionInput[DATA_L, Y_L],
-    HasLabel[DATA_L, Z_L],
     Protocol[DATA_L, X_L, Y_L, Z_L],
 ):
     pass
@@ -251,7 +358,6 @@ def createRnnLibrary(
     dataDialect: _RnnDataDialect[DATA, X, Y, Z],
     activationStep: Callable[[X, ACTIV, PARAM_R], ACTIV],
     predictionStep: Callable[[Y, ACTIV, PARAM_O], PRED],
-    computeLoss: Callable[[Z, PRED], LOSS],
 ) -> RnnLibrary[ENV, DATA]:
     actv_: STATEM[DATA, ENV] = lambda x, env: activation(
         dialect, dataDialect, activationStep, x, env
@@ -259,99 +365,56 @@ def createRnnLibrary(
     pred_: STATEM[DATA, ENV] = lambda x, env: prediction(
         dialect, dataDialect, predictionStep, x, env
     )
-    loss_: Callable[[ENDOMORPHIC[LOSS]], STATEM[DATA, ENV]] = (
-        lambda foldLoss: lambda x, env: loss(
-            dialect, dataDialect, computeLoss, foldLoss, x, env
-        )
-    )
-    return RnnLibrary[ENV, DATA](
-        activationStep=actv_, updatePrediction=pred_, foldLoss=loss_
-    )
+    return RnnLibrary[ENV, DATA](activationStep=actv_, updatePrediction=pred_)
 
 
 class _Gradient(
+    GetPrediction[ENV, PRED_CO],
     GetParameter[ENV, PARAM],
     PutParameter[ENV, PARAM],
     GetGradient[ENV, GRADIENT],
     PutGradient[ENV, GRADIENT],
+    GetHyperParameter[ENV, HPARAM_CO],
     GetLoss[ENV, LOSS],
-    Protocol[ENV, PARAM],
+    PutLoss[ENV, LOSS],
+    Protocol[ENV, PRED_CO, PARAM, HPARAM_CO],
 ):
     pass
 
 
-def createGradientLibrary(
-    dialect: _Gradient[ENV, PARAM],
-) -> GradientLibrary[ENV]:
-    def grad_(
-        step: STATEM[DATA, ENV], foldGradient: ENDOMORPHIC[GRADIENT]
-    ) -> STATEM[DATA, ENV]:
-        def lossPair(env: ENV) -> tuple[LOSS, ENV]:
-            return dialect.getLoss(env), env
+def offlineLearning(
+    dialect: _Gradient[ENV, PRED, PARAM_TENSOR, HPARAM],
+    dataDialect: HasLabel[DATA, Z],
+    computeLoss: Callable[[Z, PRED], LOSS],
+    foldParameter: Callable[[GRADIENT, PARAM_TENSOR, HPARAM], PARAM_TENSOR],
+    rnnLibrary: RnnLibrary[ENV, DATA],
+) -> LearningLibrary[ENV, Iterable[DATA]]:
 
-        lossFn = reparameterizeOutput(step, lossPair)
+    rnn_ = collapseF([rnnLibrary.activationStep, rnnLibrary.updatePrediction])
+    rnn = foldr(rnn_)
 
-        def endowGrad(x: DATA, env0: ENV) -> ENV:
-            gr_old = dialect.getGradient(env0)
-            gr, env1 = computeGradient(
-                lossFn, dialect.getParameter, dialect.putParameter, x, env0
-            )
-            return dialect.putGradient(foldGradient(gr, gr_old), env1)
-
-        return endowGrad
-
-    return GradientLibrary[ENV](foldGradient=grad_)
-
-
-def offlineRnn(rnnLibrary: RnnLibrary[ENV, DATA]) -> STATEM[Iterator[DATA], ENV]:
-    advanceRnn = collapseF(
-        iter(
-            [
-                rnnLibrary.activationStep,
-                rnnLibrary.updatePrediction,
-                rnnLibrary.foldLoss(add),
-            ]
-        )
+    loss_: STATEM[DATA, ENV] = lambda x, env: loss(
+        dialect, dataDialect, computeLoss, add, x, env
     )
-    return foldr(advanceRnn)
+    _step = collapseF([rnn_, loss_])
+    rnnWithLoss = foldr(_step)
 
+    def grad_(foldGradient: ENDOMORPHIC[GRADIENT]) -> STATEM[Iterable[DATA], ENV]:
+        return accumGradient(
+            dialect,
+            rnnWithLoss,
+            foldGradient,
+            dialect.getParameter,
+            dialect.putParameter,
+        )
 
-def advanceGradient(
-    dialect: GetLoss[ENV, LOSS],
-    advanceRnn: STATEM[DATA, ENV],
-    gradLibrary: GradientLibrary[ENV],
-) -> STATEM[DATA, ENV]:
-    lossFn = reparameterizeOutput(advanceRnn, dialect.getLoss)
-    # we iterate twice due to functional approach to autodiff.
-    advanceGrad = gradLibrary.foldGradient(lossFn, add)
-    # if we used comp graph approach, order would need to be switched
-    return collapseF(iter([advanceGrad, advanceRnn]))
-
-
-class _AvgGradient(
-    GetGradient[ENV, GRADIENT],
-    PutGradient[ENV, GRADIENT],
-    Protocol[ENV],
-):
-    pass
-
-
-# online guys I should pass in 1/n always, offline guys I can foldWithLen, and then divide by n. Then pass it in.
-# ? Potential issue? We're not resetting the loss. Is that going to be an issue? Probably not, since we're taking gradients wrt new param each time.
-def weightedGradient(
-    dialect: _AvgGradient[ENV],
-    advanceRnn: Callable[[DATA, ENV], tuple[ENV, float]],
-) -> STATEM[Iterator[DATA], ENV]:
-    def weight(data: DATA, env: ENV) -> ENV:
-        env_, weight = advanceRnn(data, env)
-        grad = dialect.getGradient(env)
-        grad_ = GRADIENT(grad * weight)
-        return dialect.putGradient(grad_, env_)
-
-    return foldr(weight)
+    return LearningLibraryStandardParameterFactory(
+        dialect, rnn, rnnWithLoss, grad_, foldParameter
+    )
 
 
 class _RtrlDialect(
+    GetPrediction[ENV, PRED_CO],
     GetActivation[ENV, ACTIV],
     PutActivation[ENV, ACTIV],
     PutParameter[ENV, PARAM],
@@ -362,26 +425,35 @@ class _RtrlDialect(
     PutGradient[ENV, GRADIENT],
     GetInfluenceTensor[ENV, INFLUENCETENSOR],
     PutInfluenceTensor[ENV, INFLUENCETENSOR],
-    Protocol[ENV, ACTIV, PRED, PARAM, PARAM_R, PARAM_O],
+    GetHyperParameter[ENV, HPARAM_CO],
+    Protocol[ENV, ACTIV, PRED_CO, PARAM, PARAM_R, PARAM_O, HPARAM_CO],
 ):
     pass
 
 
 def createRTRLLibrary(
-    dialect: _RtrlDialect[ENV, ACTIV, PRED, PARAM, PARAM_R, PARAM_O],
-    dataDialect: _RnnDataDialect[DATA, X, Y, Z],
+    dialect: _RtrlDialect[ENV, ACTIV_TENSOR, PRED, PARAM, PARAM_R, PARAM_O, HPARAM],
+    dataDialect: HasLabel[DATA, Z],
+    computeLoss: Callable[[Z, PRED], LOSS],
+    foldParameter: Callable[[GRADIENT, PARAM, HPARAM], PARAM],
     rnnLibrary: RnnLibrary[ENV, DATA],
-):
+) -> LearningLibrary[ENV, DATA]:
+
+    loss_: STATEM[DATA, ENV] = lambda x, env: loss(
+        dialect, dataDialect, computeLoss, lambda _, ls: ls, x, env
+    )
 
     def getInfluenceTensor(data0: DATA, env0: ENV) -> ENV:
 
-        def reparamertrizeActivation(d: DATA, a: ACTIV, p: PARAM) -> tuple[ACTIV, ENV]:
+        def reparamertrizeActivation(
+            d: DATA, a: ACTIV_TENSOR, p: PARAM
+        ) -> tuple[ACTIV_TENSOR, ENV]:
             _env1 = dialect.putActivation(a, env0)
             _env2 = dialect.putParameter(p, _env1)
             _env3 = rnnLibrary.activationStep(d, _env2)
             return dialect.getActivation(_env3), _env3
 
-        activOnly: Callable[[DATA, ACTIV, PARAM], ACTIV] = (
+        activOnly: Callable[[DATA, ACTIV_TENSOR, PARAM], ACTIV_TENSOR] = (
             lambda d, a, p: reparamertrizeActivation(d, a, p)[0]
         )
 
@@ -389,7 +461,9 @@ def createRTRLLibrary(
         p0 = dialect.getParameter(env0)
         influenceTensor = dialect.getInfluenceTensor(env0)
 
-        wrt_activ: Callable[[ACTIV], ACTIV] = lambda a: activOnly(data0, a, p0)
+        wrt_activ: Callable[[ACTIV_TENSOR], ACTIV_TENSOR] = lambda a: activOnly(
+            data0, a, p0
+        )
 
         # I take the jvp bc 'wrt_activ' could compute a jacobian, so I'd like to 1) do a hvp 2) forward over reverse is efficient: https://jax.readthedocs.io/en/latest/notebooks/autodiff_cookbook.html
         immediateJacobianInfluenceProduct: torch.Tensor = jacobian_matrix_product(
@@ -407,23 +481,114 @@ def createRTRLLibrary(
         return env_
 
     #! We do not accumulate loss in online pass
-    lossFn = collapseF(
-        iter(
-            [
-                getInfluenceTensor,
-                rnnLibrary.updatePrediction,
-                rnnLibrary.foldLoss(lambda _, ls: ls),
-            ]
-        )
-    )
-    # todo
+    readoutFn = collapseF(iter([rnnLibrary.updatePrediction, loss_]))
+    readoutLoss = reparameterizeOutput(readoutFn, makeLossPair(dialect))
 
-    # def getCreditAssignment(data0: DATA, env0: ENV) -> ENV:
-    #     def reparamertrizeLoss(d: DATA, env: ENV) -> tuple[LOSS, ENV]:
-    #         env_ = rnnLibrary.foldLoss(lambda _, ls: ls)(
-    #             d, env
-    #         )
-    #         return dialect.getLoss(env_), env_
+    def creditAssignment(
+        foldGradient: ENDOMORPHIC[GRADIENT], data0: DATA, env0: ENV
+    ) -> ENV:
+        immediateCreditAssignment, env1 = computeGradient(
+            readoutLoss, dialect.getActivation, dialect.putActivation, data0, env0
+        )
+        influenceTensor = dialect.getInfluenceTensor(env1)
+        credit_gr = GRADIENT(immediateCreditAssignment @ influenceTensor)
+        return fmapState(
+            dialect.getGradient,
+            dialect.putGradient,
+            lambda gr: foldGradient(gr, credit_gr),
+        )(data0, env1)
+
+    def grad_(foldGradient: ENDOMORPHIC[GRADIENT]) -> STATEM[DATA, ENV]:
+        ca = lambda d, env: creditAssignment(foldGradient, d, env)
+        return collapseF(iter([getInfluenceTensor, ca]))
+
+    def optimize_(env: ENV) -> ENV:
+        hp = dialect.getHyperParameter(env)
+        param = dialect.getParameter(env)
+        grad = dialect.getGradient(env)
+        param_ = foldParameter(grad, param, hp)
+        return dialect.putParameter(param_, env)
+
+    return LearningLibrary[ENV, DATA](
+        rnn=collapseF(iter([rnnLibrary.activationStep, rnnLibrary.updatePrediction])),
+        updateLoss=collapseF(
+            iter([rnnLibrary.activationStep, rnnLibrary.updatePrediction, loss_])
+        ),
+        rnnWithParamGradient=grad_,
+        updateParameter=optimize_,
+    )
+
+
+def createRTRLLibrary(
+    dialect: _RtrlDialect[ENV, ACTIV_TENSOR, PRED, PARAM, PARAM_R, PARAM_O, HPARAM],
+    dataDialect: HasLabel[DATA, Z],
+    computeLoss: Callable[[Z, PRED], LOSS],
+    foldParameter: Callable[[GRADIENT, PARAM, HPARAM], PARAM],
+    getInfluenceTensor: STATEM[DATA, ENV],
+    rnnLibrary: RnnLibrary[ENV, DATA],
+) -> LearningLibrary[ENV, DATA]:
+
+    #! We do not accumulate loss in online pass
+    loss_: STATEM[DATA, ENV] = lambda x, env: loss(
+        dialect, dataDialect, computeLoss, lambda _, ls: ls, x, env
+    )
+
+    readoutFn = collapseF(iter([rnnLibrary.updatePrediction, loss_]))
+    readoutLoss = reparameterizeOutput(readoutFn, makeLossPair(dialect))
+
+    def creditAssignment(
+        foldGradient: ENDOMORPHIC[GRADIENT], data0: DATA, env0: ENV
+    ) -> ENV:
+        immediateCreditAssignment, env1 = computeGradient(
+            readoutLoss, dialect.getActivation, dialect.putActivation, data0, env0
+        )
+        influenceTensor = dialect.getInfluenceTensor(env1)
+        credit_gr = GRADIENT(immediateCreditAssignment @ influenceTensor)
+        return fmapState(
+            dialect.getGradient,
+            dialect.putGradient,
+            lambda gr: foldGradient(gr, credit_gr),
+        )(data0, env1)
+
+    def grad_(foldGradient: ENDOMORPHIC[GRADIENT]) -> STATEM[DATA, ENV]:
+        ca = lambda d, env: creditAssignment(foldGradient, d, env)
+        return collapseF(iter([getInfluenceTensor, ca]))
+
+    rnn = collapseF(iter([rnnLibrary.activationStep, rnnLibrary.updatePrediction]))
+    rnnWithLoss = collapseF(
+        iter([rnnLibrary.activationStep, rnnLibrary.updatePrediction, loss_])
+    )
+
+    return LearningLibrary[ENV, DATA](
+        rnn=collapseF(iter([rnnLibrary.activationStep, rnnLibrary.updatePrediction])),
+        updateLoss=collapseF(
+            iter([rnnLibrary.activationStep, rnnLibrary.updatePrediction, loss_])
+        ),
+        rnnWithParamGradient=grad_,
+        updateParameter=optimize_,
+    )
+
+
+# creditAssignment = accumGradient(
+#     dialect, readoutFn, lambda _, b: b, dialect.getGradient, dialect.putGradient
+# )
+# lossFn = collapseF(
+#     iter(
+#         [
+#             getInfluenceTensor,
+#             rnnLibrary.updatePrediction,
+#             rnnLibrary.foldLoss(lambda _, ls: ls),
+#         ]
+#     )
+# )
+# todo
+
+# def getCreditAssignment(data0: DATA, env0: ENV) -> ENV:
+#     def reparamertrizeLoss(d: DATA, env: ENV) -> tuple[LOSS, ENV]:
+#         env_ = rnnLibrary.foldLoss(lambda _, ls: ls)(
+#             d, env
+#         )
+#         return dialect.getLoss(env_), env_
 
 
 #!!!!!!!! WILLIAM REFER TO THIS: turn this into a forward passing guys as well
