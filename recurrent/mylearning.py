@@ -1,28 +1,24 @@
 from dataclasses import dataclass
-from typing import Callable, Generic, TypeVar, Protocol, Iterable
+from typing import Callable, Generic, TypeVar, Protocol, Iterable, cast
 import torch
+from recurrent.myrecords import RfloConfig
 from recurrent.objectalgebra.typeclasses import (
     GetActivation,
-    GetGradient,
     GetHyperParameter,
     GetInfluenceTensor,
-    GetLoss,
     GetParameter,
-    GetPrediction,
+    GetRfloConfig,
     HasReadoutWeights,
     HasInput,
     HasPredictionInput,
     HasLabel,
     HasRecurrentWeights,
     PutActivation,
-    PutGradient,
     PutInfluenceTensor,
-    PutLoss,
     PutParameter,
     PutPrediction,
 )
 
-import itertools
 from recurrent.mytypes import *
 from operator import add
 from recurrent.monad import (
@@ -65,6 +61,9 @@ PARAM_TENSOR = TypeVar("PARAM_TENSOR", bound=torch.Tensor)
 ACTIV_TENSOR = TypeVar("ACTIV_TENSOR", bound=torch.Tensor)
 
 DATA_NEW = TypeVar("DATA_NEW")
+
+T_CON = TypeVar("T_CON", contravariant=True)
+T_CO = TypeVar("T_CO", covariant=True)
 
 
 def jacobian_matrix_product(f, primal, matrix):
@@ -330,9 +329,10 @@ def offlineLearning(
 class _EndowPastFacingGradient(
     GetActivation[ENV, ACTIV],
     PutActivation[ENV, ACTIV],
-    PutParameter[ENV, PARAM_CON],
+    GetParameter[ENV, PARAM],
+    PutParameter[ENV, PARAM],
     GetInfluenceTensor[ENV, INFLUENCETENSOR],
-    Protocol[ENV, ACTIV, PARAM_CON],
+    Protocol[ENV, ACTIV, PARAM],
 ):
     pass
 
@@ -342,8 +342,14 @@ def endowPastFacingGradient(
     dataDialect: HasLabel[DATA, Z],
     computeLoss: Callable[[Z, PRED], LOSS],
     getInfluenceTensorFactory: Callable[
-        [Callable[[DATA, ENV, ACTIV_TENSOR, PARAM], tuple[ACTIV_TENSOR, ENV]]],
-        ReaderState[DATA, ENV, Unit],
+        [
+            ACTIV_TENSOR,
+            PARAM,
+            INFLUENCETENSOR,
+            ENV,
+            Callable[[ACTIV_TENSOR, PARAM], tuple[ACTIV_TENSOR, ENV]],
+        ],
+        ENV,
     ],
     rnnLibrary: RnnLibrary[ENV, PRED, DATA],
 ) -> GradientLibrary[ENV, PRED, DATA]:
@@ -366,22 +372,31 @@ def endowPastFacingGradient(
         )
     )
 
-    def reparametrizeActivation(
-        d: DATA, env0: ENV, a: ACTIV_TENSOR, p: PARAM
-    ) -> tuple[ACTIV_TENSOR, ENV]:
-        doActiv = (
-            ReaderState[DATA, ENV, ENV]
-            .get()
-            .fmap(lambda env: dialect.putActivation(a, env))
-            .fmap(lambda env: dialect.putParameter(p, env))
-            .bind(ReaderState[DATA, ENV, ENV].put)
-            .then(rnnLibrary.activationStep)
-            .then(ReaderState[DATA, ENV, ENV].get())
-            .fmap(dialect.getActivation)
-        )
-        return doActiv.run(d, env0)
+    def buildInfluenceTensor(data0: DATA, env0: ENV) -> tuple[Unit, ENV]:
+        def reparametrizeActivation(
+            a: ACTIV_TENSOR, p: PARAM
+        ) -> tuple[ACTIV_TENSOR, ENV]:
+            doActiv = (
+                ReaderState[DATA, ENV, ENV]
+                .get()
+                .fmap(lambda env: dialect.putActivation(a, env))
+                .fmap(lambda env: dialect.putParameter(p, env))
+                .bind(ReaderState[DATA, ENV, ENV].put)
+                .then(rnnLibrary.activationStep)
+                .then(ReaderState[DATA, ENV, ENV].get())
+                .fmap(dialect.getActivation)
+            )
+            return doActiv.run(data0, env0)
 
-    gradient = getInfluenceTensorFactory(reparametrizeActivation).then(creditAssignment)
+        a0 = dialect.getActivation(env0)
+        p0 = dialect.getParameter(env0)
+        influenceTensor = dialect.getInfluenceTensor(env0)
+
+        return Unit(), getInfluenceTensorFactory(
+            a0, p0, influenceTensor, env0, reparametrizeActivation
+        )
+
+    gradient = reader(buildInfluenceTensor).then(creditAssignment)
 
     return GradientLibrary[ENV, PRED, DATA](
         rnn=rnnLibrary.rnnStep(),
@@ -409,78 +424,74 @@ def RTRL(
     rnnLibrary: RnnLibrary[ENV, PRED, DATA],
 ) -> GradientLibrary[ENV, PRED, DATA]:
 
-    def factory(
+    def getInfluenceTensor(
+        a0: ACTIV,
+        p0: PARAM,
+        influenceTensor: INFLUENCETENSOR,
+        _: ENV,
         reparametrizeActivation: Callable[
-            [DATA, ENV, ACTIV_TENSOR, PARAM], tuple[ACTIV_TENSOR, ENV]
-        ]
-    ) -> ReaderState[DATA, ENV, Unit]:
+            [ACTIV_TENSOR, PARAM], tuple[ACTIV_TENSOR, ENV]
+        ],
+    ) -> ENV:
+        # I take the jvp bc 'wrt_activ' could compute a jacobian, so I'd like to 1) do a hvp 2) forward over reverse is efficient: https://jax.readthedocs.io/en/latest/notebooks/autodiff_cookbook.html
+        immediateJacobianInfluenceProduct: torch.Tensor = jacobian_matrix_product(
+            lambda a: reparametrizeActivation(a, p0)[0],
+            a0,
+            influenceTensor,
+        )
+        # performance below really depends on the problem. For RTRL, I should use jacrev. For OHO, jacfwd. Will make this configurable later.
+        immediateInfluence, env = torch.func.jacfwd(
+            reparametrizeActivation, argnums=1, has_aux=True
+        )(a0, p0)
 
-        def getInfluenceTensor(data0: DATA, env0: ENV) -> tuple[Unit, ENV]:
-            a0 = dialect.getActivation(env0)
-            p0 = dialect.getParameter(env0)
-            influenceTensor = dialect.getInfluenceTensor(env0)
-
-            # I take the jvp bc 'wrt_activ' could compute a jacobian, so I'd like to 1) do a hvp 2) forward over reverse is efficient: https://jax.readthedocs.io/en/latest/notebooks/autodiff_cookbook.html
-            immediateJacobianInfluenceProduct: torch.Tensor = jacobian_matrix_product(
-                lambda a: reparametrizeActivation(data0, env0, a, p0)[0],
-                a0,
-                influenceTensor,
-            )
-            # performance below really depends on the problem. For RTRL, I should use jacrev. For OHO, jacfwd. Will make this configurable later.
-            immediateInfluence, env = torch.func.jacfwd(
-                reparametrizeActivation, argnums=3, has_aux=True
-            )(data0, env0, a0, p0)
-
-            influenceTensor_ = INFLUENCETENSOR(
-                immediateJacobianInfluenceProduct + immediateInfluence
-            )
-            return Unit(), dialect.putInfluenceTensor(influenceTensor_, env)
-
-        return reader(getInfluenceTensor)
+        influenceTensor_ = INFLUENCETENSOR(
+            immediateJacobianInfluenceProduct + immediateInfluence
+        )
+        return dialect.putInfluenceTensor(influenceTensor_, env)
 
     return endowPastFacingGradient(
-        dialect, dataDialect, computeLoss, factory, rnnLibrary
+        dialect, dataDialect, computeLoss, getInfluenceTensor, rnnLibrary
     )
 
 
+class _RfloDialect(
+    _RtrlDialect[ENV, ACTIV, PARAM],
+    GetRfloConfig[ENV],
+    Protocol[ENV, ACTIV, PARAM],
+):
+    pass
+
+
 def RFLO(
-    dialect: _RtrlDialect[ENV, ACTIV_TENSOR, PARAM],
+    dialect: _RfloDialect[ENV, ACTIV_TENSOR, PARAM],
     dataDialect: HasLabel[DATA, Z],
     computeLoss: Callable[[Z, PRED], LOSS],
     rnnLibrary: RnnLibrary[ENV, PRED, DATA],
 ) -> GradientLibrary[ENV, PRED, DATA]:
 
-    def factory(
+    def getInfluenceTensor(
+        a0: ACTIV,
+        p0: PARAM,
+        influenceTensor: INFLUENCETENSOR,
+        env0: ENV,
         reparametrizeActivation: Callable[
-            [DATA, ENV, ACTIV_TENSOR, PARAM], tuple[ACTIV_TENSOR, ENV]
-        ]
-    ) -> ReaderState[DATA, ENV, Unit]:
+            [ACTIV_TENSOR, PARAM], tuple[ACTIV_TENSOR, ENV]
+        ],
+    ) -> ENV:
+        # python doesn't understand closures, so I need to explictly tell it
+        alpha = dialect.getRfloConfig(env0).rflo_alpha
 
-        def getInfluenceTensor(data0: DATA, env0: ENV) -> tuple[Unit, ENV]:
-            a0 = dialect.getActivation(env0)
-            p0 = dialect.getParameter(env0)
-            influenceTensor = dialect.getInfluenceTensor(env0)
+        immediateInfluence, env = torch.func.jacrev(
+            reparametrizeActivation, argnums=1, has_aux=True
+        )(a0, p0)
 
-            # I take the jvp bc 'wrt_activ' could compute a jacobian, so I'd like to 1) do a hvp 2) forward over reverse is efficient: https://jax.readthedocs.io/en/latest/notebooks/autodiff_cookbook.html
-            immediateJacobianInfluenceProduct: torch.Tensor = jacobian_matrix_product(
-                lambda a: reparametrizeActivation(data0, env0, a, p0)[0],
-                a0,
-                influenceTensor,
-            )
-            # performance below really depends on the problem. For RTRL, I should use jacrev. For OHO, jacfwd. Will make this configurable later.
-            immediateInfluence, env = torch.func.jacfwd(
-                reparametrizeActivation, argnums=3, has_aux=True
-            )(data0, env0, a0, p0)
-
-            influenceTensor_ = INFLUENCETENSOR(
-                immediateJacobianInfluenceProduct + immediateInfluence
-            )
-            return Unit(), dialect.putInfluenceTensor(influenceTensor_, env)
-
-        return reader(getInfluenceTensor)
+        influenceTensor_ = INFLUENCETENSOR(
+            (1 - alpha) * influenceTensor + alpha * immediateInfluence
+        )
+        return dialect.putInfluenceTensor(influenceTensor_, env)
 
     return endowPastFacingGradient(
-        dialect, dataDialect, computeLoss, factory, rnnLibrary
+        dialect, dataDialect, computeLoss, getInfluenceTensor, rnnLibrary
     )
 
 
