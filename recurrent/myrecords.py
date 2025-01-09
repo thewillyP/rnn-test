@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from typing import Callable, Protocol
 import torch
 from recurrent.mytypes import *
+from torch.utils import _pytree as pytree
+
 
 # This is just an entity component model  https://news.ycombinator.com/item?id=7496968
 # DO NOT USE NESTED INHERITANCE, SHALLOW MIXINS ONLY
@@ -10,7 +12,7 @@ from recurrent.mytypes import *
 
 
 @dataclass(frozen=True)
-class RnnConfig(Protocol):
+class WithRnnConfig(Protocol):
     n_h: int
     n_in: int
     n_out: int
@@ -18,34 +20,34 @@ class RnnConfig(Protocol):
     activationFn: Callable[[torch.Tensor], torch.Tensor]
 
 
-@dataclass(frozen=True)
-class WithTrainPrediction(Protocol):
-    trainPrediction: PREDICTION
+# @dataclass(frozen=True)
+# class WithTrainPrediction(Protocol):
+#     trainPrediction: PREDICTION
 
 
-@dataclass(frozen=True)
-class WithTrainLoss(Protocol):
-    trainLoss: LOSS
+# @dataclass(frozen=True)
+# class WithTrainLoss(Protocol):
+#     trainLoss: LOSS
 
 
-@dataclass(frozen=True)
-class WithTrainGradient(Protocol):
-    trainGradient: GRADIENT
+# @dataclass(frozen=True)
+# class WithTrainGradient(Protocol):
+#     trainGradient: GRADIENT
 
 
-@dataclass(frozen=True)
-class WithValidationPrediction(Protocol):
-    validationPrediction: PREDICTION
+# @dataclass(frozen=True)
+# class WithValidationPrediction(Protocol):
+#     validationPrediction: PREDICTION
 
 
-@dataclass(frozen=True)
-class WithValidationLoss(Protocol):
-    validationLoss: LOSS
+# @dataclass(frozen=True)
+# class WithValidationLoss(Protocol):
+#     validationLoss: LOSS
 
 
-@dataclass(frozen=True)
-class WithValidationGradient(Protocol):
-    validationGradient: GRADIENT
+# @dataclass(frozen=True)
+# class WithValidationGradient(Protocol):
+#     validationGradient: GRADIENT
 
 
 @dataclass(frozen=True)
@@ -90,14 +92,12 @@ class WithBilevelRflo(Protocol):
 
 
 @dataclass(frozen=True)
-class RnnEnv(RnnConfig, WithRnn):
+class RnnEnv(WithRnnConfig, WithRnn):
     pass
 
 
 @dataclass(frozen=True)
-class RnnLearnable(
-    RnnEnv, WithTrainPrediction, WithTrainLoss, WithTrainGradient, WithHyperparameter
-):
+class RnnLearnable(RnnEnv, WithHyperparameter):
     pass
 
 
@@ -115,9 +115,6 @@ class RnnFutureState(RnnLearnable, WithBaseFuture):
 class BilevelLearnable(
     RnnLearnable,
     WithBilevel,
-    WithValidationPrediction,
-    WithValidationLoss,
-    WithValidationGradient,
 ):
     pass
 
@@ -140,6 +137,36 @@ class BilevelFutureState(BilevelLearnable, WithBaseFuture):
 @dataclass(frozen=True)
 class OhoFutureState(BilevelLearnable, WithOhoFuture, WithBaseFuture):
     pass
+
+
+def rnnBPTTState_flatten(rnnBpttState: RnnBPTTState):
+    return (rnnBpttState.activation,), (
+        rnnBpttState.parameter,
+        rnnBpttState.hyperparameter,
+        rnnBpttState.n_h,
+        rnnBpttState.n_in,
+        rnnBpttState.n_out,
+        rnnBpttState.alpha,
+        rnnBpttState.activationFn,
+    )
+
+
+def rnnBPTTState_unflatten(children, aux):
+    a = children[0]
+    p, hp, n_h, n_in, n_out, alpha, activationFn = aux
+    return RnnBPTTState(
+        activation=a,
+        parameter=p,
+        hyperparameter=hp,
+        n_h=n_h,
+        n_in=n_in,
+        n_out=n_out,
+        alpha=alpha,
+        activationFn=activationFn,
+    )
+
+
+pytree.register_pytree_node(RnnBPTTState, rnnBPTTState_flatten, rnnBPTTState_unflatten)
 
 
 # @dataclass(frozen=True)

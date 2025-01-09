@@ -58,46 +58,46 @@ class IsParameterOHO(
     )
 
 
-class IsLossOHO(
-    Generic[_BILEVEL_LEARNABLE],
-    GetLoss[_BILEVEL_LEARNABLE, LOSS],
-    PutLoss[_BILEVEL_LEARNABLE, LOSS],
-):
-    @staticmethod
-    def getLoss(env: _BILEVEL_LEARNABLE) -> LOSS:
-        return env.validationLoss
+# class IsLossOHO(
+#     Generic[_BILEVEL_LEARNABLE],
+#     GetLoss[_BILEVEL_LEARNABLE, LOSS],
+#     PutLoss[_BILEVEL_LEARNABLE, LOSS],
+# ):
+#     @staticmethod
+#     def getLoss(env: _BILEVEL_LEARNABLE) -> LOSS:
+#         return env.validationLoss
 
-    @staticmethod
-    def putLoss(s: LOSS, env: _BILEVEL_LEARNABLE) -> _BILEVEL_LEARNABLE:
-        return replace(env, validationLoss=s)
-
-
-class IsGradientOHO(
-    Generic[_BILEVEL_LEARNABLE],
-    GetGradient[_BILEVEL_LEARNABLE, GRADIENT],
-    PutGradient[_BILEVEL_LEARNABLE, GRADIENT],
-):
-    @staticmethod
-    def getGradient(env: _BILEVEL_LEARNABLE) -> GRADIENT:
-        return env.validationGradient
-
-    @staticmethod
-    def putGradient(s: GRADIENT, env: _BILEVEL_LEARNABLE) -> _BILEVEL_LEARNABLE:
-        return replace(env, validationGradient=s)
+#     @staticmethod
+#     def putLoss(s: LOSS, env: _BILEVEL_LEARNABLE) -> _BILEVEL_LEARNABLE:
+#         return replace(env, validationLoss=s)
 
 
-class IsPredictionOHO(
-    Generic[_BILEVEL_LEARNABLE],
-    GetPrediction[_BILEVEL_LEARNABLE, PREDICTION],
-    PutPrediction[_BILEVEL_LEARNABLE, PREDICTION],
-):
-    @staticmethod
-    def getPrediction(env: _BILEVEL_LEARNABLE) -> PREDICTION:
-        return env.validationPrediction
+# class IsGradientOHO(
+#     Generic[_BILEVEL_LEARNABLE],
+#     GetGradient[_BILEVEL_LEARNABLE, GRADIENT],
+#     PutGradient[_BILEVEL_LEARNABLE, GRADIENT],
+# ):
+#     @staticmethod
+#     def getGradient(env: _BILEVEL_LEARNABLE) -> GRADIENT:
+#         return env.validationGradient
 
-    @staticmethod
-    def putPrediction(s: PREDICTION, env: _BILEVEL_LEARNABLE) -> _BILEVEL_LEARNABLE:
-        return replace(env, validationPrediction=s)
+#     @staticmethod
+#     def putGradient(s: GRADIENT, env: _BILEVEL_LEARNABLE) -> _BILEVEL_LEARNABLE:
+#         return replace(env, validationGradient=s)
+
+
+# class IsPredictionOHO(
+#     Generic[_BILEVEL_LEARNABLE],
+#     GetPrediction[_BILEVEL_LEARNABLE, PREDICTION],
+#     PutPrediction[_BILEVEL_LEARNABLE, PREDICTION],
+# ):
+#     @staticmethod
+#     def getPrediction(env: _BILEVEL_LEARNABLE) -> PREDICTION:
+#         return env.validationPrediction
+
+#     @staticmethod
+#     def putPrediction(s: PREDICTION, env: _BILEVEL_LEARNABLE) -> _BILEVEL_LEARNABLE:
+#         return replace(env, validationPrediction=s)
 
 
 class IsHyperParameterOHO(
@@ -182,9 +182,9 @@ class BilevelInterpreter(
     IsHyperParameterOHO[_BILEVEL_LEARNABLE],
     IsRecurrentWeightsOHO[_BILEVEL_LEARNABLE],
     IsReadoutWeightsOHO[_BILEVEL_LEARNABLE],
-    IsLossOHO[_BILEVEL_LEARNABLE],
-    IsGradientOHO[_BILEVEL_LEARNABLE],
-    IsPredictionOHO[_BILEVEL_LEARNABLE],
+    # IsLossOHO[_BILEVEL_LEARNABLE],
+    # IsGradientOHO[_BILEVEL_LEARNABLE],
+    # IsPredictionOHO[_BILEVEL_LEARNABLE],
 ):
     pass
 
@@ -197,9 +197,9 @@ class BilevelWithOhoInterpreter(
     IsRecurrentWeightsOHO[_OHO_FUTURE],
     IsReadoutWeightsOHO[_OHO_FUTURE],
     IsInfluenceTensorOHO[_OHO_FUTURE],
-    IsLossOHO[_OHO_FUTURE],
-    IsGradientOHO[_OHO_FUTURE],
-    IsPredictionOHO[_OHO_FUTURE],
+    # IsLossOHO[_OHO_FUTURE],
+    # IsGradientOHO[_OHO_FUTURE],
+    # IsPredictionOHO[_OHO_FUTURE],
 ):
     pass
 

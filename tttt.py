@@ -156,46 +156,95 @@
 
 
 import time
+from typing import Callable, Iterable
 import torch
 from torch.utils import _pytree as pytree
 from dataclasses import dataclass
+
+torch.manual_seed(0)
+
+
+def tree_stack(trees: Iterable[pytree.PyTree]) -> pytree.PyTree:
+    return pytree.tree_map(lambda *v: torch.stack(v), *trees)
+
+
+def tree_unstack(tree: pytree.PyTree) -> Iterable[pytree.PyTree]:
+    leaves, treedef = pytree.tree_flatten(tree)
+    return [treedef.unflatten(leaf) for leaf in zip(*leaves, strict=True)]
+
+
+# @dataclass(frozen=True)
+# class Pytree:
+#     a: torch.Tensor
+
+#     def __iter__(self):
+#         return iter(tree_unstack(self))
+
+
+# def customdata_flatten(custom_data: Pytree):
+#     return (custom_data.a,), None
+
+
+# def customdata_unflatten(children, _):
+#     return Pytree(a=children[0])
+
+
+# pytree.register_pytree_node(Pytree, customdata_flatten, customdata_unflatten)
+
+# # Create instances of the dataclass pytree
+# pytree1 = Pytree(a=torch.tensor([1, 2]))
+# pytree2 = Pytree(a=torch.tensor([7, 8]))
+
+# # Stack them into one list of pytrees
+# stacked_pytrees = tree_stack([pytree1, pytree2])
+
+# # Iterate over all leaves
+# for leaf in stacked_pytrees:
+#     print(leaf)
 
 
 @dataclass(frozen=True)
 class CustomData:
     value: torch.Tensor  # Batched tensor
     aux: int  # Static metadata (not batched)
+    test: Callable[[int], int]
+
+    def __iter__(self):
+        return iter(tree_unstack(self))
 
 
 # Register the PyTree
 def customdata_flatten(custom_data: CustomData):
-    return (custom_data.value,), custom_data.aux
+    return (custom_data.value,), (custom_data.aux, custom_data.test)
 
 
 def customdata_unflatten(children, aux):
-    return CustomData(value=children[0], aux=aux)
+    return CustomData(value=children[0], aux=aux[0], test=aux[1])
 
 
 pytree.register_pytree_node(CustomData, customdata_flatten, customdata_unflatten)
 
 
 def tester(data: CustomData):
-    return CustomData(data.value, data.aux + 10)
+    return CustomData(data.value, data.aux + 10, data.test)
 
 
 def process_custom_data(data: CustomData):
     # Simulate a more expensive computation
     env = CustomData(
-        data.value**data.aux, data.aux + 5
+        data.value ** data.test(data.aux), data.aux + 5, data.test
     )  # also works!: data.aux + torch.ceil(data.value.mean()).int()
     return tester(env)
 
 
 # Batched input
-values = torch.randn(100000, 1)  # Larger batched data for meaningful benchmarking
+values1 = torch.randn(100000, 1)  # Larger batched data for meaningful benchmarking
+values2 = torch.randn(100000, 1)
 aux_value = 2  # Static metadata (not batched)
 
-batched_data = CustomData(value=values, aux=aux_value)
+batched_data = CustomData(value=values1, aux=aux_value, test=lambda x: x + 1)
+# batched_data2 = CustomData(value=values2, aux=aux_value, test=lambda x: x)
+# batched_data = tree_stack([batched_data1, batched_data2])
 
 
 # Benchmark manual loop

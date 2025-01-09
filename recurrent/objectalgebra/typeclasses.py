@@ -72,40 +72,40 @@ class HasReadoutWeights(Generic[_ENV, _T, _E], Protocol):
         pass
 
 
-class GetLoss(Generic[_ENV, _E], Protocol):
-    @staticmethod
-    def getLoss(env: _ENV) -> _E:
-        pass
+# class GetLoss(Generic[_ENV, _E], Protocol):
+#     @staticmethod
+#     def getLoss(env: _ENV) -> _E:
+#         pass
 
 
-class PutLoss(Generic[ENV, _T], Protocol):
-    @staticmethod
-    def putLoss(s: _T, env: ENV) -> ENV:
-        pass
+# class PutLoss(Generic[ENV, _T], Protocol):
+#     @staticmethod
+#     def putLoss(s: _T, env: ENV) -> ENV:
+#         pass
 
 
-class GetGradient(Generic[_ENV, _E], Protocol):
-    @staticmethod
-    def getGradient(env: _ENV) -> _E:
-        pass
+# class GetGradient(Generic[_ENV, _E], Protocol):
+#     @staticmethod
+#     def getGradient(env: _ENV) -> _E:
+#         pass
 
 
-class PutGradient(Generic[ENV, _T], Protocol):
-    @staticmethod
-    def putGradient(s: _T, env: ENV) -> ENV:
-        pass
+# class PutGradient(Generic[ENV, _T], Protocol):
+#     @staticmethod
+#     def putGradient(s: _T, env: ENV) -> ENV:
+#         pass
 
 
-class GetPrediction(Generic[_ENV, _E], Protocol):
-    @staticmethod
-    def getPrediction(env: _ENV) -> _E:
-        pass
+# class GetPrediction(Generic[_ENV, _E], Protocol):
+#     @staticmethod
+#     def getPrediction(env: _ENV) -> _E:
+#         pass
 
 
-class PutPrediction(Generic[ENV, _T], Protocol):
-    @staticmethod
-    def putPrediction(s: _T, env: ENV) -> ENV:
-        pass
+# class PutPrediction(Generic[ENV, _T], Protocol):
+#     @staticmethod
+#     def putPrediction(s: _T, env: ENV) -> ENV:
+#         pass
 
 
 class GetRfloConfig(Generic[_ENV], Protocol):

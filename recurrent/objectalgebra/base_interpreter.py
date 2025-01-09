@@ -3,14 +3,11 @@ from dataclasses import dataclass, replace
 from recurrent.mytypes import *
 from recurrent.myrecords import (
     RfloConfig,
-    RnnConfig,
+    WithRnnConfig,
     WithBaseFuture,
     WithHyperparameter,
     WithBaseRflo,
     WithRnn,
-    WithTrainGradient,
-    WithTrainLoss,
-    WithTrainPrediction,
 )
 from recurrent.util import rnnSplitParameters
 from typing import Protocol
@@ -18,7 +15,7 @@ from recurrent.objectalgebra.typeclasses import *
 
 
 @dataclass(frozen=True)
-class _Rnn_Env(RnnConfig, WithRnn, Protocol):
+class _Rnn_Env(WithRnnConfig, WithRnn, Protocol):
     pass
 
 
@@ -74,9 +71,9 @@ class IsReadoutWeights(
 @dataclass(frozen=True)
 class _Rnn_Learnable(
     _Rnn_Env,
-    WithTrainPrediction,
-    WithTrainLoss,
-    WithTrainGradient,
+    # WithTrainPrediction,
+    # WithTrainLoss,
+    # WithTrainGradient,
     WithHyperparameter,
     Protocol,
 ):
@@ -100,46 +97,46 @@ class IsHyperParameter(
         return replace(env, hyperparameter=s)
 
 
-class IsLoss(
-    Generic[_RNN_LEARNABLE],
-    GetLoss[_RNN_LEARNABLE, LOSS],
-    PutLoss[_RNN_LEARNABLE, LOSS],
-):
-    @staticmethod
-    def getLoss(env: _RNN_LEARNABLE) -> LOSS:
-        return env.trainLoss
+# class IsLoss(
+#     Generic[_RNN_LEARNABLE],
+#     GetLoss[_RNN_LEARNABLE, LOSS],
+#     PutLoss[_RNN_LEARNABLE, LOSS],
+# ):
+#     @staticmethod
+#     def getLoss(env: _RNN_LEARNABLE) -> LOSS:
+#         return env.trainLoss
 
-    @staticmethod
-    def putLoss(s: LOSS, env: _RNN_LEARNABLE) -> _RNN_LEARNABLE:
-        return replace(env, trainLoss=s)
-
-
-class IsGradient(
-    Generic[_RNN_LEARNABLE],
-    GetGradient[_RNN_LEARNABLE, GRADIENT],
-    PutGradient[_RNN_LEARNABLE, GRADIENT],
-):
-    @staticmethod
-    def getGradient(env: _RNN_LEARNABLE) -> GRADIENT:
-        return env.trainGradient
-
-    @staticmethod
-    def putGradient(s: GRADIENT, env: _RNN_LEARNABLE) -> _RNN_LEARNABLE:
-        return replace(env, trainGradient=s)
+#     @staticmethod
+#     def putLoss(s: LOSS, env: _RNN_LEARNABLE) -> _RNN_LEARNABLE:
+#         return replace(env, trainLoss=s)
 
 
-class IsPrediction(
-    Generic[_RNN_LEARNABLE],
-    GetPrediction[_RNN_LEARNABLE, PREDICTION],
-    PutPrediction[_RNN_LEARNABLE, PREDICTION],
-):
-    @staticmethod
-    def getPrediction(env: _RNN_LEARNABLE) -> PREDICTION:
-        return env.trainPrediction
+# class IsGradient(
+#     Generic[_RNN_LEARNABLE],
+#     GetGradient[_RNN_LEARNABLE, GRADIENT],
+#     PutGradient[_RNN_LEARNABLE, GRADIENT],
+# ):
+#     @staticmethod
+#     def getGradient(env: _RNN_LEARNABLE) -> GRADIENT:
+#         return env.trainGradient
 
-    @staticmethod
-    def putPrediction(s: PREDICTION, env: _RNN_LEARNABLE) -> _RNN_LEARNABLE:
-        return replace(env, trainPrediction=s)
+#     @staticmethod
+#     def putGradient(s: GRADIENT, env: _RNN_LEARNABLE) -> _RNN_LEARNABLE:
+#         return replace(env, trainGradient=s)
+
+
+# class IsPrediction(
+#     Generic[_RNN_LEARNABLE],
+#     GetPrediction[_RNN_LEARNABLE, PREDICTION],
+#     PutPrediction[_RNN_LEARNABLE, PREDICTION],
+# ):
+#     @staticmethod
+#     def getPrediction(env: _RNN_LEARNABLE) -> PREDICTION:
+#         return env.trainPrediction
+
+#     @staticmethod
+#     def putPrediction(s: PREDICTION, env: _RNN_LEARNABLE) -> _RNN_LEARNABLE:
+#         return replace(env, trainPrediction=s)
 
 
 @dataclass(frozen=True)
@@ -200,9 +197,9 @@ class RnnLearnableInterpreter(
     IsHyperParameter[_RNN_LEARNABLE],
     IsRecurrentWeights[_RNN_LEARNABLE],
     IsReadoutWeights[_RNN_LEARNABLE],
-    IsLoss[_RNN_LEARNABLE],
-    IsGradient[_RNN_LEARNABLE],
-    IsPrediction[_RNN_LEARNABLE],
+    # IsLoss[_RNN_LEARNABLE],
+    # IsGradient[_RNN_LEARNABLE],
+    # IsPrediction[_RNN_LEARNABLE],
 ):
     pass
 
@@ -216,9 +213,9 @@ class RnnWithFutureInterpreter(
     IsRecurrentWeights[_BASE_FUTURE_CAP],
     IsReadoutWeights[_BASE_FUTURE_CAP],
     IsInfluenceTensor[_BASE_FUTURE_CAP],
-    IsLoss[_BASE_FUTURE_CAP],
-    IsGradient[_BASE_FUTURE_CAP],
-    IsPrediction[_BASE_FUTURE_CAP],
+    # IsLoss[_BASE_FUTURE_CAP],
+    # IsGradient[_BASE_FUTURE_CAP],
+    # IsPrediction[_BASE_FUTURE_CAP],
 ):
     pass
 

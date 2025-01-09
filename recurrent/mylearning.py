@@ -16,7 +16,6 @@ from recurrent.objectalgebra.typeclasses import (
     PutActivation,
     PutInfluenceTensor,
     PutParameter,
-    PutPrediction,
 )
 
 from recurrent.mytypes import *
@@ -264,8 +263,7 @@ class _RnnDialect(
     GetParameter[ENV, PARAM],
     HasRecurrentWeights[ENV, PARAM, PARAM_R],
     HasReadoutWeights[ENV, PARAM, PARAM_O],
-    PutPrediction[ENV, PRED_CON],
-    Protocol[ENV, ACTIV, PRED_CON, PARAM, PARAM_R, PARAM_O],
+    Protocol[ENV, ACTIV, PARAM, PARAM_R, PARAM_O],
 ):
     pass
 
@@ -280,7 +278,7 @@ class _RnnDataDialect(
 
 # Smart constructor
 def createRnnLibrary(
-    dialect: _RnnDialect[ENV, ACTIV, PRED, PARAM, PARAM_R, PARAM_O],
+    dialect: _RnnDialect[ENV, ACTIV, PARAM, PARAM_R, PARAM_O],
     dataDialect: _RnnDataDialect[DATA, X, Y, Z],
     activationStep: Callable[[X, ACTIV, PARAM_R], ACTIV],
     predictionStep: Callable[[Y, ACTIV, PARAM_O], PRED],

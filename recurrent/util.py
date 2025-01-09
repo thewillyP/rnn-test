@@ -1,9 +1,11 @@
-from typing import TypeVar
+from typing import Iterable, TypeVar
 import torch
-from recurrent.myrecords import RnnConfig
+from recurrent.myrecords import WithRnnConfig
 from recurrent.mytypes import PARAMETER
+from torch.utils import _pytree as pytree
 
-_RNNGOD = TypeVar("_RNNGOD", bound=RnnConfig)
+
+_RNNGOD = TypeVar("_RNNGOD", bound=WithRnnConfig)
 
 
 def rnnSplitParameters(
@@ -26,3 +28,12 @@ def jacobian(outs, inps) -> torch.Tensor:
         ]
 
     return torch.vmap(get_vjp)(I_N)
+
+
+def tree_stack(trees: Iterable[pytree.PyTree]) -> pytree.PyTree:
+    return pytree.tree_map(lambda *v: torch.stack(v), *trees)
+
+
+def tree_unstack(tree: pytree.PyTree) -> Iterable[pytree.PyTree]:
+    leaves, treedef = pytree.tree_flatten(tree)
+    return [treedef.unflatten(leaf) for leaf in zip(*leaves, strict=True)]

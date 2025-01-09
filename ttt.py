@@ -16,36 +16,36 @@
 # print(jacobian)  # The Jacobian matrix
 
 
-import torch
-from torch.func import jacrev
-from dataclasses import dataclass, replace
+# import torch
+# from torch.func import jacrev
+# from dataclasses import dataclass, replace
 
-@dataclass(frozen=True)
-class InputData:
-    x: torch.Tensor
-    y: str
+# @dataclass(frozen=True)
+# class InputData:
+#     x: torch.Tensor
+#     y: str
 
-def compute_loss(x: torch.Tensor) -> torch.Tensor:
-    data = InputData(x=x, y="hi")
-    new_data = replace(data, y="hello")
-    new_data = replace(new_data, x=new_data.x * 4)
-    loss = (new_data.x ** 2).sum()
-    return loss
+# def compute_loss(x: torch.Tensor) -> torch.Tensor:
+#     data = InputData(x=x, y="hi")
+#     new_data = replace(data, y="hello")
+#     new_data = replace(new_data, x=new_data.x * 4)
+#     loss = (new_data.x ** 2).sum()
+#     return loss
 
-x = torch.tensor([1.0, 2.0, 3.0], requires_grad=True)
+# x = torch.tensor([1.0, 2.0, 3.0], requires_grad=True)
 
-jacobian_fn = jacrev(compute_loss)
-jacobian = jacobian_fn(x)
+# jacobian_fn = jacrev(compute_loss)
+# jacobian = jacobian_fn(x)
 
-print("Loss:", compute_loss(x).item())
-print("Jacobian wrt x:", jacobian)
+# print("Loss:", compute_loss(x).item())
+# print("Jacobian wrt x:", jacobian)
 
 
-# Compute the loss
-loss = compute_loss(x)
+# # Compute the loss
+# loss = compute_loss(x)
 
-grad = torch.autograd.grad(loss, x)[0]
+# grad = torch.autograd.grad(loss, x)[0]
 
-# Print the computed loss and the gradient with respect to `x`
-print("Autograd Loss:", loss.item())
-print("Autograd Gradient wrt x:", grad)
+# # Print the computed loss and the gradient with respect to `x`
+# print("Autograd Loss:", loss.item())
+# print("Autograd Gradient wrt x:", grad)
