@@ -59,7 +59,7 @@ def rnnReadout(
 
 def trainStep(unbatched_time_series: Input2Output1):
 
-    n_h = 30
+    n_h = 10000
     n_in = 2
     n_out = 1
     learning_rate = 0.1
@@ -99,7 +99,7 @@ def trainStep(unbatched_time_series: Input2Output1):
     return predictions
 
 
-length = 100000
+length = 100
 random_data = torch.randn(length, 3)
 dataclass_list = map(
     lambda row: Input2Output1(x1=row[0], x2=row[1], y=row[2]), random_data
