@@ -24,7 +24,7 @@ from recurrent.monad import (
     ReaderState,
     State,
     Unit,
-    foldM,
+    foldM_,
     runReader,
     toReader,
     reader,
@@ -209,7 +209,7 @@ class GradientLibrary(Generic[ENV, PRED, DATA]):
                 lambda gr_: GRADIENT(gr + gr_ * getWeight(data))
             )
 
-        return toReader(foldM(weight, GRADIENT(torch.tensor(0))))
+        return toReader(foldM_(weight, GRADIENT(torch.tensor(0))))
 
 
 def batchGradients(
@@ -311,7 +311,7 @@ def offlineLearning(
     def accum_loss(d: DATA, accum: LOSS) -> State[ENV, LOSS]:
         return runReader(rnn_with_loss)(d).fmap(lambda l: LOSS(accum + l))
 
-    rnnWithLoss = toReader(foldM(accum_loss, LOSS(torch.tensor(0))))
+    rnnWithLoss = toReader(foldM_(accum_loss, LOSS(torch.tensor(0))))
 
     rnnWithGrad = computeGradient(
         rnnWithLoss, dialect.getParameter, dialect.putParameter

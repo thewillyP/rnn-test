@@ -112,16 +112,30 @@ def toReader(reader_state: Callable[[R], State[S, A]]) -> ReaderState[R, S, A]:
     return ReaderState(run)
 
 
-def foldM(
+# def foldM(
+#     func: Callable[[A, B], State[S, B]], init: B
+# ) -> Callable[[Iterable[A]], State[S, B]]:
+#     def foldM_(xs: Iterable[A]) -> State[S, B]:
+#         def fold(x: A, st: State[S, B]) -> State[S, B]:
+#             return st.bind(lambda acc: func(x, acc))
+
+#         return foldr(fold)(xs, State[S, B].pure(init))
+
+#     return foldM_
+
+
+# strict foldM, prevents RecrusionError at cost of being nonlazy
+def foldM_(
     func: Callable[[A, B], State[S, B]], init: B
 ) -> Callable[[Iterable[A]], State[S, B]]:
-    def foldM_(xs: Iterable[A]) -> State[S, B]:
-        def fold(x: A, st: State[S, B]) -> State[S, B]:
-            return st.bind(lambda acc: func(x, acc))
+    def wrapper(xs: Iterable[A]) -> State[S, B]:
+        def fold(x: A, pair: tuple[B, S]) -> tuple[B, S]:
+            acc, state = pair
+            return func(x, acc).run(state)
 
-        return foldr(fold)(xs, State[S, B].pure(init))
+        return State[S, B](lambda s: foldr(fold)(xs, (init, s)))
 
-    return foldM_
+    return wrapper
 
 
 def traverse(
@@ -133,6 +147,6 @@ def traverse(
             return func(a).fmap(lambda b: acc.append(b))
 
         init: PVector[B] = pvector([])
-        return foldM(go, init)(iterable).fmap(lambda x: cast(Iterable[B], x))
+        return foldM_(go, init)(iterable).fmap(lambda x: cast(Iterable[B], x))
 
     return traverse_

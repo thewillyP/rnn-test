@@ -20,7 +20,7 @@ def customdata_flatten(custom_data: Input2Output1):
 
 
 def customdata_unflatten(children, _):
-    return Input2Output1(x=children[0], y=children[1])
+    return Input2Output1(x1=children[0], x2=children[1], y=children[2])
 
 
 pytree.register_pytree_node(Input2Output1, customdata_flatten, customdata_unflatten)

@@ -207,7 +207,7 @@ def tree_unstack(tree: pytree.PyTree) -> Iterable[pytree.PyTree]:
 class CustomData:
     value: torch.Tensor  # Batched tensor
     aux: int  # Static metadata (not batched)
-    test: Callable[[int], int]
+    # test: Callable[[int], int]
 
     def __iter__(self):
         return iter(tree_unstack(self))
@@ -215,24 +215,27 @@ class CustomData:
 
 # Register the PyTree
 def customdata_flatten(custom_data: CustomData):
-    return (custom_data.value,), (custom_data.aux, custom_data.test)
+    return (custom_data.value,), (custom_data.aux,)
 
 
 def customdata_unflatten(children, aux):
-    return CustomData(value=children[0], aux=aux[0], test=aux[1])
+    return CustomData(
+        value=children[0],
+        aux=aux[0],
+    )
 
 
 pytree.register_pytree_node(CustomData, customdata_flatten, customdata_unflatten)
 
 
 def tester(data: CustomData):
-    return CustomData(data.value, data.aux + 10, data.test)
+    return CustomData(data.value, data.aux + 10)
 
 
 def process_custom_data(data: CustomData):
     # Simulate a more expensive computation
     env = CustomData(
-        data.value ** data.test(data.aux), data.aux + 5, data.test
+        data.value**data.aux, data.aux + 5
     )  # also works!: data.aux + torch.ceil(data.value.mean()).int()
     return tester(env)
 
@@ -242,9 +245,9 @@ values1 = torch.randn(100000, 1)  # Larger batched data for meaningful benchmark
 values2 = torch.randn(100000, 1)
 aux_value = 2  # Static metadata (not batched)
 
-batched_data = CustomData(value=values1, aux=aux_value, test=lambda x: x + 1)
-# batched_data2 = CustomData(value=values2, aux=aux_value, test=lambda x: x)
-# batched_data = tree_stack([batched_data1, batched_data2])
+batched_data1 = CustomData(value=values1, aux=aux_value)
+batched_data2 = CustomData(value=values2, aux=aux_value)
+batched_data = tree_stack([batched_data1, batched_data2])
 
 
 # Benchmark manual loop
@@ -273,4 +276,6 @@ vmap_time = time.time() - start_time_vmap
 print(f"vmap execution time: {vmap_time:.6f} seconds")
 # print(f"Manual loop execution time: {loop_time:.6f} seconds")
 
-print(result_vmap)
+# print(result_vmap)
+for leaf in result_vmap:
+    print(leaf.aux)

@@ -3,6 +3,7 @@ from typing import Callable, Protocol
 import torch
 from recurrent.mytypes import *
 from torch.utils import _pytree as pytree
+from pyrsistent import PClass, field
 
 
 # This is just an entity component model  https://news.ycombinator.com/item?id=7496968
@@ -102,8 +103,17 @@ class RnnLearnable(RnnEnv, WithHyperparameter):
 
 
 @dataclass(frozen=True)
-class RnnBPTTState(RnnLearnable):
-    pass
+class RnnBPTTState(RnnLearnable, PClass):
+    n_h: int = field(type=int, mandatory=True)
+    n_in: int = field(type=int, mandatory=True)
+    n_out: int = field(type=int, mandatory=True)
+    alpha: float = field(type=float, mandatory=True)
+    activationFn: Callable[[torch.Tensor], torch.Tensor] = field(
+        type=Callable[[torch.Tensor], torch.Tensor], mandatory=True
+    )
+    activation: ACTIVATION = field(type=ACTIVATION, mandatory=True)
+    parameter: PARAMETER = field(type=PARAMETER, mandatory=True)
+    hyperparameter: HYPERPARAMETER = field(type=HYPERPARAMETER, mandatory=True)
 
 
 @dataclass(frozen=True)

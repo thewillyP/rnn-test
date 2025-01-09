@@ -7,7 +7,7 @@ import torch
 class IsInput(HasInput[Input2Output1, torch.Tensor]):
     @staticmethod
     def getInput(d: Input2Output1) -> torch.Tensor:
-        return torch.cat((d.x1, d.x2), dim=0)
+        return torch.cat((torch.atleast_1d(d.x1), torch.atleast_1d(d.x2)), dim=0)
 
 
 class IsLabel(HasLabel[Input2Output1, torch.Tensor]):
@@ -22,9 +22,5 @@ class IsPrediction(HasPredictionInput[Input2Output1, torch.Tensor]):
         return torch.empty(0)
 
 
-class Input2Output1Interpreter(
-    HasInput[Input2Output1, torch.Tensor],
-    HasLabel[Input2Output1, torch.Tensor],
-    HasPredictionInput[Input2Output1, torch.Tensor],
-):
+class Input2Output1Interpreter(IsInput, IsLabel, IsPrediction):
     pass
