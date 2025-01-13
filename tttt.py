@@ -155,22 +155,22 @@
 # print(result)
 
 
-import time
-from typing import Callable, Iterable
-import torch
-from torch.utils import _pytree as pytree
-from dataclasses import dataclass
+# import time
+# from typing import Callable, Iterable
+# import torch
+# from torch.utils import _pytree as pytree
+# from dataclasses import dataclass
 
-torch.manual_seed(0)
-
-
-def tree_stack(trees: Iterable[pytree.PyTree]) -> pytree.PyTree:
-    return pytree.tree_map(lambda *v: torch.stack(v), *trees)
+# torch.manual_seed(0)
 
 
-def tree_unstack(tree: pytree.PyTree) -> Iterable[pytree.PyTree]:
-    leaves, treedef = pytree.tree_flatten(tree)
-    return [treedef.unflatten(leaf) for leaf in zip(*leaves, strict=True)]
+# def tree_stack(trees: Iterable[pytree.PyTree]) -> pytree.PyTree:
+#     return pytree.tree_map(lambda *v: torch.stack(v), *trees)
+
+
+# def tree_unstack(tree: pytree.PyTree) -> Iterable[pytree.PyTree]:
+#     leaves, treedef = pytree.tree_flatten(tree)
+#     return [treedef.unflatten(leaf) for leaf in zip(*leaves, strict=True)]
 
 
 # @dataclass(frozen=True)
@@ -203,79 +203,190 @@ def tree_unstack(tree: pytree.PyTree) -> Iterable[pytree.PyTree]:
 #     print(leaf)
 
 
+# @dataclass(frozen=True)
+# class CustomData:
+#     value: torch.Tensor  # Batched tensor
+#     aux: int  # Static metadata (not batched)
+#     # test: Callable[[int], int]
+
+#     def __iter__(self):
+#         return iter(tree_unstack(self))
+
+
+# # Register the PyTree
+# def customdata_flatten(custom_data: CustomData):
+#     return (custom_data.value,), (custom_data.aux,)
+
+
+# def customdata_unflatten(children, aux):
+#     return CustomData(
+#         value=children[0],
+#         aux=aux[0],
+#     )
+
+
+# pytree.register_pytree_node(CustomData, customdata_flatten, customdata_unflatten)
+
+
+# def tester(data: CustomData):
+#     return CustomData(data.value, data.aux + 10)
+
+
+# def process_custom_data(data: CustomData):
+#     # Simulate a more expensive computation
+#     env = CustomData(
+#         data.value**data.aux, data.aux + 5
+#     )  # also works!: data.aux + torch.ceil(data.value.mean()).int()
+#     return tester(env)
+
+
+# # Batched input
+# values1 = torch.randn(100000, 1)  # Larger batched data for meaningful benchmarking
+# values2 = torch.randn(100000, 1)
+# aux_value = 2  # Static metadata (not batched)
+
+# batched_data1 = CustomData(value=values1, aux=aux_value)
+# batched_data2 = CustomData(value=values2, aux=aux_value)
+# batched_data = tree_stack([batched_data1, batched_data2])
+
+
+# # Benchmark manual loop
+# def manual_loop(data):
+#     results = []
+#     for i in range(data.value.shape[0]):
+#         single_data = CustomData(data.value[i], data.aux)
+#         results.append(process_custom_data(single_data))
+#     return CustomData(value=torch.stack([r.value for r in results]), aux=results[0].aux)
+
+
+# # Measure vmap execution time
+# start_time_vmap = time.time()
+# result_vmap = torch.vmap(process_custom_data)(batched_data)
+# vmap_time = time.time() - start_time_vmap
+
+# # # Measure manual loop execution time
+# # start_time_loop = time.time()
+# # result_loop = manual_loop(batched_data)
+# # loop_time = time.time() - start_time_loop
+
+# # # Validate correctness
+# # assert torch.allclose(result_vmap.value, result_loop.value)
+# # assert result_vmap.aux == result_loop.aux
+
+# print(f"vmap execution time: {vmap_time:.6f} seconds")
+# # print(f"Manual loop execution time: {loop_time:.6f} seconds")
+
+# # print(result_vmap)
+# for leaf in result_vmap:
+#     print(leaf.aux)
+
+
+# from typing import Protocol, Self, TypeVar
+# from pyrsistent import PClass, field
+
+
+# class TempA(PClass):
+#     a: int = field(type=int, mandatory=True)
+#     b: int = field(type=int, mandatory=True)
+
+
+# class SetProtocol(Protocol):
+#     def set(self, *args, **kwargs) -> Self:
+#         pass
+
+
+# T = TypeVar("T", bound=SetProtocol)
+
+
+# def test(d: T):
+#     c = d.set(a=1)
+
+
+# x = TempA(a=1, b=2)
+# test(x)
+
+# from operator import add
+
+
+# def foldr(f):
+#     def foldr_(xs, x):
+#         result = x
+#         for item in xs:
+#             result = f(item, result)
+#         return result
+
+#     return foldr_
+
+
+# import cProfile, pstats
+
+
+# profiler = cProfile.Profile()
+# profiler.enable()
+# foldr(add)(range(100000), 0)
+# profiler.disable()
+# stats = pstats.Stats(profiler).sort_stats("cumtime")
+# stats.print_stats()
+
+
+from dataclasses import dataclass
+import torch
+from torch.utils import _pytree as pytree
+
+
 @dataclass(frozen=True)
-class CustomData:
-    value: torch.Tensor  # Batched tensor
-    aux: int  # Static metadata (not batched)
-    # test: Callable[[int], int]
-
-    def __iter__(self):
-        return iter(tree_unstack(self))
+class MyPyTree:
+    x: torch.Tensor
 
 
-# Register the PyTree
-def customdata_flatten(custom_data: CustomData):
-    return (custom_data.value,), (custom_data.aux,)
+# Register the class as a PyTree
+def tree_flatten(obj):
+    # Extract the tensors as a list and return auxiliary data
+    return [obj.x], None
 
 
-def customdata_unflatten(children, aux):
-    return CustomData(
-        value=children[0],
-        aux=aux[0],
-    )
+def tree_unflatten(children, aux):
+    # Reconstruct the object from its flattened representation
+    return MyPyTree(*children)
 
 
-pytree.register_pytree_node(CustomData, customdata_flatten, customdata_unflatten)
+pytree.register_pytree_node(MyPyTree, tree_flatten, tree_unflatten)
 
 
-def tester(data: CustomData):
-    return CustomData(data.value, data.aux + 10)
+# Define a function to test differentiability
+def func(pytree):
+    return (pytree.x**2).sum()
 
 
-def process_custom_data(data: CustomData):
-    # Simulate a more expensive computation
-    env = CustomData(
-        data.value**data.aux, data.aux + 5
-    )  # also works!: data.aux + torch.ceil(data.value.mean()).int()
-    return tester(env)
+# Create an instance of MyPyTree with tensors
+x = torch.tensor([1.0, 2.0])
+p = MyPyTree(x)
+
+# Compute the Jacobian using jacrev
+print(p)
+jacobian = torch.func.jacrev(func)(p)
+
+# Print the Jacobian to verify
+print("Jacobian for x:", jacobian.x)
+
+print(pytree.tree_map(lambda x, y: x + y, jacobian, p))
 
 
-# Batched input
-values1 = torch.randn(100000, 1)  # Larger batched data for meaningful benchmarking
-values2 = torch.randn(100000, 1)
-aux_value = 2  # Static metadata (not batched)
+# from typing import Generic, TypeVar
 
-batched_data1 = CustomData(value=values1, aux=aux_value)
-batched_data2 = CustomData(value=values2, aux=aux_value)
-batched_data = tree_stack([batched_data1, batched_data2])
+# T = TypeVar("T")
 
 
-# Benchmark manual loop
-def manual_loop(data):
-    results = []
-    for i in range(data.value.shape[0]):
-        single_data = CustomData(data.value[i], data.aux)
-        results.append(process_custom_data(single_data))
-    return CustomData(value=torch.stack([r.value for r in results]), aux=results[0].aux)
+# class Test(Generic[T]):
+#     pass
 
 
-# Measure vmap execution time
-start_time_vmap = time.time()
-result_vmap = torch.vmap(process_custom_data)(batched_data)
-vmap_time = time.time() - start_time_vmap
+# TEST = TypeVar("TEST", bound=Test, contravariant=True)
 
-# # Measure manual loop execution time
-# start_time_loop = time.time()
-# result_loop = manual_loop(batched_data)
-# loop_time = time.time() - start_time_loop
 
-# # Validate correctness
-# assert torch.allclose(result_vmap.value, result_loop.value)
-# assert result_vmap.aux == result_loop.aux
+# def test(x: TEST) -> None:
+#     pass
 
-print(f"vmap execution time: {vmap_time:.6f} seconds")
-# print(f"Manual loop execution time: {loop_time:.6f} seconds")
 
-# print(result_vmap)
-for leaf in result_vmap:
-    print(leaf.aux)
+# t = Test[int]()
+# test(t)

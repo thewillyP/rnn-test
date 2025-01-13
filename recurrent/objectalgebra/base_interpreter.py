@@ -1,228 +1,153 @@
 from typing import Generic
 from dataclasses import dataclass, replace
 from recurrent.mytypes import *
-from recurrent.myrecords import (
-    RfloConfig,
-    WithRnnConfig,
-    WithBaseFuture,
-    WithHyperparameter,
+from recurrent.mixins import (
+    RnnParameter,
+    SgdParameter,
+    WithBasePast,
+    WithRnnActivation,
     WithBaseRflo,
-    WithRnn,
+    WithRnnParameter,
+    WithSgdParameter,
 )
-from recurrent.util import rnnSplitParameters
+from recurrent.parameters import RfloConfig
 from typing import Protocol
 from recurrent.objectalgebra.typeclasses import *
 
 
-@dataclass(frozen=True)
-class _Rnn_Env(WithRnnConfig, WithRnn, Protocol):
-    pass
+_HAS_ACTIVATION = TypeVar("_HAS_ACTIVATION", bound=WithRnnActivation)
 
 
-_RNN_ENV = TypeVar("_RNN_ENV", bound=_Rnn_Env)
-
-
-class IsActivation(
-    Generic[_RNN_ENV],
-    GetActivation[_RNN_ENV, ACTIVATION],
-    PutActivation[_RNN_ENV, ACTIVATION],
+class BaseActivation(
+    Generic[_HAS_ACTIVATION],
+    GetActivation[_HAS_ACTIVATION, ACTIVATION],
+    PutActivation[_HAS_ACTIVATION, ACTIVATION],
 ):
-    @staticmethod
-    def getActivation(env: _RNN_ENV) -> ACTIVATION:
+    def getActivation(self, env: _HAS_ACTIVATION) -> ACTIVATION:
         return env.activation
 
-    @staticmethod
-    def putActivation(s: ACTIVATION, env: _RNN_ENV) -> _RNN_ENV:
-        return replace(env, activation=s)
+    def putActivation(self, z: ACTIVATION, env: _HAS_ACTIVATION) -> _HAS_ACTIVATION:
+        return replace(env, activation=z)
 
 
-class IsParameter(
-    Generic[_RNN_ENV],
-    GetParameter[_RNN_ENV, PARAMETER],
-    PutParameter[_RNN_ENV, PARAMETER],
-):
-    @staticmethod
-    def getParameter(env: _RNN_ENV) -> PARAMETER:
+_IS_RNNP = TypeVar("_IS_RNNP", bound=WithRnnParameter)
+
+
+class BaseRnnParameterRead(Generic[_IS_RNNP], GetParameter[_IS_RNNP, RnnParameter]):
+    def getParameter(self, env: _IS_RNNP) -> RnnParameter:
         return env.parameter
 
-    @staticmethod
-    def putParameter(s: PARAMETER, env: _RNN_ENV) -> _RNN_ENV:
-        return replace(env, parameter=s)
+
+class BaseRnnParameterWrite(Generic[_IS_RNNP], PutParameter[_IS_RNNP, RnnParameter]):
+    def putParameter(self, z: RnnParameter, env: _IS_RNNP) -> _IS_RNNP:
+        return replace(env, parameter=z)
 
 
-class IsRecurrentWeights(
-    Generic[_RNN_ENV], HasRecurrentWeights[_RNN_ENV, PARAMETER, PARAMETER]
+_IS_SGDP = TypeVar("_IS_SGDP", bound=WithSgdParameter)
+
+
+class BaseHyperparameter(
+    Generic[_IS_SGDP],
+    GetHyperParameter[_IS_SGDP, SgdParameter],
+    PutHyperParameter[_IS_SGDP, SgdParameter],
 ):
-    @staticmethod
-    def getRecurrentWeights(s: PARAMETER, env: _RNN_ENV) -> PARAMETER:
-        wrec, _ = rnnSplitParameters(env, s)
-        return wrec
-
-
-class IsReadoutWeights(
-    Generic[_RNN_ENV], HasReadoutWeights[_RNN_ENV, PARAMETER, PARAMETER]
-):
-    @staticmethod
-    def getReadoutWeights(s: PARAMETER, env: _RNN_ENV) -> PARAMETER:
-        _, wout = rnnSplitParameters(env, s)
-        return wout
-
-
-@dataclass(frozen=True)
-class _Rnn_Learnable(
-    _Rnn_Env,
-    # WithTrainPrediction,
-    # WithTrainLoss,
-    # WithTrainGradient,
-    WithHyperparameter,
-    Protocol,
-):
-    pass
-
-
-_RNN_LEARNABLE = TypeVar("_RNN_LEARNABLE", bound=_Rnn_Learnable)
-
-
-class IsHyperParameter(
-    Generic[_RNN_LEARNABLE],
-    GetHyperParameter[_RNN_LEARNABLE, HYPERPARAMETER],
-    PutHyperParameter[_RNN_LEARNABLE, HYPERPARAMETER],
-):
-    @staticmethod
-    def getHyperParameter(env: _RNN_LEARNABLE) -> HYPERPARAMETER:
+    def getHyperParameter(self, env: _IS_SGDP) -> SgdParameter:
         return env.hyperparameter
 
-    @staticmethod
-    def putHyperParameter(s: HYPERPARAMETER, env: _RNN_LEARNABLE) -> _RNN_LEARNABLE:
-        return replace(env, hyperparameter=s)
+    def putHyperParameter(self, z: SgdParameter, env: _IS_SGDP) -> _IS_SGDP:
+        return replace(env, hyperparameter=z)
 
 
-# class IsLoss(
-#     Generic[_RNN_LEARNABLE],
-#     GetLoss[_RNN_LEARNABLE, LOSS],
-#     PutLoss[_RNN_LEARNABLE, LOSS],
-# ):
-#     @staticmethod
-#     def getLoss(env: _RNN_LEARNABLE) -> LOSS:
-#         return env.trainLoss
-
-#     @staticmethod
-#     def putLoss(s: LOSS, env: _RNN_LEARNABLE) -> _RNN_LEARNABLE:
-#         return replace(env, trainLoss=s)
+_HAS_INFLUENCE = TypeVar("_HAS_INFLUENCE", bound=WithBasePast)
 
 
-# class IsGradient(
-#     Generic[_RNN_LEARNABLE],
-#     GetGradient[_RNN_LEARNABLE, GRADIENT],
-#     PutGradient[_RNN_LEARNABLE, GRADIENT],
-# ):
-#     @staticmethod
-#     def getGradient(env: _RNN_LEARNABLE) -> GRADIENT:
-#         return env.trainGradient
-
-#     @staticmethod
-#     def putGradient(s: GRADIENT, env: _RNN_LEARNABLE) -> _RNN_LEARNABLE:
-#         return replace(env, trainGradient=s)
-
-
-# class IsPrediction(
-#     Generic[_RNN_LEARNABLE],
-#     GetPrediction[_RNN_LEARNABLE, PREDICTION],
-#     PutPrediction[_RNN_LEARNABLE, PREDICTION],
-# ):
-#     @staticmethod
-#     def getPrediction(env: _RNN_LEARNABLE) -> PREDICTION:
-#         return env.trainPrediction
-
-#     @staticmethod
-#     def putPrediction(s: PREDICTION, env: _RNN_LEARNABLE) -> _RNN_LEARNABLE:
-#         return replace(env, trainPrediction=s)
-
-
-@dataclass(frozen=True)
-class _Rnn_Future_Cap(_Rnn_Learnable, WithBaseFuture, Protocol):
-    pass
-
-
-_BASE_FUTURE_CAP = TypeVar("_BASE_FUTURE_CAP", bound=_Rnn_Future_Cap)
-
-
-class IsInfluenceTensor(
-    Generic[_BASE_FUTURE_CAP],
-    GetInfluenceTensor[_BASE_FUTURE_CAP, INFLUENCETENSOR],
-    PutInfluenceTensor[_BASE_FUTURE_CAP, INFLUENCETENSOR],
+class BaseInfluenceTensor(
+    Generic[_HAS_INFLUENCE],
+    GetInfluenceTensor[_HAS_INFLUENCE, INFLUENCETENSOR],
+    PutInfluenceTensor[_HAS_INFLUENCE, INFLUENCETENSOR],
 ):
-    @staticmethod
-    def getInfluenceTensor(env: _BASE_FUTURE_CAP) -> INFLUENCETENSOR:
+    def getInfluenceTensor(self, env: _HAS_INFLUENCE) -> INFLUENCETENSOR:
         return env.influenceTensor
 
-    @staticmethod
     def putInfluenceTensor(
-        s: INFLUENCETENSOR, env: _BASE_FUTURE_CAP
-    ) -> _BASE_FUTURE_CAP:
-        return replace(env, influenceTensor=s)
+        self, z: INFLUENCETENSOR, env: _HAS_INFLUENCE
+    ) -> _HAS_INFLUENCE:
+        return replace(env, influenceTensor=z)
 
 
-@dataclass(frozen=True)
-class _RfloAlgebra(_Rnn_Future_Cap, WithBaseRflo, Protocol):
-    pass
+_RFLO_ALGEBRA = TypeVar("_RFLO_ALGEBRA", bound=WithBaseRflo)
 
 
-_RFLO_ALGEBRA = TypeVar("_RFLO_ALGEBRA", bound=_RfloAlgebra)
-
-
-class IsRflo(
+class BaseRflo(
     Generic[_RFLO_ALGEBRA],
     GetRfloConfig[_RFLO_ALGEBRA],
 ):
-    @staticmethod
-    def getRfloConfig(env: _RFLO_ALGEBRA) -> RfloConfig:
+    def getRfloConfig(self, env: _RFLO_ALGEBRA) -> RfloConfig:
         return env.rfloConfig
 
 
-class RnnInterpreter(
-    Generic[_RNN_ENV],
-    IsActivation[_RNN_ENV],
-    IsParameter[_RNN_ENV],
-    IsRecurrentWeights[_RNN_ENV],
-    IsReadoutWeights[_RNN_ENV],
+@dataclass(frozen=True, slots=True)
+class _Inference(WithRnnActivation, WithRnnParameter, Protocol):
+    pass
+
+
+_INFERENCE = TypeVar("_INFERENCE", bound=_Inference)
+
+
+class RnnInferenceInterpreter(
+    Generic[_INFERENCE], BaseActivation[_INFERENCE], BaseRnnParameterRead[_INFERENCE]
 ):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class _Learnable(WithRnnActivation, WithRnnParameter, WithSgdParameter, Protocol):
+    pass
+
+
+_LEARNABLE = TypeVar("_LEARNABLE", bound=_Learnable)
 
 
 class RnnLearnableInterpreter(
-    Generic[_RNN_LEARNABLE],
-    IsActivation[_RNN_LEARNABLE],
-    IsParameter[_RNN_LEARNABLE],
-    IsHyperParameter[_RNN_LEARNABLE],
-    IsRecurrentWeights[_RNN_LEARNABLE],
-    IsReadoutWeights[_RNN_LEARNABLE],
-    # IsLoss[_RNN_LEARNABLE],
-    # IsGradient[_RNN_LEARNABLE],
-    # IsPrediction[_RNN_LEARNABLE],
+    Generic[_LEARNABLE],
+    BaseActivation[_LEARNABLE],
+    BaseRnnParameterRead[_LEARNABLE],
+    BaseRnnParameterWrite[_LEARNABLE],
+    BaseHyperparameter[_LEARNABLE],
 ):
     pass
 
 
-# todo: messed up naming, should be past facing
-class RnnWithFutureInterpreter(
-    Generic[_BASE_FUTURE_CAP],
-    IsActivation[_BASE_FUTURE_CAP],
-    IsParameter[_BASE_FUTURE_CAP],
-    IsHyperParameter[_BASE_FUTURE_CAP],
-    IsRecurrentWeights[_BASE_FUTURE_CAP],
-    IsReadoutWeights[_BASE_FUTURE_CAP],
-    IsInfluenceTensor[_BASE_FUTURE_CAP],
-    # IsLoss[_BASE_FUTURE_CAP],
-    # IsGradient[_BASE_FUTURE_CAP],
-    # IsPrediction[_BASE_FUTURE_CAP],
+@dataclass(frozen=True, slots=True)
+class _PastFacing(_Learnable, WithBasePast, Protocol):
+    pass
+
+
+_PAST_FACING = TypeVar("_PAST_FACING", bound=_PastFacing)
+
+
+class RnnPastFacingInterpreter(
+    Generic[_PAST_FACING],
+    BaseActivation[_PAST_FACING],
+    BaseRnnParameterRead[_PAST_FACING],
+    BaseRnnParameterWrite[_PAST_FACING],
+    BaseHyperparameter[_PAST_FACING],
+    BaseInfluenceTensor[_PAST_FACING],
 ):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class _Rflo(_PastFacing, WithBaseRflo, Protocol):
+    pass
+
+
+_RFLO = TypeVar("_RFLO", bound=_Rflo)
 
 
 class RfloInterpreter(
-    Generic[_RFLO_ALGEBRA],
-    IsRflo[_RFLO_ALGEBRA],
-    RnnWithFutureInterpreter[_RFLO_ALGEBRA],
+    Generic[_RFLO],
+    BaseRflo[_RFLO],
+    RnnPastFacingInterpreter[_RFLO],
 ):
     pass

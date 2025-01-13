@@ -1,135 +1,33 @@
 from dataclasses import dataclass
-from typing import Callable, Protocol
-import torch
 from recurrent.mytypes import *
-from torch.utils import _pytree as pytree
-from pyrsistent import PClass, field
-
-
-# This is just an entity component model  https://news.ycombinator.com/item?id=7496968
-# DO NOT USE NESTED INHERITANCE, SHALLOW MIXINS ONLY
-# Even if 2^n combinations, philopsophy is you only need to write code on demand.
-# Ideally you could even avoid that with a whole EC system but I'm too lazy to write that.
-
-
-@dataclass(frozen=True)
-class WithRnnConfig(Protocol):
-    n_h: int
-    n_in: int
-    n_out: int
-    alpha: float
-    activationFn: Callable[[torch.Tensor], torch.Tensor]
-
-
-# @dataclass(frozen=True)
-# class WithTrainPrediction(Protocol):
-#     trainPrediction: PREDICTION
-
-
-# @dataclass(frozen=True)
-# class WithTrainLoss(Protocol):
-#     trainLoss: LOSS
-
-
-# @dataclass(frozen=True)
-# class WithTrainGradient(Protocol):
-#     trainGradient: GRADIENT
-
-
-# @dataclass(frozen=True)
-# class WithValidationPrediction(Protocol):
-#     validationPrediction: PREDICTION
-
-
-# @dataclass(frozen=True)
-# class WithValidationLoss(Protocol):
-#     validationLoss: LOSS
-
-
-# @dataclass(frozen=True)
-# class WithValidationGradient(Protocol):
-#     validationGradient: GRADIENT
+from recurrent.mixins import (
+    WithBasePast,
+    WithOhoPast,
+    WithRnnConfig,
+    WithRnnActivation,
+    WithBilevelSgdParameter,
+)
 
 
 @dataclass(frozen=True)
-class WithHyperparameter(Protocol):
-    hyperparameter: HYPERPARAMETER
+class RnnEnv(WithRnnConfig, WithRnnActivation):
+    pass
 
 
-@dataclass(frozen=True)
-class WithBaseFuture(Protocol):
-    influenceTensor: INFLUENCETENSOR
-
-
-@dataclass(frozen=True)
-class WithOhoFuture(Protocol):
-    ohoInfluenceTensor: INFLUENCETENSOR
-
-
-@dataclass(frozen=True)
-class WithBilevel(Protocol):
-    metaHyperparameter: METAHYPERPARAMETER
-
-
-@dataclass(frozen=True)
-class WithRnn(Protocol):
-    activation: ACTIVATION
-    parameter: PARAMETER
-
-
-@dataclass(frozen=True)
-class RfloConfig:
-    rflo_alpha: float
-
-
-@dataclass(frozen=True)
-class WithBaseRflo(Protocol):
-    rfloConfig: RfloConfig
-
-
-@dataclass(frozen=True)
-class WithBilevelRflo(Protocol):
-    rfloConfig_bilevel: RfloConfig
-
-
-@dataclass(frozen=True)
-class RnnEnv(WithRnnConfig, WithRnn):
+@dataclass(frozen=True, slots=True)
+class RnnBPTTState(RnnEnv):
     pass
 
 
 @dataclass(frozen=True)
-class RnnLearnable(RnnEnv, WithHyperparameter):
-    pass
-
-
-@dataclass(frozen=True)
-class RnnBPTTState(RnnLearnable):
-    pass
-
-
-# @dataclass(frozen=True)
-# class RnnBPTTState(RnnLearnable, PClass):
-#     n_h: int = field(type=int, mandatory=True)
-#     n_in: int = field(type=int, mandatory=True)
-#     n_out: int = field(type=int, mandatory=True)
-#     alpha: float = field(type=float, mandatory=True)
-#     activationFn: Callable[[torch.Tensor], torch.Tensor] = field(
-#         type=Callable[[torch.Tensor], torch.Tensor], mandatory=True
-#     )
-#     activation: ACTIVATION = field(type=ACTIVATION, mandatory=True)
-#     parameter: PARAMETER = field(type=PARAMETER, mandatory=True)
-#     hyperparameter: HYPERPARAMETER = field(type=HYPERPARAMETER, mandatory=True)
-
-
-@dataclass(frozen=True)
-class RnnFutureState(RnnLearnable, WithBaseFuture):
+class RnnPastFaceState(RnnEnv, WithBasePast):
     pass
 
 
 @dataclass(frozen=True)
 class BilevelLearnable(
-    RnnLearnable,
-    WithBilevel,
+    RnnEnv,
+    WithBilevelSgdParameter,
 ):
     pass
 
@@ -140,48 +38,48 @@ class BilevelBPTTState(BilevelLearnable):
 
 
 @dataclass(frozen=True)
-class OhoBPTTState(BilevelLearnable, WithOhoFuture):
+class OhoBPTTState(BilevelLearnable, WithOhoPast):
     pass
 
 
 @dataclass(frozen=True)
-class BilevelFutureState(BilevelLearnable, WithBaseFuture):
+class BilevelPastFaceState(BilevelLearnable, WithBasePast):
     pass
 
 
 @dataclass(frozen=True)
-class OhoFutureState(BilevelLearnable, WithOhoFuture, WithBaseFuture):
+class OhoPastFaceState(BilevelLearnable, WithOhoPast, WithBasePast):
     pass
 
 
-def rnnBPTTState_flatten(rnnBpttState: RnnBPTTState):
-    return (rnnBpttState.activation,), (
-        rnnBpttState.parameter,
-        rnnBpttState.hyperparameter,
-        rnnBpttState.n_h,
-        rnnBpttState.n_in,
-        rnnBpttState.n_out,
-        rnnBpttState.alpha,
-        rnnBpttState.activationFn,
-    )
+# def rnnBPTTState_flatten(rnnBpttState: RnnBPTTState):
+#     return (rnnBpttState.activation,), (
+#         rnnBpttState.parameter,
+#         rnnBpttState.hyperparameter,
+#         rnnBpttState.n_h,
+#         rnnBpttState.n_in,
+#         rnnBpttState.n_out,
+#         rnnBpttState.alpha,
+#         rnnBpttState.activationFn,
+#     )
 
 
-def rnnBPTTState_unflatten(children, aux):
-    a = children[0]
-    p, hp, n_h, n_in, n_out, alpha, activationFn = aux
-    return RnnBPTTState(
-        activation=a,
-        parameter=p,
-        hyperparameter=hp,
-        n_h=n_h,
-        n_in=n_in,
-        n_out=n_out,
-        alpha=alpha,
-        activationFn=activationFn,
-    )
+# def rnnBPTTState_unflatten(children, aux):
+#     a = children[0]
+#     p, hp, n_h, n_in, n_out, alpha, activationFn = aux
+#     return RnnBPTTState(
+#         activation=a,
+#         parameter=p,
+#         hyperparameter=hp,
+#         n_h=n_h,
+#         n_in=n_in,
+#         n_out=n_out,
+#         alpha=alpha,
+#         activationFn=activationFn,
+#     )
 
 
-pytree.register_pytree_node(RnnBPTTState, rnnBPTTState_flatten, rnnBPTTState_unflatten)
+# pytree.register_pytree_node(RnnBPTTState, rnnBPTTState_flatten, rnnBPTTState_unflatten)
 
 
 # @dataclass(frozen=True)

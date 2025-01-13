@@ -31,3 +31,5 @@ LOSS = NewType("LOSS", torch.Tensor)  # float32
 INPUTFEATURE = NewType("INPUTFEATURE", torch.Tensor)
 OUTPUTFEATURE = NewType("OUTPUTFEATURE", torch.Tensor)
 METAHYPERPARAMETER = NewType("METAHYPERPARAMETER", torch.Tensor)
+
+LEARNING_RATE = NewType("LEARNING_RATE", torch.Tensor)
