@@ -53,63 +53,65 @@ class ReaderState(Generic[R, S, A]):
 
     @staticmethod
     def ask_get() -> "ReaderState[R, S, Tuple[R, S]]":
-        return ReaderState.ask().bind(
-            lambda env: ReaderState.get().fmap(lambda state: (env, state))
-        )
+        return ReaderState(lambda env, state: ((env, state), state))
+        # return ReaderState.ask().bind(
+        #     lambda env: ReaderState.get().fmap(lambda state: (env, state))
+        # )
 
 
-class State(Generic[S, A]):
-    def __init__(self, run: Callable[[S], Tuple[A, S]]):
-        self.run = run
+# class State(Generic[S, A]):
+#     def __init__(self, run: Callable[[S], Tuple[A, S]]):
+#         self.run = run
 
-    def fmap(self, func: Callable[[A], B]) -> "State[S, B]":
-        def new_run(state: S) -> Tuple[B, S]:
-            value, new_state = self.run(state)
-            return func(value), new_state
+#     def fmap(self, func: Callable[[A], B]) -> "State[S, B]":
+#         def new_run(state: S) -> Tuple[B, S]:
+#             value, new_state = self.run(state)
+#             return func(value), new_state
 
-        return State(new_run)
+#         return State(new_run)
 
-    def bind(self, func: Callable[[A], "State[S, B]"]) -> "State[S, B]":
-        def new_run(state: S) -> Tuple[B, S]:
-            value, new_state = self.run(state)
-            return func(value).run(new_state)
+#     def bind(self, func: Callable[[A], "State[S, B]"]) -> "State[S, B]":
+#         def new_run(state: S) -> Tuple[B, S]:
+#             value, new_state = self.run(state)
+#             return func(value).run(new_state)
 
-        return State(new_run)
+#         return State(new_run)
 
-    @staticmethod
-    def pure(value: A) -> "State[S, A]":
-        return State(lambda state: (value, state))
+#     @staticmethod
+#     def pure(value: A) -> "State[S, A]":
+#         return State(lambda state: (value, state))
 
-    @staticmethod
-    def get() -> "State[S, S]":
-        return State(lambda state: (state, state))
+#     @staticmethod
+#     def get() -> "State[S, S]":
+#         return State(lambda state: (state, state))
 
-    @staticmethod
-    def put(new_state: S) -> "State[S, Unit]":
-        return State(lambda _: (Unit(), new_state))
+#     @staticmethod
+#     def put(new_state: S) -> "State[S, Unit]":
+#         return State(lambda _: (Unit(), new_state))
 
 
 def reader(run: Callable[[R, S], Tuple[A, S]]) -> ReaderState[R, S, A]:
     return ReaderState[R, S, A](run)
 
 
-def runReader(reader_state: ReaderState[R, S, A]) -> Callable[[R], State[S, A]]:
-    def env_to_state(env: R) -> State[S, A]:
-        def state_function(state: S) -> Tuple[A, S]:
-            return reader_state.run(env, state)
+# def runReader(reader_state: ReaderState[R, S, A]) -> Callable[[R], State[S, A]]:
+#     return lambda env: State(lambda state: reader_state.run(env, state))
+# def env_to_state(env: R) -> State[S, A]:
+#     def state_function(state: S) -> Tuple[A, S]:
+#         return reader_state.run(env, state)
 
-        return State(state_function)
+#     return State(state_function)
 
-    return env_to_state
+# return env_to_state
 
 
-def toReader(reader_state: Callable[[R], State[S, A]]) -> ReaderState[R, S, A]:
-    def run(env: R, state: S) -> Tuple[A, S]:
-        state_monad = reader_state(env)
-        result, new_state = state_monad.run(state)
-        return result, new_state
+# def toReader(reader_state: Callable[[R], State[S, A]]) -> ReaderState[R, S, A]:
+#     def run(env: R, state: S) -> Tuple[A, S]:
+#         state_monad = reader_state(env)
+#         result, new_state = state_monad.run(state)
+#         return result, new_state
 
-    return ReaderState(run)
+#     return ReaderState(run)
 
 
 # def foldM(
@@ -125,28 +127,60 @@ def toReader(reader_state: Callable[[R], State[S, A]]) -> ReaderState[R, S, A]:
 
 
 # strict foldM, prevents RecrusionError at cost of being nonlazy
-def foldM_(
-    func: Callable[[A, B], State[S, B]], init: B
-) -> Callable[[Iterable[A]], State[S, B]]:
-    def wrapper(xs: Iterable[A]) -> State[S, B]:
+# def foldM_(
+#     func: Callable[[A, B], State[S, B]], init: B
+# ) -> Callable[[Iterable[A]], State[S, B]]:
+#     def wrapper(xs: Iterable[A]) -> State[S, B]:
+#         def fold(x: A, pair: tuple[B, S]) -> tuple[B, S]:
+#             acc, state = pair
+#             return func(x, acc).run(state)
+
+#         return State[S, B](lambda s: foldr(fold)(xs, (init, s)))
+
+#     return wrapper
+
+
+def foldM_prime(
+    func: Callable[[B], ReaderState[A, S, B]], init: B
+) -> ReaderState[Iterable[A], S, B]:
+    def wrapper(xs: Iterable[A], state: S) -> tuple[B, S]:
         def fold(x: A, pair: tuple[B, S]) -> tuple[B, S]:
             acc, state = pair
-            return func(x, acc).run(state)
+            return func(acc).run(x, state)
 
-        return State[S, B](lambda s: foldr(fold)(xs, (init, s)))
+        return foldr(fold)(xs, (init, state))
 
-    return wrapper
+    return ReaderState[Iterable[A], S, B](wrapper)
 
 
-def traverse(
-    func: Callable[[A], State[S, B]]
-) -> Callable[[Iterable[A]], State[S, Iterable[B]]]:
+def traverse_(func: ReaderState[A, S, B]) -> ReaderState[Iterable[A], S, Iterable[B]]:
 
-    def traverse_(iterable: Iterable[A]) -> State[S, Iterable[B]]:
-        def go(a: A, acc: PVector[B]) -> State[S, PVector[B]]:
-            return func(a).fmap(lambda b: acc.append(b))
+    def traverse_(x: A, pair: tuple[PVector[B], S]) -> tuple[PVector[B], S]:
+        acc, state = pair
+        b, s = func.run(x, state)
+        return acc.append(b), s
 
-        init: PVector[B] = pvector([])
-        return foldM_(go, init)(iterable).fmap(lambda x: cast(Iterable[B], x))
+    def wrapper(xs: Iterable[A], state: S) -> tuple[PVector[B], S]:
+        return foldr(traverse_)(xs, (pvector([]), state))
 
-    return traverse_
+        # def go(a: A, acc: PVector[B]) -> State[S, PVector[B]]:
+        #     return func(a).fmap(lambda b: acc.append(b))
+
+        # init: PVector[B] = pvector([])
+        # return foldM_(go, init)(iterable).fmap(lambda x: cast(Iterable[B], x))
+
+    return ReaderState[Iterable[A], S, Iterable[B]](wrapper)
+
+
+# def traverse(
+#     func: Callable[[A], State[S, B]]
+# ) -> Callable[[Iterable[A]], State[S, Iterable[B]]]:
+
+#     def traverse_(iterable: Iterable[A]) -> State[S, Iterable[B]]:
+#         def go(a: A, acc: PVector[B]) -> State[S, PVector[B]]:
+#             return func(a).fmap(lambda b: acc.append(b))
+
+#         init: PVector[B] = pvector([])
+#         return foldM_(go, init)(iterable).fmap(lambda x: cast(Iterable[B], x))
+
+#     return traverse_

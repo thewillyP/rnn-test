@@ -1,34 +1,27 @@
 from dataclasses import dataclass
 from typing import Callable, Generic, TypeVar, Protocol, Iterable, cast
 import torch
-from recurrent.myrecords import RfloConfig
 from recurrent.objectalgebra.typeclasses import (
     GetActivation,
     GetHyperParameter,
     GetInfluenceTensor,
     GetParameter,
     GetRfloConfig,
-    HasReadoutWeights,
     HasInput,
     HasPredictionInput,
     HasLabel,
-    HasRecurrentWeights,
     PutActivation,
     PutInfluenceTensor,
     PutParameter,
 )
 
 from recurrent.mytypes import *
-from operator import add
 from recurrent.monad import (
     ReaderState,
-    State,
     Unit,
-    foldM_,
-    runReader,
-    toReader,
     reader,
-    traverse,
+    foldM_prime,
+    traverse_,
 )
 
 
@@ -55,9 +48,10 @@ PRED_CON = TypeVar("PRED_CON", contravariant=True)
 HPARAM_CO = TypeVar("HPARAM_CO", covariant=True)
 ENV_CON = TypeVar("ENV_CON", contravariant=True)
 PARAM_CON = TypeVar("PARAM_CON", contravariant=True)
+PARAM_CO = TypeVar("PARAM_CO", covariant=True)
 
-PARAM_TENSOR = TypeVar("PARAM_TENSOR", bound=torch.Tensor)
-ACTIV_TENSOR = TypeVar("ACTIV_TENSOR", bound=torch.Tensor)
+PARAM_TENSOR = TypeVar("PARAM_TENSOR", bound=torch.Tensor | PYTREE)
+ACTIV_TENSOR = TypeVar("ACTIV_TENSOR", bound=torch.Tensor | PYTREE)
 
 DATA_NEW = TypeVar("DATA_NEW")
 
@@ -94,9 +88,8 @@ def reparametrizeInput(
 class _Activation(
     GetActivation[ENV, ACTIV],
     PutActivation[ENV, ACTIV],
-    GetParameter[ENV, PARAM],
-    HasRecurrentWeights[ENV, PARAM, PARAM_T],
-    Protocol[ENV, ACTIV, PARAM, PARAM_T],
+    GetParameter[ENV, PARAM_CO],
+    Protocol[ENV, ACTIV, PARAM_CO],
 ):
     pass
 
@@ -106,16 +99,16 @@ class _ActivationData(HasInput[DATA_L, X_L], Protocol[DATA_L, X_L]):
 
 
 def activation(
-    dialect: _Activation[ENV, ACTIV, PARAM, PARAM_T],
+    dialect: _Activation[ENV, ACTIV, PARAM],
     dataDialect: _ActivationData[DATA, X],
-    step: Callable[[X, ACTIV, PARAM_T], ACTIV],
+    step: Callable[[X, ACTIV, PARAM], ACTIV],
 ) -> ReaderState[DATA, ENV, Unit]:
     def update(pair: tuple[DATA, ENV]) -> ENV:
         data, env = pair
         a = dialect.getActivation(env)
         x = dataDialect.getInput(data)
-        w = dialect.getRecurrentWeights(dialect.getParameter(env), env)
-        return dialect.putActivation(step(x, a, w), env)
+        p = dialect.getParameter(env)
+        return dialect.putActivation(step(x, a, p), env)
 
     return (
         ReaderState[DATA, ENV, Unit]
@@ -127,9 +120,8 @@ def activation(
 
 class _Prediction(
     GetActivation[ENV_CON, ACTIV_CO],
-    GetParameter[ENV_CON, PARAM],
-    HasReadoutWeights[ENV_CON, PARAM, PARAM_T],
-    Protocol[ENV_CON, ACTIV_CO, PARAM, PARAM_T],
+    GetParameter[ENV_CON, PARAM_CO],
+    Protocol[ENV_CON, ACTIV_CO, PARAM_CO],
 ):
     pass
 
@@ -139,16 +131,15 @@ class _PredictionData(HasPredictionInput[DATA_L, X_L], Protocol[DATA_L, X_L]):
 
 
 def prediction(
-    dialect: _Prediction[ENV, ACTIV, PARAM, PARAM_T],
+    dialect: _Prediction[ENV, ACTIV, PARAM],
     dataDialect: _PredictionData[DATA, X],
-    step: Callable[[X, ACTIV, PARAM_T], PRED],
+    step: Callable[[X, ACTIV, PARAM], PRED],
 ) -> ReaderState[DATA, ENV, PRED]:
     def update(pair: tuple[DATA, ENV]) -> PRED:
         data, env = pair
         x = dataDialect.getPredictionInput(data)
         a = dialect.getActivation(env)
-        w_out = dialect.getReadoutWeights(dialect.getParameter(env), env)
-        return step(x, a, w_out)
+        return step(x, a, dialect.getParameter(env))
 
     return ReaderState[DATA, ENV, tuple[DATA, ENV]].ask_get().fmap(update)
 
@@ -204,12 +195,25 @@ class GradientLibrary(Generic[ENV, PRED, DATA]):
     def rnnWithParamGradient_Averaged(
         self, getWeight: Callable[[DATA], float]
     ) -> ReaderState[Iterable[DATA], ENV, GRADIENT]:
-        def weight(data: DATA, gr: GRADIENT) -> State[ENV, GRADIENT]:
-            return runReader(self.rnnWithParamGradient)(data).fmap(
-                lambda gr_: GRADIENT(gr + gr_ * getWeight(data))
+        # def weight(data: DATA, gr: GRADIENT) -> State[ENV, GRADIENT]:
+        #     return runReader(self.rnnWithParamGradient)(data).fmap(
+        #         lambda gr_: GRADIENT(gr + gr_ * getWeight(data))
+        #     )
+
+        # return toReader(foldM_(weight, GRADIENT(torch.tensor(0))))
+
+        def weight(gr: GRADIENT) -> ReaderState[DATA, ENV, GRADIENT]:
+            return (
+                ReaderState[DATA, ENV, DATA]
+                .ask()
+                .bind(
+                    lambda data: self.rnnWithParamGradient.fmap(
+                        lambda gr_: GRADIENT(gr + gr_ * getWeight(data))
+                    )
+                )
             )
 
-        return toReader(foldM_(weight, GRADIENT(torch.tensor(0))))
+        return foldM_prime(weight, GRADIENT(torch.tensor(0)))
 
 
 def batchGradients(
@@ -261,9 +265,7 @@ class _RnnDialect(
     PutActivation[ENV, ACTIV],
     PutParameter[ENV, PARAM],
     GetParameter[ENV, PARAM],
-    HasRecurrentWeights[ENV, PARAM, PARAM_R],
-    HasReadoutWeights[ENV, PARAM, PARAM_O],
-    Protocol[ENV, ACTIV, PARAM, PARAM_R, PARAM_O],
+    Protocol[ENV, ACTIV, PARAM],
 ):
     pass
 
@@ -278,10 +280,10 @@ class _RnnDataDialect(
 
 # Smart constructor
 def createRnnLibrary(
-    dialect: _RnnDialect[ENV, ACTIV, PARAM, PARAM_R, PARAM_O],
+    dialect: _RnnDialect[ENV, ACTIV, PARAM],
     dataDialect: _RnnDataDialect[DATA, X, Y, Z],
-    activationStep: Callable[[X, ACTIV, PARAM_R], ACTIV],
-    predictionStep: Callable[[Y, ACTIV, PARAM_O], PRED],
+    activationStep: Callable[[X, ACTIV, PARAM], ACTIV],
+    predictionStep: Callable[[Y, ACTIV, PARAM], PRED],
 ) -> RnnLibrary[ENV, PRED, DATA]:
     actv_ = activation(dialect, dataDialect, activationStep)
     pred_ = prediction(dialect, dataDialect, predictionStep)
@@ -304,14 +306,31 @@ def offlineLearning(
     rnnLibrary: RnnLibrary[ENV, PRED, DATA],
 ) -> GradientLibrary[ENV, Iterable[PRED], Iterable[DATA]]:
 
-    rnnWithPred = toReader(traverse(runReader(rnnLibrary.rnnStep())))
+    # reader_test = (
+    #     ReaderState[DATA, ENV, PRED]
+    #     .pure(torch.tensor(0))
+    #     .fmap(lambda _: Unit())
+    #     .fmap(lambda _: Unit())
+    #     .fmap(lambda _: Unit())
+    #     .fmap(lambda _: Unit())
+    #     .fmap(lambda _: Unit())
+    # )
+    # rnnWithPred = toReader(traverse_(runReader(reader_test)))
+    rnnWithPred = traverse_(rnnLibrary.rnnStep())
+
+    # rnnWithPred = toReader(traverse(runReader(rnnLibrary.rnnStep())))
 
     rnn_with_loss = rnnLibrary.rnnStep().bind(loss(dataDialect, computeLoss))
 
-    def accum_loss(d: DATA, accum: LOSS) -> State[ENV, LOSS]:
-        return runReader(rnn_with_loss)(d).fmap(lambda l: LOSS(accum + l))
+    # def accum_loss(d: DATA, accum: LOSS) -> State[ENV, LOSS]:
+    #     return runReader(rnn_with_loss)(d).fmap(lambda l: LOSS(accum + l))
 
-    rnnWithLoss = toReader(foldM_(accum_loss, LOSS(torch.tensor(0))))
+    # rnnWithLoss = toReader(foldM_(accum_loss, LOSS(torch.tensor(0))))
+
+    def accum_loss(accum: LOSS) -> ReaderState[DATA, ENV, LOSS]:
+        return rnn_with_loss.fmap(lambda l: LOSS(accum + l))
+
+    rnnWithLoss = foldM_prime(accum_loss, LOSS(torch.tensor(0)))
 
     rnnWithGrad = computeGradient(
         rnnWithLoss, dialect.getParameter, dialect.putParameter

@@ -329,47 +329,50 @@
 # stats.print_stats()
 
 
-from dataclasses import dataclass
-import torch
-from torch.utils import _pytree as pytree
+# from dataclasses import dataclass
+# from typing import Generic, TypeVar
+# import torch
+# from torch.utils import _pytree as pytree
+
+# T = TypeVar("T")
 
 
-@dataclass(frozen=True)
-class MyPyTree:
-    x: torch.Tensor
+# @dataclass(frozen=True)
+# class MyPyTree(Generic[T]):
+#     x: T
 
 
-# Register the class as a PyTree
-def tree_flatten(obj):
-    # Extract the tensors as a list and return auxiliary data
-    return [obj.x], None
+# # Register the class as a PyTree
+# def tree_flatten(obj: MyPyTree[T]):
+#     # Extract the tensors as a list and return auxiliary data
+#     return [obj.x], None
 
 
-def tree_unflatten(children, aux):
-    # Reconstruct the object from its flattened representation
-    return MyPyTree(*children)
+# def tree_unflatten(children: tuple[T], aux):
+#     # Reconstruct the object from its flattened representation
+#     return MyPyTree[T](*children)
 
 
-pytree.register_pytree_node(MyPyTree, tree_flatten, tree_unflatten)
+# pytree.register_pytree_node(MyPyTree, tree_flatten, tree_unflatten)
 
 
-# Define a function to test differentiability
-def func(pytree):
-    return (pytree.x**2).sum()
+# # Define a function to test differentiability
+# def func(pytree: MyPyTree[torch.Tensor]):
+#     return (pytree.x**2).sum()
 
 
-# Create an instance of MyPyTree with tensors
-x = torch.tensor([1.0, 2.0])
-p = MyPyTree(x)
+# # Create an instance of MyPyTree with tensors
+# x = torch.tensor([1.0, 2.0])
+# p = MyPyTree[torch.Tensor](x)
 
-# Compute the Jacobian using jacrev
-print(p)
-jacobian = torch.func.jacrev(func)(p)
+# # Compute the Jacobian using jacrev
+# print(p)
+# jacobian = torch.func.jacrev(func)(p)
 
-# Print the Jacobian to verify
-print("Jacobian for x:", jacobian.x)
+# # Print the Jacobian to verify
+# print("Jacobian for x:", jacobian.x)
 
-print(pytree.tree_map(lambda x, y: x + y, jacobian, p))
+# print(pytree.tree_map(lambda x, y: x + y, jacobian, p))
 
 
 # from typing import Generic, TypeVar
@@ -390,3 +393,41 @@ print(pytree.tree_map(lambda x, y: x + y, jacobian, p))
 
 # t = Test[int]()
 # test(t)
+
+
+from dataclasses import dataclass
+from typing import Generic, Protocol, TypeVar
+
+A = TypeVar("A")
+B = TypeVar("B")
+
+
+class WithA(Protocol[A]):
+    a: A
+
+
+class WithB(Protocol[B]):
+    b: B
+
+
+class WithAB(WithA[A], WithB[B], Protocol[A, B]):
+    pass
+
+
+@dataclass(frozen=True)
+class Test(WithAB[A, B]):
+    a: A
+    b: B
+
+
+CHECK = TypeVar("CHECK", bound=WithAB[int, int])
+
+
+class TestMe(Generic[CHECK]):
+    def test(self, x: CHECK) -> None:
+        pass
+
+
+x = Test[int, int](1, 2)
+
+TestMe[Test[int, int]]().test(x)

@@ -1,5 +1,6 @@
 from typing import Generic
 from dataclasses import dataclass, replace
+from recurrent.myrecords import RnnFutureFaceState
 from recurrent.mytypes import *
 from recurrent.mixins import (
     RnnParameter,
@@ -7,8 +8,8 @@ from recurrent.mixins import (
     WithBasePast,
     WithRnnActivation,
     WithBaseRflo,
-    WithRnnParameter,
-    WithSgdParameter,
+    WithParameter,
+    WithHyperparameter,
 )
 from recurrent.parameters import RfloConfig
 from typing import Protocol
@@ -30,7 +31,7 @@ class BaseActivation(
         return replace(env, activation=z)
 
 
-_IS_RNNP = TypeVar("_IS_RNNP", bound=WithRnnParameter)
+_IS_RNNP = TypeVar("_IS_RNNP", bound=WithParameter[RnnParameter])
 
 
 class BaseRnnParameterRead(Generic[_IS_RNNP], GetParameter[_IS_RNNP, RnnParameter]):
@@ -43,7 +44,7 @@ class BaseRnnParameterWrite(Generic[_IS_RNNP], PutParameter[_IS_RNNP, RnnParamet
         return replace(env, parameter=z)
 
 
-_IS_SGDP = TypeVar("_IS_SGDP", bound=WithSgdParameter)
+_IS_SGDP = TypeVar("_IS_SGDP", bound=WithHyperparameter[SgdParameter])
 
 
 class BaseHyperparameter(
@@ -86,8 +87,8 @@ class BaseRflo(
         return env.rfloConfig
 
 
-@dataclass(frozen=True, slots=True)
-class _Inference(WithRnnActivation, WithRnnParameter, Protocol):
+@dataclass(frozen=True)
+class _Inference(WithRnnActivation, WithParameter[RnnParameter], Protocol):
     pass
 
 
@@ -100,8 +101,13 @@ class RnnInferenceInterpreter(
     pass
 
 
-@dataclass(frozen=True, slots=True)
-class _Learnable(WithRnnActivation, WithRnnParameter, WithSgdParameter, Protocol):
+@dataclass(frozen=True)
+class _Learnable(
+    WithRnnActivation,
+    WithParameter[RnnParameter],
+    WithHyperparameter[SgdParameter],
+    Protocol,
+):
     pass
 
 
@@ -118,7 +124,7 @@ class RnnLearnableInterpreter(
     pass
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class _PastFacing(_Learnable, WithBasePast, Protocol):
     pass
 
@@ -137,7 +143,7 @@ class RnnPastFacingInterpreter(
     pass
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class _Rflo(_PastFacing, WithBaseRflo, Protocol):
     pass
 

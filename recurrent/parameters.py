@@ -4,7 +4,7 @@ from recurrent.mytypes import *
 from torch.utils import _pytree as pytree
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class RnnParameter(PYTREE):
     w_rec: PARAMETER
     w_out: PARAMETER
@@ -41,7 +41,7 @@ def rnnParameter_unflatten(children, aux):
 pytree.register_pytree_node(RnnParameter, rnnParameter_flatten, rnnParameter_unflatten)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class SgdParameter(PYTREE):
     learning_rate: LEARNING_RATE
 

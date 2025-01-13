@@ -20,19 +20,19 @@ class WithOhoPast(Protocol):
     ohoInfluenceTensor: INFLUENCETENSOR
 
 
-@dataclass(frozen=True, slots=True)
-class WithRnnParameter(Protocol):
-    parameter: RnnParameter
+@dataclass(frozen=True)
+class WithParameter(Protocol[T]):
+    parameter: T
 
 
-@dataclass(frozen=True, slots=True)
-class WithSgdParameter(Protocol):
-    hyperparameter: SgdParameter
+@dataclass(frozen=True)
+class WithHyperparameter(Protocol[T]):
+    hyperparameter: T
 
 
-@dataclass(frozen=True, slots=True)
-class WithBilevelSgdParameter(Protocol):
-    metaHyperparameter: SgdParameter
+@dataclass(frozen=True)
+class WithBilevelParameter(Protocol[T]):
+    metaHyperparameter: T
 
 
 @dataclass(frozen=True)

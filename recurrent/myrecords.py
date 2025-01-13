@@ -7,58 +7,87 @@ from recurrent.mixins import (
     WithBasePast,
     WithOhoPast,
     WithRnnActivation,
+    WithParameter,
+    WithHyperparameter,
+    WithBilevelParameter,
 )
 
 
 @dataclass(frozen=True)
-class RnnInferenceState(WithRnnActivation, Generic[T]):
-    parameter: T
+class RnnInferenceState(WithRnnActivation, WithParameter[T]):
+    pass
 
 
 @dataclass(frozen=True)
-class RnnPastFaceState(WithRnnActivation, WithBasePast, Generic[T, E]):
-    parameter: T
-    hyperparameter: E
+class RnnPastFaceState(
+    WithRnnActivation,
+    WithBasePast,
+    WithParameter[T],
+    WithHyperparameter[E],
+    Generic[T, E],
+):
+    pass
 
 
 # idea?
 # \env -> env.meta0 . dialect
 @dataclass(frozen=True)
-class BilevelFutureFaceState(WithRnnActivation, Generic[A, B, C]):
-    parameter: A
-    hyperparameter: B
-    metaHyperparameter: C
+class BilevelFutureFaceState(
+    WithRnnActivation,
+    WithParameter[A],
+    WithHyperparameter[B],
+    WithBilevelParameter[C],
+    Generic[A, B, C],
+):
+    pass
 
 
 @dataclass(frozen=True)
-class OhoFutureFaceState(WithRnnActivation, WithOhoPast, Generic[A, B, C]):
-    parameter: A
-    hyperparameter: B
-    metaHyperparameter: C
+class OhoFutureFaceState(
+    WithRnnActivation,
+    WithOhoPast,
+    WithParameter[A],
+    WithHyperparameter[B],
+    WithBilevelParameter[C],
+    Generic[A, B, C],
+):
+    pass
 
 
 @dataclass(frozen=True)
-class BilevelPastFaceState(WithRnnActivation, WithBasePast, Generic[A, B, C]):
-    parameter: A
-    hyperparameter: B
-    metaHyperparameter: C
+class BilevelPastFaceState(
+    WithRnnActivation,
+    WithBasePast,
+    WithParameter[A],
+    WithHyperparameter[B],
+    WithBilevelParameter[C],
+    Generic[A, B, C],
+):
+    pass
 
 
 @dataclass(frozen=True)
-class OhoPastFaceState(WithRnnActivation, WithOhoPast, WithBasePast, Generic[A, B, C]):
-    parameter: A
-    hyperparameter: B
-    metaHyperparameter: C
+class OhoPastFaceState(
+    WithRnnActivation,
+    WithOhoPast,
+    WithBasePast,
+    WithParameter[A],
+    WithHyperparameter[B],
+    WithBilevelParameter[C],
+    Generic[A, B, C],
+):
+    pass
 
 
-@dataclass(frozen=True, slots=True)
-class RnnFutureFaceState(WithRnnActivation, PYTREE, Generic[T, E]):
-    parameter: T
-    hyperparameter: E
+@dataclass(frozen=True)
+class RnnFutureFaceState(
+    WithRnnActivation, PYTREE, WithParameter[A], WithHyperparameter[B], Generic[A, B]
+):
+    pass
 
 
-T_TORCH = TypeVar("T_TENSOR", bound=torch.Tensor | PYTREE)
-E_TORCH = TypeVar("E_TENSOR", bound=torch.Tensor | PYTREE)
+T_TORCH = TypeVar("T_TORCH", bound=torch.Tensor | PYTREE)
+E_TORCH = TypeVar("E_TORCH", bound=torch.Tensor | PYTREE)
 
 
 def rnnFutureFaceState_flatten(rnnFutureS: RnnFutureFaceState[T_TORCH, E_TORCH]):

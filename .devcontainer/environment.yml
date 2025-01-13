@@ -24,5 +24,6 @@ dependencies:
   - memory_profiler
   - line_profiler
   - pyrsistent
+  - snakeviz
   - pip:
     - torchviz    

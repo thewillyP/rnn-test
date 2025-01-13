@@ -2,7 +2,7 @@ from typing import Generic
 from dataclasses import dataclass, replace
 from recurrent.mytypes import *
 from recurrent.mixins import (
-    WithBilevelSgdParameter,
+    WithBilevelParameter,
     WithOhoPast,
     WithBilevelRflo,
 )
@@ -45,7 +45,7 @@ class Meta1ActivationParameter(
         return self.meta0Dialect.putHyperParameter(s, env)
 
 
-_BILEVEL_SGD = TypeVar("_BILEVEL_SGD", bound=WithBilevelSgdParameter)
+_BILEVEL_SGD = TypeVar("_BILEVEL_SGD", bound=WithBilevelParameter[SgdParameter])
 
 
 class Meta1Hyperparameter(
@@ -86,7 +86,7 @@ class Meta1Rflo(
         return env.rfloConfig_bilevel
 
 
-_META1_WITH_SGD = TypeVar("_META1_WITH_SGD", bound=WithBilevelSgdParameter)
+_META1_WITH_SGD = TypeVar("_META1_WITH_SGD", bound=WithBilevelParameter[SgdParameter])
 
 
 class BilevelInterpreter(
@@ -95,11 +95,12 @@ class BilevelInterpreter(
     Meta1Hyperparameter[_META1_WITH_SGD],
 ):
     def __init__(self, meta0Dialect: _Meta0Dialect[_META1_WITH_SGD, T, E]) -> None:
-        Meta1ActivationParameter[_META1_WITH_SGD, T, E].__init__(self, meta0Dialect)
+        super().__init__(meta0Dialect)
+        # Meta1ActivationParameter[_META1_WITH_SGD, T, E].__init__(self, meta0Dialect)
 
 
-@dataclass(frozen=True, slots=True)
-class _Oho_Sgd(WithBilevelSgdParameter, WithOhoPast, Protocol):
+@dataclass(frozen=True)
+class _Oho_Sgd(WithBilevelParameter[SgdParameter], WithOhoPast, Protocol):
     pass
 
 
@@ -112,10 +113,11 @@ class BilevelWithOhoInterpreter(
     Meta1InfluenceTensor[_OHO_SGD],
 ):
     def __init__(self, meta0Dialect: _Meta0Dialect[_OHO_SGD, T, E]) -> None:
-        BilevelInterpreter[_OHO_SGD, T, E].__init__(self, meta0Dialect)
+        super().__init__(meta0Dialect)
+        # BilevelInterpreter[_OHO_SGD, T, E].__init__(self, meta0Dialect)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class _Rflo_Sgd(_Oho_Sgd, WithBilevelRflo, Protocol):
     pass
 
@@ -129,4 +131,5 @@ class RfloInterpreter(
     Meta1Rflo[_RFLO_SGD],
 ):
     def __init__(self, meta0Dialect: _Meta0Dialect[_RFLO_SGD, T, E]) -> None:
-        BilevelWithOhoInterpreter[_RFLO_SGD, T, E].__init__(self, meta0Dialect)
+        super().__init__(meta0Dialect)
+        # BilevelWithOhoInterpreter[_RFLO_SGD, T, E].__init__(self, meta0Dialect)

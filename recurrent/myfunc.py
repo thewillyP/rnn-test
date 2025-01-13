@@ -161,9 +161,19 @@ def fmap(g: Callable[[B], C], f: Callable[[A], B]) -> Callable[[A], C]:
     return fmap_
 
 
+# def foldr(f: Callable[[A, B], B]) -> Callable[[Iterable[A], B], B]:
+#     def foldr_(xs: Iterable[A], x: B) -> B:
+#         return reduce(flip(f), xs, x)
+
+#     return foldr_
+
+
 def foldr(f: Callable[[A, B], B]) -> Callable[[Iterable[A], B], B]:
     def foldr_(xs: Iterable[A], x: B) -> B:
-        return reduce(flip(f), xs, x)
+        result = x
+        for item in xs:
+            result = f(item, result)
+        return result
 
     return foldr_
 

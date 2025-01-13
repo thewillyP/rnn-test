@@ -7,20 +7,19 @@ from recurrent.util import tree_unstack
 
 @dataclass(frozen=True)
 class Input2Output1:
-    x1: torch.Tensor
-    x2: torch.Tensor
+    x: torch.Tensor
     y: torch.Tensor
 
     def __iter__(self):
-        return iter(tree_unstack(self))
+        return tree_unstack(self)
 
 
 def customdata_flatten(custom_data: Input2Output1):
-    return (custom_data.x1, custom_data.x2, custom_data.y), None
+    return (custom_data.x, custom_data.y), None
 
 
 def customdata_unflatten(children, _):
-    return Input2Output1(x1=children[0], x2=children[1], y=children[2])
+    return Input2Output1(x=children[0], y=children[1])
 
 
 pytree.register_pytree_node(Input2Output1, customdata_flatten, customdata_unflatten)
