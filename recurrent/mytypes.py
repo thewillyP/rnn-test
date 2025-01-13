@@ -33,3 +33,7 @@ OUTPUTFEATURE = NewType("OUTPUTFEATURE", torch.Tensor)
 METAHYPERPARAMETER = NewType("METAHYPERPARAMETER", torch.Tensor)
 
 LEARNING_RATE = NewType("LEARNING_RATE", torch.Tensor)
+
+
+class PYTREE:
+    pass

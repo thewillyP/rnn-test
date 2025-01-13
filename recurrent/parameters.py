@@ -1,27 +1,48 @@
 from dataclasses import dataclass
+from typing import Callable
 from recurrent.mytypes import *
 from torch.utils import _pytree as pytree
 
 
 @dataclass(frozen=True, slots=True)
-class RnnParameter:
+class RnnParameter(PYTREE):
     w_rec: PARAMETER
     w_out: PARAMETER
+    n_h: int
+    n_in: int
+    n_out: int
+    alpha: float
+    activationFn: Callable[[torch.Tensor], torch.Tensor]
 
 
 def rnnParameter_flatten(rnnParameter: RnnParameter):
-    return (rnnParameter.w_rec, rnnParameter.w_out), None
+    return (rnnParameter.w_rec, rnnParameter.w_out), (
+        rnnParameter.n_h,
+        rnnParameter.n_in,
+        rnnParameter.n_out,
+        rnnParameter.alpha,
+        rnnParameter.activationFn,
+    )
 
 
 def rnnParameter_unflatten(children, aux):
-    return RnnParameter(w_rec=children[0], w_out=children[1])
+    n_h, n_in, n_out, alpha, activationFn = aux
+    return RnnParameter(
+        w_rec=children[0],
+        w_out=children[1],
+        n_h=n_h,
+        n_in=n_in,
+        n_out=n_out,
+        alpha=alpha,
+        activationFn=activationFn,
+    )
 
 
 pytree.register_pytree_node(RnnParameter, rnnParameter_flatten, rnnParameter_unflatten)
 
 
 @dataclass(frozen=True, slots=True)
-class SgdParameter:
+class SgdParameter(PYTREE):
     learning_rate: LEARNING_RATE
 
 

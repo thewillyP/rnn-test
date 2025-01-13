@@ -1,85 +1,86 @@
 from dataclasses import dataclass
+from typing import Generic
+from torch.utils import _pytree as pytree
+
 from recurrent.mytypes import *
 from recurrent.mixins import (
     WithBasePast,
     WithOhoPast,
-    WithRnnConfig,
     WithRnnActivation,
-    WithBilevelSgdParameter,
 )
 
 
 @dataclass(frozen=True)
-class RnnEnv(WithRnnConfig, WithRnnActivation):
-    pass
+class RnnInferenceState(WithRnnActivation, Generic[T]):
+    parameter: T
+
+
+@dataclass(frozen=True)
+class RnnPastFaceState(WithRnnActivation, WithBasePast, Generic[T, E]):
+    parameter: T
+    hyperparameter: E
+
+
+# idea?
+# \env -> env.meta0 . dialect
+@dataclass(frozen=True)
+class BilevelFutureFaceState(WithRnnActivation, Generic[A, B, C]):
+    parameter: A
+    hyperparameter: B
+    metaHyperparameter: C
+
+
+@dataclass(frozen=True)
+class OhoFutureFaceState(WithRnnActivation, WithOhoPast, Generic[A, B, C]):
+    parameter: A
+    hyperparameter: B
+    metaHyperparameter: C
+
+
+@dataclass(frozen=True)
+class BilevelPastFaceState(WithRnnActivation, WithBasePast, Generic[A, B, C]):
+    parameter: A
+    hyperparameter: B
+    metaHyperparameter: C
+
+
+@dataclass(frozen=True)
+class OhoPastFaceState(WithRnnActivation, WithOhoPast, WithBasePast, Generic[A, B, C]):
+    parameter: A
+    hyperparameter: B
+    metaHyperparameter: C
 
 
 @dataclass(frozen=True, slots=True)
-class RnnBPTTState(RnnEnv):
-    pass
+class RnnFutureFaceState(WithRnnActivation, PYTREE, Generic[T, E]):
+    parameter: T
+    hyperparameter: E
 
 
-@dataclass(frozen=True)
-class RnnPastFaceState(RnnEnv, WithBasePast):
-    pass
+T_TORCH = TypeVar("T_TENSOR", bound=torch.Tensor | PYTREE)
+E_TORCH = TypeVar("E_TENSOR", bound=torch.Tensor | PYTREE)
 
 
-@dataclass(frozen=True)
-class BilevelLearnable(
-    RnnEnv,
-    WithBilevelSgdParameter,
-):
-    pass
+def rnnFutureFaceState_flatten(rnnFutureS: RnnFutureFaceState[T_TORCH, E_TORCH]):
+    return (
+        rnnFutureS.activation,
+        rnnFutureS.parameter,
+        rnnFutureS.hyperparameter,
+    ), None
 
 
-@dataclass(frozen=True)
-class BilevelBPTTState(BilevelLearnable):
-    pass
+def rnnFutureFaceState_unflatten(children: tuple[ACTIVATION, T_TORCH, E_TORCH], aux):
+    activation, parameter, hyperparameter = children
+    return RnnFutureFaceState[T_TORCH, E_TORCH](
+        activation=activation, parameter=parameter, hyperparameter=hyperparameter
+    )
 
 
-@dataclass(frozen=True)
-class OhoBPTTState(BilevelLearnable, WithOhoPast):
-    pass
-
-
-@dataclass(frozen=True)
-class BilevelPastFaceState(BilevelLearnable, WithBasePast):
-    pass
-
-
-@dataclass(frozen=True)
-class OhoPastFaceState(BilevelLearnable, WithOhoPast, WithBasePast):
-    pass
-
-
-# def rnnBPTTState_flatten(rnnBpttState: RnnBPTTState):
-#     return (rnnBpttState.activation,), (
-#         rnnBpttState.parameter,
-#         rnnBpttState.hyperparameter,
-#         rnnBpttState.n_h,
-#         rnnBpttState.n_in,
-#         rnnBpttState.n_out,
-#         rnnBpttState.alpha,
-#         rnnBpttState.activationFn,
-#     )
-
-
-# def rnnBPTTState_unflatten(children, aux):
-#     a = children[0]
-#     p, hp, n_h, n_in, n_out, alpha, activationFn = aux
-#     return RnnBPTTState(
-#         activation=a,
-#         parameter=p,
-#         hyperparameter=hp,
-#         n_h=n_h,
-#         n_in=n_in,
-#         n_out=n_out,
-#         alpha=alpha,
-#         activationFn=activationFn,
-#     )
-
-
-# pytree.register_pytree_node(RnnBPTTState, rnnBPTTState_flatten, rnnBPTTState_unflatten)
+pytree.register_pytree_node(
+    RnnFutureFaceState,
+    rnnFutureFaceState_flatten,
+    rnnFutureFaceState_unflatten,
+)
 
 
 # @dataclass(frozen=True)

@@ -63,7 +63,7 @@ class Meta1Hyperparameter(
 _OHO_FUTURE = TypeVar("_OHO_FUTURE", bound=WithOhoPast)
 
 
-class IsInfluenceTensorOHO(
+class Meta1InfluenceTensor(
     Generic[_OHO_FUTURE],
     GetInfluenceTensor[_OHO_FUTURE, INFLUENCETENSOR],
     PutInfluenceTensor[_OHO_FUTURE, INFLUENCETENSOR],
@@ -78,7 +78,7 @@ class IsInfluenceTensorOHO(
 _RFLO_ALGEBRA = TypeVar("_RFLO_ALGEBRA", bound=WithBilevelRflo)
 
 
-class IsRflo(
+class Meta1Rflo(
     Generic[_RFLO_ALGEBRA],
     GetRfloConfig[_RFLO_ALGEBRA],
 ):
@@ -109,7 +109,7 @@ _OHO_SGD = TypeVar("_OHO_SGD", bound=_Oho_Sgd)
 class BilevelWithOhoInterpreter(
     Generic[_OHO_SGD, T, E],
     BilevelInterpreter[_OHO_SGD, T, E],
-    IsInfluenceTensorOHO[_OHO_SGD],
+    Meta1InfluenceTensor[_OHO_SGD],
 ):
     def __init__(self, meta0Dialect: _Meta0Dialect[_OHO_SGD, T, E]) -> None:
         BilevelInterpreter[_OHO_SGD, T, E].__init__(self, meta0Dialect)
@@ -126,7 +126,7 @@ _RFLO_SGD = TypeVar("_RFLO_SGD", bound=_Rflo_Sgd)
 class RfloInterpreter(
     Generic[_RFLO_SGD, T, E],
     BilevelWithOhoInterpreter[_RFLO_SGD, T, E],
-    IsRflo[_RFLO_SGD],
+    Meta1Rflo[_RFLO_SGD],
 ):
     def __init__(self, meta0Dialect: _Meta0Dialect[_RFLO_SGD, T, E]) -> None:
         BilevelWithOhoInterpreter[_RFLO_SGD, T, E].__init__(self, meta0Dialect)

@@ -1,6 +1,5 @@
 from dataclasses import dataclass
-from typing import Callable, Protocol
-import torch
+from typing import Protocol
 from recurrent.mytypes import *
 from recurrent.parameters import RfloConfig, RnnParameter, SgdParameter
 
@@ -9,15 +8,6 @@ from recurrent.parameters import RfloConfig, RnnParameter, SgdParameter
 # DO NOT USE NESTED INHERITANCE, SHALLOW MIXINS ONLY
 # Even if 2^n combinations, philopsophy is you only need to write code on demand.
 # Ideally you could even avoid that with a whole EC system but I'm too lazy to write that.
-
-
-@dataclass(frozen=True)
-class WithRnnConfig(Protocol):
-    n_h: int
-    n_in: int
-    n_out: int
-    alpha: float
-    activationFn: Callable[[torch.Tensor], torch.Tensor]
 
 
 @dataclass(frozen=True)
