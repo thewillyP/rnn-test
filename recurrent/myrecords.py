@@ -1,89 +1,56 @@
-from dataclasses import dataclass
-from typing import Generic
+from typing import Generic, NamedTuple
 from torch.utils import _pytree as pytree
-
 from recurrent.mytypes import *
-from recurrent.mixins import (
-    WithBasePast,
-    WithOhoPast,
-    WithRnnActivation,
-    WithParameter,
-    WithHyperparameter,
-    WithBilevelParameter,
-)
 
 
-@dataclass(frozen=True)
-class RnnInferenceState(WithRnnActivation, WithParameter[T]):
-    pass
+class RnnInferenceState(NamedTuple, Generic[A]):
+    activation: ACTIVATION
+    parameter: A
 
 
-@dataclass(frozen=True)
-class RnnPastFaceState(
-    WithRnnActivation,
-    WithBasePast,
-    WithParameter[T],
-    WithHyperparameter[E],
-    Generic[T, E],
-):
-    pass
+class RnnPastFaceState(NamedTuple, Generic[A, B]):
+    activation: ACTIVATION
+    influenceTensor: INFLUENCETENSOR
+    parameter: A
+    hyperparameter: B
 
 
-# idea?
-# \env -> env.meta0 . dialect
-@dataclass(frozen=True)
-class BilevelFutureFaceState(
-    WithRnnActivation,
-    WithParameter[A],
-    WithHyperparameter[B],
-    WithBilevelParameter[C],
-    Generic[A, B, C],
-):
-    pass
+class BilevelFutureFaceState(NamedTuple, Generic[A, B, C]):
+    activation: ACTIVATION
+    parameter: A
+    hyperparameter: B
+    metaHyperparameter: C
 
 
-@dataclass(frozen=True)
-class OhoFutureFaceState(
-    WithRnnActivation,
-    WithOhoPast,
-    WithParameter[A],
-    WithHyperparameter[B],
-    WithBilevelParameter[C],
-    Generic[A, B, C],
-):
-    pass
+class OhoFutureFaceState(NamedTuple, Generic[A, B, C]):
+    activation: ACTIVATION
+    ohoInfluenceTensor: INFLUENCETENSOR
+    parameter: A
+    hyperparameter: B
+    metaHyperparameter: C
 
 
-@dataclass(frozen=True)
-class BilevelPastFaceState(
-    WithRnnActivation,
-    WithBasePast,
-    WithParameter[A],
-    WithHyperparameter[B],
-    WithBilevelParameter[C],
-    Generic[A, B, C],
-):
-    pass
+class BilevelPastFaceState(NamedTuple, Generic[A, B, C]):
+    activation: ACTIVATION
+    influenceTensor: INFLUENCETENSOR
+    parameter: A
+    hyperparameter: B
+    metaHyperparameter: C
 
 
-@dataclass(frozen=True)
-class OhoPastFaceState(
-    WithRnnActivation,
-    WithOhoPast,
-    WithBasePast,
-    WithParameter[A],
-    WithHyperparameter[B],
-    WithBilevelParameter[C],
-    Generic[A, B, C],
-):
-    pass
+class OhoPastFaceState(NamedTuple, Generic[A, B, C]):
+    activation: ACTIVATION
+    influenceTensor: INFLUENCETENSOR
+    ohoInfluenceTensor: INFLUENCETENSOR
+    parameter: A
+    hyperparameter: B
+    metaHyperparameter: C
 
 
-@dataclass(frozen=True)
-class RnnFutureFaceState(
-    WithRnnActivation, PYTREE, WithParameter[A], WithHyperparameter[B], Generic[A, B]
-):
-    pass
+class RnnFutureFaceState(NamedTuple, Generic[A, B]):
+    activation: ACTIVATION
+    parameter: A
+    hyperparameter: B
 
 
 T_TORCH = TypeVar("T_TORCH", bound=torch.Tensor | PYTREE)

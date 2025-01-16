@@ -25,5 +25,6 @@ dependencies:
   - line_profiler
   - pyrsistent
   - snakeviz
+  - cython
   - pip:
     - torchviz    

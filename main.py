@@ -69,6 +69,9 @@ def trainStep(unbatched_time_series: Input2Output1):
 
     parameters = torch.randn(n_h * (n_h + n_in + 1) + n_out * (n_h + 1))
     w_rec, w_out = rnnSplitParameters(n_h, n_in, n_out, parameters)
+    w_rec = torch.reshape(w_rec, (n_h, n_h + n_in + 1))
+    w_out = torch.reshape(w_out, (n_out, n_h + 1))
+
     parameter = RnnParameter(
         w_rec=PARAMETER(w_rec),
         w_out=PARAMETER(w_out),
@@ -93,10 +96,10 @@ def trainStep(unbatched_time_series: Input2Output1):
     ] = createRnnLibrary(
         dialect,
         dataDialect,
-        lambda x, a, w: a,
-        lambda _, a, w: PREDICTION(a),
-        # rnnStep,
-        # rnnReadout,
+        # lambda x, a, w: a,
+        # lambda _, a, w: PREDICTION(a),
+        rnnStep,
+        rnnReadout,
     )
 
     rnnLearner = offlineLearning(
@@ -112,73 +115,77 @@ def trainStep(unbatched_time_series: Input2Output1):
 
 # %%
 
-length = 100000
-random_data = torch.randn(length, 3)
-dataclass_list = map(lambda row: Input2Output1(x=row[0:2], y=row[2]), random_data)
 
-import cProfile, pstats
+def main():
 
-data = tree_stack(dataclass_list)
+    length = 100000
+    random_data = torch.randn(length, 3)
+    dataclass_list = map(lambda row: Input2Output1(x=row[0:2], y=row[2]), random_data)
 
-profiler = cProfile.Profile()
-profiler.enable()
-predictions = trainStep(data)
-profiler.disable()
-stats = pstats.Stats(profiler).sort_stats("cumtime")
-stats.print_stats()
-stats.dump_stats("profile_results.prof")
+    import cProfile, pstats
 
-# predictions = list(predictions)
-# indices = torch.arange(len(predictions))
+    data = tree_stack(dataclass_list)
 
-# # Plot the data
-# plt.figure(figsize=(8, 5))
-# plt.plot(indices, predictions, marker="o", label="Data")
-# plt.title("Plot of List Data with Indices")
-# plt.xlabel("Indices")
-# plt.ylabel("Values")
-# plt.grid(True)
-# plt.legend()
-# plt.show()
+    profiler = cProfile.Profile()
+    profiler.enable()
+    predictions = trainStep(data)
+    profiler.disable()
+    stats = pstats.Stats(profiler).sort_stats("cumtime")
+    stats.print_stats()
+    stats.dump_stats("profile_results.prof")
 
-# %%
+    # predictions = list(predictions)
+    # indices = torch.arange(len(predictions))
+
+    # # Plot the data
+    # plt.figure(figsize=(8, 5))
+    # plt.plot(indices, predictions, marker="o", label="Data")
+    # plt.title("Plot of List Data with Indices")
+    # plt.xlabel("Indices")
+    # plt.ylabel("Values")
+    # plt.grid(True)
+    # plt.legend()
+    # plt.show()
+
+    # %%
+
+    # Define the simple RNN model
+    class SimpleRNN(torch.nn.Module):
+        def __init__(self, input_size, hidden_size, output_size):
+            super(SimpleRNN, self).__init__()
+            self.hidden_size = hidden_size
+            # Define the RNN layer
+            self.rnn = torch.nn.RNN(input_size, hidden_size)
+            # Define a fully connected layer to map RNN output to final prediction
+            self.fc = torch.nn.Linear(hidden_size, output_size)
+
+        def forward(self, x):
+            # Initialize hidden state with zeros
+            h0 = torch.zeros(1, self.hidden_size)
+            # Get RNN output (output, hidden_state)
+            out, _ = self.rnn(x, h0)
+            # Pass the RNN output through the fully connected layer for each time step
+            out = self.fc(out)  # Apply to all time steps
+            return out
+
+    random_data = torch.randn(length, 2)
+
+    # Initialize the model
+    input_size = 2  # Corresponding to x1, x2, and y
+    hidden_size = 30  # Arbitrary size for hidden state
+    output_size = 1  # We are predicting a single output value
+
+    model = SimpleRNN(input_size, hidden_size, output_size)
+
+    # Generate predictions for the entire sequence
+    with torch.no_grad():  # No need to compute gradients
+        start_time_vmap = time.time()
+        predictions = model(random_data)
+        vmap_time = time.time() - start_time_vmap
+        print(f"vmap execution time: {vmap_time:.6f} seconds")
+
+    print(predictions.shape)
+    # %%
 
 
-# Define the simple RNN model
-class SimpleRNN(torch.nn.Module):
-    def __init__(self, input_size, hidden_size, output_size):
-        super(SimpleRNN, self).__init__()
-        self.hidden_size = hidden_size
-        # Define the RNN layer
-        self.rnn = torch.nn.RNN(input_size, hidden_size)
-        # Define a fully connected layer to map RNN output to final prediction
-        self.fc = torch.nn.Linear(hidden_size, output_size)
-
-    def forward(self, x):
-        # Initialize hidden state with zeros
-        h0 = torch.zeros(1, self.hidden_size)
-        # Get RNN output (output, hidden_state)
-        out, _ = self.rnn(x, h0)
-        # Pass the RNN output through the fully connected layer for each time step
-        out = self.fc(out)  # Apply to all time steps
-        return out
-
-
-random_data = torch.randn(length, 2)
-
-# Initialize the model
-input_size = 2  # Corresponding to x1, x2, and y
-hidden_size = 30  # Arbitrary size for hidden state
-output_size = 1  # We are predicting a single output value
-
-model = SimpleRNN(input_size, hidden_size, output_size)
-
-# Generate predictions for the entire sequence
-with torch.no_grad():  # No need to compute gradients
-    start_time_vmap = time.time()
-    predictions = model(random_data)
-    vmap_time = time.time() - start_time_vmap
-    print(f"vmap execution time: {vmap_time:.6f} seconds")
-
-print(predictions.shape)
-# %%
+main()

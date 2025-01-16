@@ -395,39 +395,108 @@
 # test(t)
 
 
-from dataclasses import dataclass
-from typing import Generic, Protocol, TypeVar
+# from dataclasses import dataclass
+# from typing import Generic, Protocol, TypeVar
 
-A = TypeVar("A")
-B = TypeVar("B")
-
-
-class WithA(Protocol[A]):
-    a: A
+# A = TypeVar("A")
+# B = TypeVar("B")
 
 
-class WithB(Protocol[B]):
-    b: B
+# class WithA(Protocol[A]):
+#     a: A
 
 
-class WithAB(WithA[A], WithB[B], Protocol[A, B]):
-    pass
+# class WithB(Protocol[B]):
+#     b: B
 
 
-@dataclass(frozen=True)
-class Test(WithAB[A, B]):
-    a: A
-    b: B
+# class WithAB(WithA[A], WithB[B], Protocol[A, B]):
+#     pass
 
 
-CHECK = TypeVar("CHECK", bound=WithAB[int, int])
+# @dataclass(frozen=True)
+# class Test(WithAB[A, B]):
+#     a: A
+#     b: B
 
 
-class TestMe(Generic[CHECK]):
-    def test(self, x: CHECK) -> None:
-        pass
+# CHECK = TypeVar("CHECK", bound=WithAB[int, int])
 
 
-x = Test[int, int](1, 2)
+# class TestMe(Generic[CHECK]):
+#     def test(self, x: CHECK) -> None:
+#         pass
 
-TestMe[Test[int, int]]().test(x)
+
+# x = Test[int, int](1, 2)
+
+# TestMe[Test[int, int]]().test(x)
+
+
+# from typing import Generic, NamedTuple, Protocol, TypeVar
+
+
+# class WithA(NamedTuple, Protocol):
+#     a: int
+
+
+# A = TypeVar("A", bound=WithA)
+# B = TypeVar("B", bound=WithA)
+
+
+# class Test(NamedTuple, Generic[A, B]):
+#     a: A
+#     b: B
+
+
+# T = TypeVar("T", bound=WithA)
+
+
+# def test(x: WithA) -> None:
+#     pass
+
+
+# test(Test[int, int](1, 2))
+
+
+import cProfile
+import pstats
+from collections import namedtuple
+import copy
+
+# Define a named tuple
+TreeStack = namedtuple("TreeStack", ["field1", "field2", "field3"])
+
+
+# Function to simulate training steps
+def trainStep(data):
+    for _ in range(100_000):
+        # Call copy._replace (equivalent to .replace in namedtuple)
+        # data = data._replace(field1=data.field1 + 1)
+        data = copy.replace(data, field1=data.field1 + 1)
+        data = copy.replace(data, field1=data.field1 + 1)
+        data = copy.replace(data, field1=data.field1 + 1)
+        data = copy.replace(data, field1=data.field1 + 1)
+        data = copy.replace(data, field1=data.field1 + 1)
+        data = copy.replace(data, field1=data.field1 + 1)
+        data = copy.replace(data, field1=data.field1 + 1)
+        data = copy.replace(data, field1=data.field1 + 1)
+        data = copy.replace(data, field1=data.field1 + 1)
+        data = copy.replace(data, field1=data.field1 + 1)
+        data = copy.replace(data, field1=data.field1 + 1)
+    return data
+
+
+# Prepare data
+data = TreeStack(field1=0, field2=0, field3=0)
+
+# Profile the function
+profiler = cProfile.Profile()
+profiler.enable()
+predictions = trainStep(data)
+profiler.disable()
+
+# Output and save profiling stats
+stats = pstats.Stats(profiler).sort_stats("cumtime")
+stats.print_stats()
+stats.dump_stats("profile_results.prof")

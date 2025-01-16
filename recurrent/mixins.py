@@ -1,7 +1,6 @@
-from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, Self
 from recurrent.mytypes import *
-from recurrent.parameters import RfloConfig, RnnParameter, SgdParameter
+from recurrent.parameters import RfloConfig
 
 
 # This is just an entity component model  https://news.ycombinator.com/item?id=7496968
@@ -10,41 +9,57 @@ from recurrent.parameters import RfloConfig, RnnParameter, SgdParameter
 # Ideally you could even avoid that with a whole EC system but I'm too lazy to write that.
 
 
-@dataclass(frozen=True)
 class WithBasePast(Protocol):
     influenceTensor: INFLUENCETENSOR
 
+    def __replace__(self, **kwargs) -> Self:
+        pass
 
-@dataclass(frozen=True)
+
 class WithOhoPast(Protocol):
     ohoInfluenceTensor: INFLUENCETENSOR
 
+    def __replace__(self, **kwargs) -> Self:
+        pass
 
-@dataclass(frozen=True)
+
 class WithParameter(Protocol[T]):
     parameter: T
 
+    def __replace__(self, **kwargs) -> Self:
+        pass
 
-@dataclass(frozen=True)
+
 class WithHyperparameter(Protocol[T]):
     hyperparameter: T
 
+    def __replace__(self, **kwargs) -> Self:
+        pass
 
-@dataclass(frozen=True)
+
 class WithBilevelParameter(Protocol[T]):
     metaHyperparameter: T
 
+    def __replace__(self, **kwargs) -> Self:
+        pass
 
-@dataclass(frozen=True)
+
 class WithRnnActivation(Protocol):
     activation: ACTIVATION
 
+    def __replace__(self, **kwargs) -> Self:
+        pass
 
-@dataclass(frozen=True)
+
 class WithBaseRflo(Protocol):
     rfloConfig: RfloConfig
 
+    def __replace__(self, **kwargs) -> Self:
+        pass
 
-@dataclass(frozen=True)
+
 class WithBilevelRflo(Protocol):
     rfloConfig_bilevel: RfloConfig
+
+    def __replace__(self, **kwargs) -> Self:
+        pass

@@ -1,19 +1,16 @@
-from typing import Generic
-from dataclasses import dataclass, replace
-from recurrent.myrecords import RnnFutureFaceState
+from typing import Generic, NamedTuple, Self
 from recurrent.mytypes import *
 from recurrent.mixins import (
-    RnnParameter,
-    SgdParameter,
     WithBasePast,
     WithRnnActivation,
     WithBaseRflo,
     WithParameter,
     WithHyperparameter,
 )
-from recurrent.parameters import RfloConfig
+from recurrent.parameters import RfloConfig, RnnParameter, SgdParameter
 from typing import Protocol
 from recurrent.objectalgebra.typeclasses import *
+import copy
 
 
 _HAS_ACTIVATION = TypeVar("_HAS_ACTIVATION", bound=WithRnnActivation)
@@ -28,7 +25,7 @@ class BaseActivation(
         return env.activation
 
     def putActivation(self, z: ACTIVATION, env: _HAS_ACTIVATION) -> _HAS_ACTIVATION:
-        return replace(env, activation=z)
+        return copy.replace(env, activation=z)
 
 
 _IS_RNNP = TypeVar("_IS_RNNP", bound=WithParameter[RnnParameter])
@@ -41,7 +38,7 @@ class BaseRnnParameterRead(Generic[_IS_RNNP], GetParameter[_IS_RNNP, RnnParamete
 
 class BaseRnnParameterWrite(Generic[_IS_RNNP], PutParameter[_IS_RNNP, RnnParameter]):
     def putParameter(self, z: RnnParameter, env: _IS_RNNP) -> _IS_RNNP:
-        return replace(env, parameter=z)
+        return copy.replace(env, parameter=z)
 
 
 _IS_SGDP = TypeVar("_IS_SGDP", bound=WithHyperparameter[SgdParameter])
@@ -56,7 +53,7 @@ class BaseHyperparameter(
         return env.hyperparameter
 
     def putHyperParameter(self, z: SgdParameter, env: _IS_SGDP) -> _IS_SGDP:
-        return replace(env, hyperparameter=z)
+        return copy.replace(env, hyperparameter=z)
 
 
 _HAS_INFLUENCE = TypeVar("_HAS_INFLUENCE", bound=WithBasePast)
@@ -73,7 +70,7 @@ class BaseInfluenceTensor(
     def putInfluenceTensor(
         self, z: INFLUENCETENSOR, env: _HAS_INFLUENCE
     ) -> _HAS_INFLUENCE:
-        return replace(env, influenceTensor=z)
+        return copy.replace(env, influenceTensor=z)
 
 
 _RFLO_ALGEBRA = TypeVar("_RFLO_ALGEBRA", bound=WithBaseRflo)
@@ -87,9 +84,9 @@ class BaseRflo(
         return env.rfloConfig
 
 
-@dataclass(frozen=True)
 class _Inference(WithRnnActivation, WithParameter[RnnParameter], Protocol):
-    pass
+    def __replace__(self, **kwargs) -> Self:
+        pass
 
 
 _INFERENCE = TypeVar("_INFERENCE", bound=_Inference)
@@ -101,14 +98,14 @@ class RnnInferenceInterpreter(
     pass
 
 
-@dataclass(frozen=True)
 class _Learnable(
     WithRnnActivation,
     WithParameter[RnnParameter],
     WithHyperparameter[SgdParameter],
     Protocol,
 ):
-    pass
+    def __replace__(self, **kwargs) -> Self:
+        pass
 
 
 _LEARNABLE = TypeVar("_LEARNABLE", bound=_Learnable)
@@ -124,9 +121,9 @@ class RnnLearnableInterpreter(
     pass
 
 
-@dataclass(frozen=True)
 class _PastFacing(_Learnable, WithBasePast, Protocol):
-    pass
+    def __replace__(self, **kwargs) -> Self:
+        pass
 
 
 _PAST_FACING = TypeVar("_PAST_FACING", bound=_PastFacing)
@@ -143,9 +140,9 @@ class RnnPastFacingInterpreter(
     pass
 
 
-@dataclass(frozen=True)
 class _Rflo(_PastFacing, WithBaseRflo, Protocol):
-    pass
+    def __replace__(self, **kwargs) -> Self:
+        pass
 
 
 _RFLO = TypeVar("_RFLO", bound=_Rflo)
