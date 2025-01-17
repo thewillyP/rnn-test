@@ -16,13 +16,7 @@ from recurrent.objectalgebra.typeclasses import (
 )
 
 from recurrent.mytypes import *
-from recurrent.monad import (
-    ReaderState,
-    Unit,
-    reader,
-    foldM_prime,
-    traverse_,
-)
+from recurrent.monad import ReaderState, Unit, reader, foldM, traverse
 
 
 STATEM = Callable[[DATA, ENV], ENV]
@@ -195,12 +189,6 @@ class GradientLibrary(Generic[ENV, PRED, DATA]):
     def rnnWithParamGradient_Averaged(
         self, getWeight: Callable[[DATA], float]
     ) -> ReaderState[Iterable[DATA], ENV, GRADIENT]:
-        # def weight(data: DATA, gr: GRADIENT) -> State[ENV, GRADIENT]:
-        #     return runReader(self.rnnWithParamGradient)(data).fmap(
-        #         lambda gr_: GRADIENT(gr + gr_ * getWeight(data))
-        #     )
-
-        # return toReader(foldM_(weight, GRADIENT(torch.tensor(0))))
 
         def weight(gr: GRADIENT) -> ReaderState[DATA, ENV, GRADIENT]:
             return (
@@ -213,7 +201,7 @@ class GradientLibrary(Generic[ENV, PRED, DATA]):
                 )
             )
 
-        return foldM_prime(weight, GRADIENT(torch.tensor(0)))
+        return foldM(weight, GRADIENT(torch.tensor(0)))
 
 
 def batchGradients(
@@ -306,31 +294,13 @@ def offlineLearning(
     rnnLibrary: RnnLibrary[ENV, PRED, DATA],
 ) -> GradientLibrary[ENV, Iterable[PRED], Iterable[DATA]]:
 
-    # reader_test = (
-    #     ReaderState[DATA, ENV, PRED]
-    #     .pure(torch.tensor(0))
-    #     .fmap(lambda _: Unit())
-    #     .fmap(lambda _: Unit())
-    #     .fmap(lambda _: Unit())
-    #     .fmap(lambda _: Unit())
-    #     .fmap(lambda _: Unit())
-    # )
-    # rnnWithPred = toReader(traverse_(runReader(reader_test)))
-    rnnWithPred = traverse_(rnnLibrary.rnnStep())
-
-    # rnnWithPred = toReader(traverse(runReader(rnnLibrary.rnnStep())))
-
+    rnnWithPred = traverse(rnnLibrary.rnnStep())
     rnn_with_loss = rnnLibrary.rnnStep().bind(loss(dataDialect, computeLoss))
-
-    # def accum_loss(d: DATA, accum: LOSS) -> State[ENV, LOSS]:
-    #     return runReader(rnn_with_loss)(d).fmap(lambda l: LOSS(accum + l))
-
-    # rnnWithLoss = toReader(foldM_(accum_loss, LOSS(torch.tensor(0))))
 
     def accum_loss(accum: LOSS) -> ReaderState[DATA, ENV, LOSS]:
         return rnn_with_loss.fmap(lambda l: LOSS(accum + l))
 
-    rnnWithLoss = foldM_prime(accum_loss, LOSS(torch.tensor(0)))
+    rnnWithLoss = foldM(accum_loss, LOSS(torch.tensor(0)))
 
     rnnWithGrad = computeGradient(
         rnnWithLoss, dialect.getParameter, dialect.putParameter

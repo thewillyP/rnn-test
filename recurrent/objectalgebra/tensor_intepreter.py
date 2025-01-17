@@ -8,7 +8,6 @@ class IsInput(HasInput[Input2Output1, torch.Tensor]):
     @staticmethod
     def getInput(d: Input2Output1) -> torch.Tensor:
         return d.x
-        # return torch.cat((torch.atleast_1d(d.x1), torch.atleast_1d(d.x2)), dim=0)
 
 
 class IsLabel(HasLabel[Input2Output1, torch.Tensor]):

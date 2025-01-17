@@ -6,7 +6,7 @@ from recurrent.myrecords import RnnGodState
 import torch
 from recurrent.mytypes import *
 
-from recurrent.objectalgebra.base_interpreter import BaseRnnGodInterpreter
+from recurrent.objectalgebra.interpreter import BaseRnnGodInterpreter
 from recurrent.objectalgebra.tensor_intepreter import Input2Output1Interpreter
 
 from matplotlib import pyplot as plt
