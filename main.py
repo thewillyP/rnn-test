@@ -2,15 +2,15 @@
 import time
 from recurrent.datarecords import Input2Output1
 from recurrent.mylearning import RnnLibrary, createRnnLibrary, offlineLearning
-from recurrent.myrecords import RnnFutureFaceState
+from recurrent.myrecords import RnnGodState
 import torch
 from recurrent.mytypes import *
 
-from recurrent.objectalgebra.base_interpreter import RnnLearnableInterpreter
+from recurrent.objectalgebra.base_interpreter import BaseRnnGodInterpreter
 from recurrent.objectalgebra.tensor_intepreter import Input2Output1Interpreter
 
 from matplotlib import pyplot as plt
-from recurrent.parameters import RnnParameter, SgdParameter
+from recurrent.parameters import RfloConfig, RnnParameter, SgdParameter
 from recurrent.util import rnnSplitParameters, tree_stack
 
 """
@@ -64,7 +64,7 @@ def trainStep(unbatched_time_series: Input2Output1):
     learning_rate = 0.1
     alpha = 1.0
 
-    dialect = RnnLearnableInterpreter[RnnFutureFaceState[RnnParameter, SgdParameter]]()
+    dialect = BaseRnnGodInterpreter[RnnParameter, SgdParameter, SgdParameter]()
     dataDialect = Input2Output1Interpreter()
 
     parameters = torch.randn(n_h * (n_h + n_in + 1) + n_out * (n_h + 1))
@@ -83,16 +83,21 @@ def trainStep(unbatched_time_series: Input2Output1):
     )
     sgd = SgdParameter(learning_rate=LEARNING_RATE(torch.tensor(learning_rate)))
 
-    initEnv = RnnFutureFaceState[RnnParameter, SgdParameter](
+    initEnv = RnnGodState[RnnParameter, SgdParameter, SgdParameter](
         # activation=ACTIVATION(torch.randn(batch_size, n_h)),
         activation=ACTIVATION(torch.randn(n_h)),
         parameter=parameter,
         hyperparameter=sgd,
+        influenceTensor=INFLUENCETENSOR(torch.randn(n_h)),
+        ohoInfluenceTensor=INFLUENCETENSOR(torch.randn(n_h)),
+        metaHyperparameter=sgd,
+        rfloConfig=RfloConfig(rflo_alpha=0),
+        rfloConfig_bilevel=RfloConfig(rflo_alpha=0),
     )
 
     # y = PREDICTION(torch.tensor(0.0))
     rnnLibrary: RnnLibrary[
-        RnnFutureFaceState[RnnParameter, SgdParameter], PREDICTION, Input2Output1
+        RnnGodState[RnnParameter, SgdParameter, SgdParameter], PREDICTION, Input2Output1
     ] = createRnnLibrary(
         dialect,
         dataDialect,

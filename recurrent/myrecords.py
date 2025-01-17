@@ -1,81 +1,67 @@
 from typing import Generic, NamedTuple
 from torch.utils import _pytree as pytree
 from recurrent.mytypes import *
+from recurrent.parameters import RfloConfig
 
 
-class RnnInferenceState(NamedTuple, Generic[A]):
-    activation: ACTIVATION
-    parameter: A
-
-
-class RnnPastFaceState(NamedTuple, Generic[A, B]):
-    activation: ACTIVATION
-    influenceTensor: INFLUENCETENSOR
-    parameter: A
-    hyperparameter: B
-
-
-class BilevelFutureFaceState(NamedTuple, Generic[A, B, C]):
-    activation: ACTIVATION
-    parameter: A
-    hyperparameter: B
-    metaHyperparameter: C
-
-
-class OhoFutureFaceState(NamedTuple, Generic[A, B, C]):
-    activation: ACTIVATION
-    ohoInfluenceTensor: INFLUENCETENSOR
-    parameter: A
-    hyperparameter: B
-    metaHyperparameter: C
-
-
-class BilevelPastFaceState(NamedTuple, Generic[A, B, C]):
-    activation: ACTIVATION
-    influenceTensor: INFLUENCETENSOR
-    parameter: A
-    hyperparameter: B
-    metaHyperparameter: C
-
-
-class OhoPastFaceState(NamedTuple, Generic[A, B, C]):
+class RnnGodState(NamedTuple, Generic[A, B, C]):
     activation: ACTIVATION
     influenceTensor: INFLUENCETENSOR
     ohoInfluenceTensor: INFLUENCETENSOR
     parameter: A
     hyperparameter: B
     metaHyperparameter: C
+    rfloConfig: RfloConfig
+    rfloConfig_bilevel: RfloConfig
 
 
-class RnnFutureFaceState(NamedTuple, Generic[A, B]):
-    activation: ACTIVATION
-    parameter: A
-    hyperparameter: B
+A_TORCH = TypeVar("A_TORCH", bound=torch.Tensor | PYTREE)
+B_TORCH = TypeVar("B_TORCH", bound=torch.Tensor | PYTREE)
+C_TORCH = TypeVar("C_TORCH", bound=torch.Tensor | PYTREE)
 
 
-T_TORCH = TypeVar("T_TORCH", bound=torch.Tensor | PYTREE)
-E_TORCH = TypeVar("E_TORCH", bound=torch.Tensor | PYTREE)
-
-
-def rnnFutureFaceState_flatten(rnnFutureS: RnnFutureFaceState[T_TORCH, E_TORCH]):
+def rnnGodState_flatten(godState: RnnGodState[A_TORCH, B_TORCH, C_TORCH]):
     return (
-        rnnFutureS.activation,
-        rnnFutureS.parameter,
-        rnnFutureS.hyperparameter,
-    ), None
+        godState.activation,
+        godState.influenceTensor,
+        godState.ohoInfluenceTensor,
+        godState.parameter,
+        godState.hyperparameter,
+        godState.metaHyperparameter,
+    ), (godState.rfloConfig, godState.rfloConfig_bilevel)
 
 
-def rnnFutureFaceState_unflatten(children: tuple[ACTIVATION, T_TORCH, E_TORCH], aux):
-    activation, parameter, hyperparameter = children
-    return RnnFutureFaceState[T_TORCH, E_TORCH](
-        activation=activation, parameter=parameter, hyperparameter=hyperparameter
+def rnnGodState_unflatten(
+    children: tuple[
+        ACTIVATION, INFLUENCETENSOR, INFLUENCETENSOR, A_TORCH, B_TORCH, C_TORCH
+    ],
+    aux: tuple[RfloConfig, RfloConfig],
+):
+    (
+        activation,
+        influenceTensor,
+        ohoInfluenceTensor,
+        parameter,
+        hyperparameter,
+        metaHyperparameter,
+    ) = children
+    (rfloConfig, rfloConfig_bilevel) = aux
+    return RnnGodState(
+        activation=activation,
+        influenceTensor=influenceTensor,
+        ohoInfluenceTensor=ohoInfluenceTensor,
+        parameter=parameter,
+        hyperparameter=hyperparameter,
+        metaHyperparameter=metaHyperparameter,
+        rfloConfig=rfloConfig,
+        rfloConfig_bilevel=rfloConfig_bilevel,
     )
 
 
 pytree.register_pytree_node(
-    RnnFutureFaceState,
-    rnnFutureFaceState_flatten,
-    rnnFutureFaceState_unflatten,
+    RnnGodState,
+    rnnGodState_flatten,
+    rnnGodState_unflatten,
 )
 
 

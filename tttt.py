@@ -433,70 +433,79 @@
 # TestMe[Test[int, int]]().test(x)
 
 
-# from typing import Generic, NamedTuple, Protocol, TypeVar
+from typing import Any, Generic, NamedTuple, Protocol, Self, TypeVar
+import typing_extensions
 
 
-# class WithA(NamedTuple, Protocol):
-#     a: int
+class WithA(Protocol):
+    @property
+    def a(self) -> int: ...
+
+    # def __replace__(self, /, **changes):
+    #     pass
+    def __replace__(self, **kwargs: Any) -> typing_extensions.Self: ...
 
 
-# A = TypeVar("A", bound=WithA)
-# B = TypeVar("B", bound=WithA)
+A = TypeVar("A")
+B = TypeVar("B")
 
 
-# class Test(NamedTuple, Generic[A, B]):
-#     a: A
-#     b: B
+class Test(NamedTuple, Generic[A, B]):
+    a: A
+    b: B
 
 
-# T = TypeVar("T", bound=WithA)
+T = TypeVar("T", bound=WithA)
 
 
-# def test(x: WithA) -> None:
-#     pass
+def test(x: WithA):
+    pass
 
 
-# test(Test[int, int](1, 2))
+x = Test[int, int](1, 2)
+x._replace
+
+y = test(x)
 
 
-import cProfile
-import pstats
-from collections import namedtuple
-import copy
+# import cProfile
+# import pstats
+# from collections import namedtuple
+# import copy
 
-# Define a named tuple
-TreeStack = namedtuple("TreeStack", ["field1", "field2", "field3"])
-
-
-# Function to simulate training steps
-def trainStep(data):
-    for _ in range(100_000):
-        # Call copy._replace (equivalent to .replace in namedtuple)
-        # data = data._replace(field1=data.field1 + 1)
-        data = copy.replace(data, field1=data.field1 + 1)
-        data = copy.replace(data, field1=data.field1 + 1)
-        data = copy.replace(data, field1=data.field1 + 1)
-        data = copy.replace(data, field1=data.field1 + 1)
-        data = copy.replace(data, field1=data.field1 + 1)
-        data = copy.replace(data, field1=data.field1 + 1)
-        data = copy.replace(data, field1=data.field1 + 1)
-        data = copy.replace(data, field1=data.field1 + 1)
-        data = copy.replace(data, field1=data.field1 + 1)
-        data = copy.replace(data, field1=data.field1 + 1)
-        data = copy.replace(data, field1=data.field1 + 1)
-    return data
+# # Define a named tuple
+# TreeStack = namedtuple("TreeStack", ["field1", "field2", "field3"])
 
 
-# Prepare data
-data = TreeStack(field1=0, field2=0, field3=0)
+# # Function to simulate training steps
+# def trainStep(data):
+#     for _ in range(100_000):
+#         # Call copy._replace (equivalent to .replace in namedtuple)
+#         # data = data._replace(field1=data.field1 + 1)
+#         data = copy.replace(data, field1=data.field1 + 1)
+#         data = copy.replace(data, field1=data.field1 + 1)
+#         data = copy.replace(data, field1=data.field1 + 1)
+#         data = copy.replace(data, field1=data.field1 + 1)
+#         data = copy.replace(data, field1=data.field1 + 1)
+#         data = copy.replace(data, field1=data.field1 + 1)
+#         data = copy.replace(data, field1=data.field1 + 1)
+#         data = copy.replace(data, field1=data.field1 + 1)
+#         data = copy.replace(data, field1=data.field1 + 1)
+#         data = copy.replace(data, field1=data.field1 + 1)
+#         data = copy.replace(data, field1=data.field1 + 1)
+#     return data
 
-# Profile the function
-profiler = cProfile.Profile()
-profiler.enable()
-predictions = trainStep(data)
-profiler.disable()
 
-# Output and save profiling stats
-stats = pstats.Stats(profiler).sort_stats("cumtime")
-stats.print_stats()
-stats.dump_stats("profile_results.prof")
+# # Prepare data
+# data = TreeStack(field1=0, field2=0, field3=0)
+
+# # Profile the function
+# profiler = cProfile.Profile()
+# profiler.enable()
+# predictions = trainStep(data)
+# profiler.disable()
+
+# # Output and save profiling stats
+# stats = pstats.Stats(profiler).sort_stats("cumtime")
+# stats.print_stats()
+# stats.dump_stats("profile_results.prof")
