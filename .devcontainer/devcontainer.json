@@ -8,13 +8,13 @@
 	"customizations": {
 		"vscode": {
 			"extensions": [
-				"ms-python.python",
 				"ms-python.debugpy",
 				"mhutchie.git-graph",
-				"oderwat.indent-rainbow",
 				"ms-toolsai.jupyter",
-				"njqdev.vscode-python-typehint",
 				"GitHub.copilot",
+				// "ms-python.autopep8",
+				"njqdev.vscode-python-typehint",
+				"ms-python.mypy-type-checker",
 				"ms-python.black-formatter"
 			],
 			"settings": {

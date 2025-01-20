@@ -1,72 +1,56 @@
-from typing import Generic
+from typing import Generic, Self
 from recurrent.mytypes import *
 from recurrent.parameters import (
     RfloConfig,
 )
 from typing import Protocol
-
-_ENV = TypeVar("_ENV", contravariant=True)
-_DATA = TypeVar("_DATA", contravariant=True)
-_T = TypeVar("_T", contravariant=True)
-_E = TypeVar("_E", covariant=True)
+from recurrent.monad import *
 
 
 # ============== Typeclasses ==============
-class GetActivation(Generic[_ENV, _E], Protocol):
-    def getActivation(self, env: _ENV) -> _E:
-        pass
+class GetActivation[E, T](Protocol):
+    def getActivation[D](self) -> Fold[Self, D, E, T]: ...
 
 
-class PutActivation(Generic[ENV, _T], Protocol):
-    def putActivation(self, s: _T, env: ENV) -> ENV:
-        pass
+class PutActivation[E, T](Protocol):
+    def putActivation[D](self, s: T) -> Fold[Self, D, E, Unit]: ...
 
 
-class GetParameter(Generic[_ENV, _E], Protocol):
-    def getParameter(self, env: _ENV) -> _E:
-        pass
+class GetParameter[E, T](Protocol):
+    def getParameter[D](self) -> Fold[Self, D, E, T]: ...
 
 
-class PutParameter(Generic[ENV, _T], Protocol):
-    def putParameter(self, s: _T, env: ENV) -> ENV:
-        pass
+class PutParameter[E, T](Protocol):
+    def putParameter[D](self, s: T) -> Fold[Self, D, E, Unit]: ...
 
 
-class GetHyperParameter(Generic[_ENV, _E], Protocol):
-    def getHyperParameter(self, env: _ENV) -> _E:
-        pass
+class GetHyperParameter[E, T](Protocol):
+    def getHyperParameter[D](self) -> Fold[Self, D, E, T]: ...
 
 
-class PutHyperParameter(Generic[ENV, _T], Protocol):
-    def putHyperParameter(self, s: _T, env: ENV) -> ENV:
-        pass
+class PutHyperParameter[E, T](Protocol):
+    def putHyperParameter[D](self, s: T) -> Fold[Self, D, E, Unit]: ...
 
 
-class GetInfluenceTensor(Generic[_ENV, _E], Protocol):
-    def getInfluenceTensor(self, env: _ENV) -> _E:
-        pass
+class GetInfluenceTensor[E, T](Protocol):
+    def getInfluenceTensor[D](self) -> Fold[Self, D, E, T]: ...
 
 
-class PutInfluenceTensor(Generic[ENV, _T], Protocol):
-    def putInfluenceTensor(self, s: _T, env: ENV) -> ENV:
-        pass
+class PutInfluenceTensor[E, T](Protocol):
+    def putInfluenceTensor[D](self, s: T) -> Fold[Self, D, E, Unit]: ...
 
 
-class GetRfloConfig(Generic[_ENV], Protocol):
-    def getRfloConfig(self, env: _ENV) -> RfloConfig:
-        pass
+class GetRfloConfig[E](Protocol):
+    def getRfloConfig[D](self) -> Fold[Self, D, E, RfloConfig]: ...
 
 
-class HasInput(Generic[_DATA, _E], Protocol):
-    def getInput(self, data: _DATA) -> _E:
-        pass
+class HasInput[D, T](Protocol):
+    def getInput[E](self) -> Fold[Self, D, E, T]: ...
 
 
-class HasPredictionInput(Generic[_DATA, _E], Protocol):
-    def getPredictionInput(self, data: _DATA) -> _E:
-        pass
+class HasPredictionInput[D, T](Protocol):
+    def getPredictionInput[E](self) -> Fold[Self, D, E, T]: ...
 
 
-class HasLabel(Generic[_DATA, _E], Protocol):
-    def getLabel(self, data: _DATA) -> _E:
-        pass
+class HasLabel[D, T](Protocol):
+    def getLabel[E](self) -> Fold[Self, D, E, T]: ...
