@@ -44,7 +44,7 @@ class Fold[D, E, S, A]:
         def next(_: Pidgen, env: E, state: S):
             return self.func(dl, env, state)
 
-        return Fold[Pidgen, E, S, A](next)
+        return Fold[Pidgen, E, S, A](next)  # type: ignore
 
 
 def pure[D, E, S, A](value: A) -> Fold[D, E, S, A]:
@@ -80,7 +80,7 @@ def stateToFold[D, E, S, T](func: Callable[[S], tuple[T, S]]) -> Fold[D, E, S, T
 
 
 def toFold[D, E, S, T](func: Callable[[E, S], tuple[T, S]]):
-    return Fold[D, E, S, T](lambda _d, env, state: func(env, state))
+    return Fold[D, E, S, T](lambda _d, env, state: func(env, state))  # type: ignore
 
 
 # these guys need to be strict

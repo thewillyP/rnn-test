@@ -26,6 +26,7 @@ class RnnGodState[A, B, C](NamedTuple):
     hyperparameter: B
     metaHyperparameter: C
     rnnConfig: RnnConfig
+    rnnConfig_bilevel: RnnConfig
     rfloConfig: RfloConfig
     rfloConfig_bilevel: RfloConfig
 
@@ -38,6 +39,8 @@ def batch_rtrl[A, B, C]() -> RnnGodState[A, B, C]:
         parameter=None,
         hyperparameter=None,
         metaHyperparameter=None,
+        rnnConfig=None,
+        rnnConfig_bilevel=None,
         rfloConfig=None,
         rfloConfig_bilevel=None,
     )
@@ -51,6 +54,8 @@ def batch_vanilla[A, B, C]() -> RnnGodState[A, B, C]:
         parameter=None,
         hyperparameter=None,
         metaHyperparameter=None,
+        rnnConfig=None,
+        rnnConfig_bilevel=None,
         rfloConfig=None,
         rfloConfig_bilevel=None,
     )
