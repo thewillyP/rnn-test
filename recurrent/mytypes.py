@@ -13,10 +13,10 @@ class PYTREE(Protocol):
 ACTIVATION = NewType("ACTIVATION", torch.Tensor)
 PREDICTION = NewType("PREDICTION", torch.Tensor)
 PARAMETER = NewType("PARAMETER", torch.Tensor)
-INFLUENCETENSOR = NewType("INFLUENCETENSOR", torch.Tensor)
-HYPERPARAMETER = NewType("HYPERPARAMETER", torch.Tensor)
+# INFLUENCETENSOR = NewType("INFLUENCETENSOR", torch.Tensor)
+# HYPERPARAMETER = NewType("HYPERPARAMETER", torch.Tensor)
 LOSS = NewType("LOSS", torch.Tensor)  # float32
-LEARNING_RATE = NewType("LEARNING_RATE", float)
+LEARNING_RATE = NewType("LEARNING_RATE", torch.Tensor)
 
 
 # bc grad over param pytree returns a param pytree, and need a way to distinguish between gr vs param, but still recognize they're same type

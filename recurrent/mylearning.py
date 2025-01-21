@@ -14,6 +14,7 @@ from recurrent.objectalgebra.typeclasses import (
     GetInfluenceTensor,
     GetParameter,
     GetRfloConfig,
+    GetRnnConfig,
     HasInput,
     HasPredictionInput,
     HasLabel,
@@ -156,6 +157,7 @@ class _R[D, E](
     PutActivation[E, ACTIVATION],
     GetParameter[E, RnnParameter],
     HasInput[D, torch.Tensor],
+    GetRnnConfig[E],
     Protocol,
 ): ...
 
@@ -166,8 +168,9 @@ def doRnnStep[D, E]() -> G[Fold[_R[D, E], D, E, ACTIVATION]]:
     x = yield from dl.getInput()
     a = yield from dl.getActivation()
     param = yield from dl.getParameter()
+    cfg = yield from dl.getRnnConfig()
     a_rec = param.w_rec @ torch.cat((x, a, torch.tensor([1.0])))
-    a_new = ACTIVATION((1 - param.alpha) * a + param.alpha * param.activationFn(a_rec))
+    a_new = ACTIVATION((1 - cfg.alpha) * a + cfg.alpha * cfg.activationFn(a_rec))
     _ = yield from dl.putActivation(a_new)
     return pure(a_new)
 

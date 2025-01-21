@@ -2,6 +2,7 @@ from typing import Generic, Self
 from recurrent.mytypes import *
 from recurrent.parameters import (
     RfloConfig,
+    RnnConfig,
 )
 from typing import Protocol
 from recurrent.monad import *
@@ -42,6 +43,10 @@ class PutInfluenceTensor[E, T](Protocol):
 
 class GetRfloConfig[E](Protocol):
     def getRfloConfig[D](self) -> Fold[Self, D, E, RfloConfig]: ...
+
+
+class GetRnnConfig[E](Protocol):
+    def getRnnConfig[D](self) -> Fold[Self, D, E, RnnConfig]: ...
 
 
 class HasInput[D, T](Protocol):

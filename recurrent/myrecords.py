@@ -1,68 +1,109 @@
 from typing import Generic, NamedTuple
 from torch.utils import _pytree as pytree
 from recurrent.mytypes import *
-from recurrent.parameters import RfloConfig
+from recurrent.parameters import RfloConfig, RnnConfig
+
+"""
+Expression problem is very hard to solve in python, without there being some resistance.
+First, I want 'inheritance' since that's what makes adding new datatypes easy. 
+But NamedTuples can't use inheritance and that's bad because
+1. NT are automatically PyTrees, I don't want to have to write boilerplate to register if using dataclass
+2. NT more memory efficient
+
+Compromise: Everytime I add a field, this file is the only place I should need to change. 
+
+I will have to specify vmap batch dimensions for all fields regardless of whether I solve the EP.
+
+On the good side, Object Algebras still buys me extensible interfaces which is already cracked on its own.
+"""
 
 
-class RnnGodState(NamedTuple, Generic[A, B, C]):
+class RnnGodState[A, B, C](NamedTuple):
     activation: ACTIVATION
-    influenceTensor: INFLUENCETENSOR
-    ohoInfluenceTensor: INFLUENCETENSOR
+    influenceTensor: Gradient[A]
+    ohoInfluenceTensor: Gradient[B]
     parameter: A
     hyperparameter: B
     metaHyperparameter: C
+    rnnConfig: RnnConfig
     rfloConfig: RfloConfig
     rfloConfig_bilevel: RfloConfig
 
 
-A_TORCH = TypeVar("A_TORCH", bound=torch.Tensor | PYTREE)
-B_TORCH = TypeVar("B_TORCH", bound=torch.Tensor | PYTREE)
-C_TORCH = TypeVar("C_TORCH", bound=torch.Tensor | PYTREE)
-
-
-def rnnGodState_flatten(godState: RnnGodState[A_TORCH, B_TORCH, C_TORCH]):
-    return (
-        godState.activation,
-        godState.influenceTensor,
-        godState.ohoInfluenceTensor,
-        godState.parameter,
-        godState.hyperparameter,
-        godState.metaHyperparameter,
-    ), (godState.rfloConfig, godState.rfloConfig_bilevel)
-
-
-def rnnGodState_unflatten(
-    children: tuple[
-        ACTIVATION, INFLUENCETENSOR, INFLUENCETENSOR, A_TORCH, B_TORCH, C_TORCH
-    ],
-    aux: tuple[RfloConfig, RfloConfig],
-):
-    (
-        activation,
-        influenceTensor,
-        ohoInfluenceTensor,
-        parameter,
-        hyperparameter,
-        metaHyperparameter,
-    ) = children
-    (rfloConfig, rfloConfig_bilevel) = aux
+def batch_rtrl[A, B, C]() -> RnnGodState[A, B, C]:
     return RnnGodState(
-        activation=activation,
-        influenceTensor=influenceTensor,
-        ohoInfluenceTensor=ohoInfluenceTensor,
-        parameter=parameter,
-        hyperparameter=hyperparameter,
-        metaHyperparameter=metaHyperparameter,
-        rfloConfig=rfloConfig,
-        rfloConfig_bilevel=rfloConfig_bilevel,
+        activation=0,
+        influenceTensor=0,
+        ohoInfluenceTensor=None,
+        parameter=None,
+        hyperparameter=None,
+        metaHyperparameter=None,
+        rfloConfig=None,
+        rfloConfig_bilevel=None,
     )
 
 
-pytree.register_pytree_node(
-    RnnGodState,
-    rnnGodState_flatten,
-    rnnGodState_unflatten,
-)
+def batch_vanilla[A, B, C]() -> RnnGodState[A, B, C]:
+    return RnnGodState(
+        activation=0,
+        influenceTensor=None,
+        ohoInfluenceTensor=None,
+        parameter=None,
+        hyperparameter=None,
+        metaHyperparameter=None,
+        rfloConfig=None,
+        rfloConfig_bilevel=None,
+    )
+
+
+# A_TORCH = TypeVar("A_TORCH", bound=torch.Tensor | PYTREE)
+# B_TORCH = TypeVar("B_TORCH", bound=torch.Tensor | PYTREE)
+# C_TORCH = TypeVar("C_TORCH", bound=torch.Tensor | PYTREE)
+
+
+# def rnnGodState_flatten(godState: RnnGodState[A_TORCH, B_TORCH, C_TORCH]):
+#     return (
+#         godState.activation,
+#         godState.influenceTensor,
+#         godState.ohoInfluenceTensor,
+#         godState.parameter,
+#         godState.hyperparameter,
+#         godState.metaHyperparameter,
+#     ), (godState.rfloConfig, godState.rfloConfig_bilevel)
+
+
+# def rnnGodState_unflatten(
+#     children: tuple[
+#         ACTIVATION, INFLUENCETENSOR, INFLUENCETENSOR, A_TORCH, B_TORCH, C_TORCH
+#     ],
+#     aux: tuple[RfloConfig, RfloConfig],
+# ):
+#     (
+#         activation,
+#         influenceTensor,
+#         ohoInfluenceTensor,
+#         parameter,
+#         hyperparameter,
+#         metaHyperparameter,
+#     ) = children
+#     (rfloConfig, rfloConfig_bilevel) = aux
+#     return RnnGodState(
+#         activation=activation,
+#         influenceTensor=influenceTensor,
+#         ohoInfluenceTensor=ohoInfluenceTensor,
+#         parameter=parameter,
+#         hyperparameter=hyperparameter,
+#         metaHyperparameter=metaHyperparameter,
+#         rfloConfig=rfloConfig,
+#         rfloConfig_bilevel=rfloConfig_bilevel,
+#     )
+
+
+# pytree.register_pytree_node(
+#     RnnGodState,
+#     rnnGodState_flatten,
+#     rnnGodState_unflatten,
+# )
 
 
 # @dataclass(frozen=True)
