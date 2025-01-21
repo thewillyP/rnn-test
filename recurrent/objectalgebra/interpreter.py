@@ -1,10 +1,12 @@
 from typing import Self
 
+from recurrent.datarecords import Input2Output1
 from recurrent.myrecords import RnnGodState
 from recurrent.mytypes import *
 from recurrent.parameters import RfloConfig
 from recurrent.objectalgebra.typeclasses import *
 from recurrent.monad import *
+from torch import Tensor
 import copy
 
 
@@ -67,6 +69,27 @@ class BaseRnnGodInterpreter[A, B, C](
         return get(Proxy[GOD]()).fmap(lambda e: e.rnnConfig)
 
 
+class DataInterpreter(
+    HasInput[Input2Output1, torch.Tensor],
+    HasLabel[Input2Output1, torch.Tensor],
+    HasPredictionInput[Input2Output1, torch.Tensor],
+):
+    _prediction_input = torch.empty(0)
+
+    def getInput[E](self) -> Fold[Self, Input2Output1, E, Tensor]:
+        return ask(Proxy[Input2Output1]()).fmap(lambda e: e.x)
+
+    def getLabel[E](self) -> Fold[Self, Input2Output1, E, Tensor]:
+        return ask(Proxy[Input2Output1]()).fmap(lambda e: e.y)
+
+    def getPredictionInput[E](self) -> Fold[Self, Input2Output1, E, Tensor]:
+        return pure(self._prediction_input)
+
+
+# use this as my default interpreter
+class BaseRnnInterpreter[A, B, C](BaseRnnGodInterpreter[A, B, C], DataInterpreter): ...
+
+
 class _Dialect[E, A, B](
     GetParameter[E, A],
     PutParameter[E, A],
@@ -76,6 +99,7 @@ class _Dialect[E, A, B](
     pass
 
 
+# todo: add a data interpreter for this guy later
 class BilevelRnnGodInterpreter[A, B, C](
     GetActivation[RnnGodState[A, B, C], A],
     PutActivation[RnnGodState[A, B, C], A],
