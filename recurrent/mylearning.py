@@ -389,7 +389,7 @@ class PastFacingLearn[D, E, A: Tensor, Pr: PYTREE, X, Y, Z, P](ABC):
             return pure(ca)
 
         gradient = self.influence_tensor(activationStep).flat_map(creditAssignment)
-        RnnLibrary[DL, D, E, P, Pr](
+        return RnnLibrary[DL, D, E, P, Pr](
             rnn=activationStep.then(predictionStep),
             rnnWithLoss=activationStep.then(immedL),
             rnnWithGradient=gradient,
