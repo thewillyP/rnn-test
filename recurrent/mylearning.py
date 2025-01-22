@@ -20,6 +20,8 @@ from recurrent.objectalgebra.typeclasses import (
     PutActivation,
     PutInfluenceTensor,
     PutParameter,
+    GetUORO,
+    PutUORO,
 )
 
 from recurrent.mytypes import *
@@ -27,148 +29,22 @@ from recurrent.monad import *
 from recurrent.parameters import RnnParameter, SgdParameter
 
 
-# STATEM = Callable[[DATA, ENV], ENV]
-# ENDOMORPHIC = Callable[[T, T], T]
-# LOSSFN = Callable[[DATA, ENV], LOSS]
-
-# ACTIV = TypeVar("ACTIV")
-# PRED = TypeVar("PRED")
-# PARAM = TypeVar("PARAM")
-# HPARAM = TypeVar("HPARAM")
-# PARAM_T = TypeVar("PARAM_T", covariant=True)
-# PARAM_R = TypeVar("PARAM_R", covariant=True)
-# PARAM_O = TypeVar("PARAM_O", covariant=True)
-
-# DATA_L = TypeVar("DATA_L", contravariant=True)
-# X_L = TypeVar("X_L", covariant=True)
-# Y_L = TypeVar("Y_L", covariant=True)
-# Z_L = TypeVar("Z_L", covariant=True)
-
-# ACTIV_CO = TypeVar("ACTIV_CO", covariant=True)
-# PRED_CO = TypeVar("PRED_CO", covariant=True)
-# PRED_CON = TypeVar("PRED_CON", contravariant=True)
-# HPARAM_CO = TypeVar("HPARAM_CO", covariant=True)
-# ENV_CON = TypeVar("ENV_CON", contravariant=True)
-# PARAM_CON = TypeVar("PARAM_CON", contravariant=True)
-# PARAM_CO = TypeVar("PARAM_CO", covariant=True)
-
-# PARAM_TENSOR = TypeVar("PARAM_TENSOR", bound=torch.Tensor | PYTREE)
-# ACTIV_TENSOR = TypeVar("ACTIV_TENSOR", bound=torch.Tensor | PYTREE)
-# T_TENSOR = TypeVar("T_TENSOR", bound=torch.Tensor | PYTREE)
-
-# DATA_NEW = TypeVar("DATA_NEW")
-
-# T_CON = TypeVar("T_CON", contravariant=True)
-# T_CO = TypeVar("T_CO", covariant=True)
-
-
-# # literally State get
-# def reparameterizeOutput(
-#     step: Callable[[DATA, ENV], ENV], read: Callable[[ENV], X]
-# ) -> Callable[[DATA, ENV], X]:
-#     def reparametrized(info: DATA, env: ENV) -> X:
-#         env_ = step(info, env)
-#         return read(env_)
-
-#     return reparametrized
-
-
-# # literally State put
-# def reparametrizeInput(
-#     step: Callable[[DATA, ENV], Z], writer: Callable[[X, ENV], ENV]
-# ) -> Callable[[DATA, ENV, X], Z]:
-#     def reparametrized(info: DATA, env: ENV, x: X) -> Z:
-#         env_ = writer(x, env)
-#         return step(info, env_)
-
-#     return reparametrized
-
-
-# class _Activation(
-#     GetActivation[ENV, ACTIV],
-#     PutActivation[ENV, ACTIV],
-#     GetParameter[ENV, PARAM_CO],
-#     Protocol[ENV, ACTIV, PARAM_CO],
-# ):
-#     pass
-
-
-# class _ActivationData(HasInput[DATA_L, X_L], Protocol[DATA_L, X_L]):
-#     pass
-
-
-# def activation(
-#     dialect: _Activation[ENV, ACTIV, PARAM],
-#     dataDialect: _ActivationData[DATA, X],
-#     step: Callable[[X, ACTIV, PARAM], ACTIV],
-# ) -> ReaderState[DATA, ENV, Unit]:
-#     def update(pair: tuple[DATA, ENV]) -> ENV:
-#         data, env = pair
-#         a = dialect.getActivation(env)
-#         x = dataDialect.getInput(data)
-#         p = dialect.getParameter(env)
-#         return dialect.putActivation(step(x, a, p), env)
-
-#     return (
-#         ReaderState[DATA, ENV, Unit]
-#         .ask_get()
-#         .fmap(update)
-#         .bind(ReaderState[DATA, ENV, Unit].put)
-#     )
-
-
-# class _Prediction(
-#     GetActivation[ENV_CON, ACTIV_CO],
-#     GetParameter[ENV_CON, PARAM_CO],
-#     Protocol[ENV_CON, ACTIV_CO, PARAM_CO],
-# ):
-#     pass
-
-
-# class _PredictionData(HasPredictionInput[DATA_L, X_L], Protocol[DATA_L, X_L]):
-#     pass
-
-
-# def prediction(
-#     dialect: _Prediction[ENV, ACTIV, PARAM],
-#     dataDialect: _PredictionData[DATA, X],
-#     step: Callable[[X, ACTIV, PARAM], PRED],
-# ) -> ReaderState[DATA, ENV, PRED]:
-#     def update(pair: tuple[DATA, ENV]) -> PRED:
-#         data, env = pair
-#         x = dataDialect.getPredictionInput(data)
-#         a = dialect.getActivation(env)
-#         return step(x, a, dialect.getParameter(env))
-
-#     return ReaderState[DATA, ENV, tuple[DATA, ENV]].ask_get().fmap(update)
-
-# x: torch.Tensor, a: ACTIVATION, param: RnnParameter
-
 type LossFn[A, B] = Callable[[A, B], LOSS]
 
 
+def pytree_norm(tree):
+    leaves, _ = pytree.tree_flatten(tree)
+    return torch.sqrt(sum(torch.sum(leaf**2) for leaf in leaves))
+
+
+def jvp(f, primal, tangent):
+    return torch.func.jvp(f, (primal,), (tangent,))[1]
+
+
 def jacobian_matrix_product(f, primal, matrix):
-    # print(primal)
-    # print(matrix)
-    jvp = lambda p, t: torch.func.jvp(f, (p,), (t,))[1]
-    # print(matrix.shape)
-
-    # def jvp(p, t):
-    #     print(p)
-    #     print(p.shape)
-    #     print(t)
-    #     print(t.shape)
-    #     quit()
-    #     a, b = torch.func.jvp(f, (p,), (t,))
-    #     return b
-
-    return torch.vmap(jvp, in_dims=(None, 1), out_dims=1)(primal, matrix)
-
-
-# def SGD(learning_rate: float) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
-#     def SGD_(param: torch.Tensor, grad: torch.Tensor) -> torch.Tensor:
-#         return param - learning_rate * grad
-#     return SGD_
+    # jvp = lambda p, t: torch.func.jvp(f, (p,), (t,))[1]
+    f = lambda p, t: jvp(f, p, t)
+    return torch.vmap(f, in_dims=(None, 1), out_dims=1)(primal, matrix)
 
 
 class _SGD[E, Pr](
@@ -250,7 +126,7 @@ def doLoss[D, E, P, T](lossFn: LossFn[T, P]) -> DoLossFn[D, E, P, T]:
 
 
 def doGradient[
-    Dl, D, E, Pr: Tensor
+    Dl, D, E, Pr
 ](
     lossM: Fold[Dl, D, E, LOSS],
     read_wrt: Fold[Dl, D, E, Pr],
@@ -346,14 +222,6 @@ def offlineLearning[
 ) -> RnnLibrary[_OfL[D, E, A, Pr, X, Y, Z], Iterable[D], E, Iterable[P], Pr]:
     type DL = _OfL[D, E, A, Pr, X, Y, Z]
 
-    @do()
-    def _a():
-        return pure(ACTIVATION(torch.zeros(32)))
-
-    @do()
-    def _p():
-        return pure(PREDICTION(torch.zeros(2)))
-
     rnnStep = activationStep.then(predictionStep)
 
     rnn = traverse(rnnStep)
@@ -370,11 +238,7 @@ def offlineLearning[
     @do()
     def rnnWithGradient():
         dl = yield from ProxyDl[DL].askDl()
-        gr = yield from doGradient(rnnWithLoss(), dl.getParameter(), dl.putParameter)
-        # print(gr.value.w_rec)
-        # print(gr.value.w_out)
-        # quit()
-        return pure(gr)
+        return doGradient(rnnWithLoss(), dl.getParameter(), dl.putParameter)
 
     return RnnLibrary[DL, Iterable[D], E, Iterable[P], Pr](
         rnn=rnn,
@@ -383,18 +247,120 @@ def offlineLearning[
     )
 
 
-class _PfL[D, E, A, Pr, X, Y, Z](
+class _PfL[D, E, A, Pr, Z](
     GetActivation[E, A],
     PutActivation[E, A],
     PutParameter[E, Pr],
     GetParameter[E, Pr],
-    GetInfluenceTensor[E, Gradient[Pr]],
-    PutInfluenceTensor[E, Gradient[Pr]],
-    HasInput[D, X],
-    HasPredictionInput[D, Y],
     HasLabel[D, Z],
     Protocol,
 ): ...
+
+
+class PastFacingLearn[Alg: _PfL[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](ABC):
+
+    type F[Dl, T] = Fold[Dl, D, E, T]
+
+    @abstractmethod
+    def creditAssignment[
+        Dl
+    ](self, e_signal: F[Dl, LOSS], activationStep: F[Dl, A]) -> F[Dl, Gradient[Pr]]: ...
+
+    class __reparam__(PutActivation[E, A], PutParameter[E, Pr], Protocol):
+        pass
+
+    @do()
+    def reparameterize[Dl: __reparam__](self, activationStep: F[Dl, A]):
+
+        dl = yield from ProxyDl[Dl].askDl()
+        d = yield from ProxyR[D].ask()
+        e = yield from ProxyS[E].get()
+
+        def parametrized(a: A, pr: Pr) -> tuple[A, E]:
+            return (
+                dl.putActivation(a)
+                .then(dl.putParameter(pr))
+                .then(activationStep)
+                .func(dl, d, e)
+            )
+
+        m: Fold[Dl, D, E, Callable[[A, Pr], tuple[A, E]]]
+        m = pure(parametrized)
+        return m
+
+    def onlineLearning(
+        self,
+        activationStep: F[Alg, A],
+        predictionStep: F[Alg, P],
+        computeLoss: LossFn[Z, P],
+    ):
+
+        e_signal = predictionStep.flat_map(doLoss(computeLoss))
+
+        @do()
+        def total_grad():
+            dl = yield from ProxyDl[Alg].askDl()
+            grad_o = yield from doGradient(e_signal, dl.getParameter(), dl.putParameter)
+            grad_rec = yield from self.creditAssignment(e_signal, activationStep)
+
+            gradient: Gradient[Pr]
+            gradient = pytree.tree_map(lambda x, y: x + y, grad_o, grad_rec)
+            m: Fold[Alg, D, E, Gradient[Pr]]
+            m = pure(gradient)
+            return m
+
+        return RnnLibrary[Alg, D, E, P, Pr](
+            rnn=activationStep.then(predictionStep),
+            rnnWithLoss=activationStep.then(e_signal),
+            rnnWithGradient=total_grad(),
+        )
+
+
+class _Infl[D, E, A, Pr, Z](
+    GetInfluenceTensor[E, Gradient[Pr]],
+    PutInfluenceTensor[E, Gradient[Pr]],
+    _PfL[D, E, A, Pr, Z],
+    Protocol,
+): ...
+
+
+class InfluenceTensorLearner[Alg: _Infl[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
+    PastFacingLearn[Alg, D, E, A, Pr, Z, P], ABC
+):
+
+    type F[Dl, T] = Fold[Dl, D, E, T]
+    type Grad_Pr = Gradient[Pr]
+
+    class __infl__(
+        GetInfluenceTensor[E, Gradient[Pr]],
+        Protocol,
+    ):
+        pass
+
+    @abstractmethod
+    def influence_tensor[Dl: __infl__](self, actvStep: F[Dl, A]) -> F[Dl, Grad_Pr]: ...
+
+    class __ca__(
+        GetInfluenceTensor[E, Gradient[Pr]],
+        PutInfluenceTensor[E, Gradient[Pr]],
+        Protocol,
+    ):
+        pass
+
+    @do()
+    def creditAssignment[Dl: __ca__](self, e_signal: F[Dl, LOSS], actvStep: F[Dl, A]):
+        dl = yield from ProxyDl[Dl].askDl()
+        infl = yield from self.influence_tensor(actvStep)
+        _ = yield from dl.putInfluenceTensor(infl)
+
+        immed: Gradient[A]
+        immed = yield from doGradient(e_signal, dl.getActivation(), dl.putActivation)
+
+        ca: Gradient[Pr]
+        ca = pytree.tree_map(lambda x: immed.value @ x, infl)
+        m: Fold[Dl, D, E, Gradient[Pr]]
+        m = pure(ca)
+        return m
 
 
 class PastFacingLearn[D, E, A: Tensor, Pr: PYTREE, X, Y, Z, P](ABC):
@@ -427,6 +393,24 @@ class PastFacingLearn[D, E, A: Tensor, Pr: PYTREE, X, Y, Z, P](ABC):
             )
 
         return pure(parametrized)
+
+    def creditAssignment(self) -> G[Fold[DL, D, E, Gradient[Pr]]]:
+        dl = yield from ProxyDl[DL].askDl()
+        _ = yield from dl.putInfluenceTensor(infl)
+        immed: Gradient[A]
+        immed = yield from doGradient(immedL, dl.getActivation(), dl.putActivation)
+
+        ca: Gradient[Pr]
+        ca = pytree.tree_map(lambda x: immed.value @ x, infl)
+
+        # todo: move readout gradients to another section to be overridable
+        readout: Gradient[Pr]
+        readout = yield from doGradient(immedL, dl.getParameter(), dl.putParameter)
+
+        gradient: Gradient[Pr]
+        gradient = pytree.tree_map(lambda x, y: x + y, readout, ca)
+
+        return pure(gradient)
 
     def onlineLearning(
         self,
@@ -536,54 +520,65 @@ class RFLO[D, E, A: Tensor, Pr: PYTREE, X, Y, Z, P](
         return pure(Gradient(infl))
 
 
-# def SGD(learning_rate: float) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
-#     def SGD_(param: torch.Tensor, grad: torch.Tensor) -> torch.Tensor:
-#         return param - learning_rate * grad
-#     return SGD_
+class _UO[D, E, A, Pr, X, Y, Z](
+    _PfL[D, E, A, Pr, X, Y, Z],
+    GetUORO[E, Pr],
+    PutUORO[E, Pr],
+    GetRnnConfig[E],
+    Protocol,
+): ...
 
 
-# def getActivationFn(case: ActivationFnType) -> Callable[[torch.Tensor], torch.Tensor]:
-#     match case:
-#         case RELU():
-#             return torch.relu
-#         case TANH():
-#             return torch.tanh
-#         case _:
-#             raise ValueError('Activation function not supported')
+class UORO[D, E, A: Tensor, Pr: PYTREE, X, Y, Z, P](
+    PastFacingLearn[D, E, A, Pr, X, Y, Z, P]
+):
+    type DL = _UO[D, E, A, Pr, X, Y, Z]
 
+    @do()
+    def influence_tensor(
+        self, activationStep: Fold[DL, D, E, A]
+    ) -> G[Fold[DL, D, E, Gradient[Pr]]]:
+        type DL = _UO[D, E, A, Pr, X, Y, Z]
+        dl = yield from ProxyDl[DL].askDl()
+        uoro = yield from dl.getUORO()
+        rnnConfig = yield from dl.getRnnConfig()
+        #!!! WARNING, IMPURITY IN PROGRESS, will address later. Just don't run this function more than once, if autodiffing through it
+        v = torch.distributions.uniform.Uniform(-1, 1).sample(rnnConfig.n_h)
 
-# def activationLayersTrans(activationFn: Callable[[torch.Tensor], torch.Tensor]):
-#     def activationTrans_(t: Union[HasActivation[MODEL, List[torch.Tensor]], HasParameter[MODEL, PARAM]]) -> Callable[[torch.Tensor, MODEL], MODEL]:
-#         def activationTrans__(x: torch.Tensor, env: MODEL) -> MODEL:
-#             as_ = t.getActivation(env)
-#             W_rec, W_in, b_rec, _, _, alpha = t.getParameter(env)
-#             def scanner(prevActv: torch.Tensor, nextActv: torch.Tensor) -> torch.Tensor:  # i'm folding over nextActv
-#                 return rnnTrans(activationFn)(prevActv, (W_in, W_rec, b_rec, alpha), nextActv)
-#             as__ = list(scan0(scanner, x, as_))
-#             return t.putActivation(as__, env)
-#         return activationTrans__
-#     return activationTrans_
-# doing multiple layers is just a fold over it
+        a0 = yield from dl.getActivation()
+        p0 = yield from dl.getParameter()
+        parametrized = yield from self.reparameterize(activationStep)
+        A_prev = uoro.A  # I don't distinguish between column and row tensor.
+        B_prev = uoro.B
 
+        # 1 calculate the a_jacobian vector product with A
+        immedJac_A_product: Tensor
+        immedJac_A_product = jvp(lambda a: parametrized(a, p0)[0], a0, A_prev)
 
-# def minitest(
-#     dialect: _RnnDialect[ENV, ACTIV, PRED, PARAM, PARAM_R, PARAM_O], env: ENV
-# ) -> ACTIV:
-#     return RnnLearnableInterpreter[ENV].getActivation(env)
+        # 2 do another jacobian matrix product to save on memory
+        # doing the vjp saves BIG on memory. Only use O(n^2) as we want
+        env: E
+        _, vjp_func, env = Tfn.vjp(lambda p: parametrized(a0, p), p0, has_aux=True)
+        immedJacInfl_randomProj: Pr = vjp_func(v)
 
+        rho0: Tensor = torch.sqrt(pytree_norm(B_prev) / torch.norm(immedJac_A_product))
+        rho1: Tensor = torch.sqrt(pytree_norm(immedJacInfl_randomProj) / torch.norm(v))
 
-# temp: RnnBPTTState = RnnBPTTState(
-#     activation=ACTIVATION(torch.tensor([1.0])),
-#     parameter=PARAMETER(torch.tensor([1.0])),
-#     trainPrediction=PREDICTION(torch.tensor([1.0])),
-#     trainLoss=LOSS(torch.tensor([1.0])),
-#     trainGradient=GRADIENT(torch.tensor([1.0])),
-#     hyperparameter=HYPERPARAMETER(torch.tensor([1.0])),
-#     n_h=1,
-#     n_in=1,
-#     n_out=1,
-#     alpha=1.0,
-#     activationFn=lambda x: x,
-# )
+        A_new = rho0 * immedJac_A_product + rho1 * v
 
-# test = minitest(RnnLearnableInterpreter[RnnBPTTState], temp)
+        B_new_: Pr = pytree.tree_map(
+            lambda x, y: x / rho0 + y / rho1, B_prev.value, immedJacInfl_randomProj
+        )
+
+        B_new: Gradient[Pr] = Gradient(B_new_)
+
+        # can optimize further, if I separate the credit assignment function to be overridable.
+        infl: Gradient[Pr] = pytree.tree_map(lambda x: torch.outer(A_new, x), B_new)
+
+        # infl: Pr
+        # infl = pytree.tree_map(
+        #     lambda x, y: (1 - alpha) * x + alpha * y, influenceTensor.value, immedInfl
+        # )
+        # # print(infl)
+        # _ = yield from put(env)
+        # return pure(Gradient(infl))
