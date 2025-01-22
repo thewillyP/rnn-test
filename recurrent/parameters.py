@@ -23,3 +23,8 @@ class RnnConfig(NamedTuple):
     n_out: int
     alpha: float
     activationFn: Callable[[torch.Tensor], torch.Tensor]
+
+
+class UORO_Param[Pr](NamedTuple):
+    A: Tensor
+    B: Gradient[Pr]

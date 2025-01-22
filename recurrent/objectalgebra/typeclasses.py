@@ -3,6 +3,7 @@ from recurrent.mytypes import *
 from recurrent.parameters import (
     RfloConfig,
     RnnConfig,
+    UORO_Param,
 )
 from typing import Protocol
 from recurrent.monad import *
@@ -59,3 +60,11 @@ class HasPredictionInput[D, T](Protocol):
 
 class HasLabel[D, T](Protocol):
     def getLabel[E](self) -> Fold[Self, D, E, T]: ...
+
+
+class GetUORO[E, Pr](Protocol):
+    def getUORO[D](self) -> Fold[Self, D, E, UORO_Param[Pr]]: ...
+
+
+class PutUORO[E, Pr](Protocol):
+    def putUORO[D](self, s: UORO_Param[Pr]) -> Fold[Self, D, E, Unit]: ...

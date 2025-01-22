@@ -264,7 +264,7 @@ class PastFacingLearn[Alg: _PfL[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](ABC)
     @abstractmethod
     def creditAssignment[
         Dl
-    ](self, e_signal: F[Dl, LOSS], activationStep: F[Dl, A]) -> F[Dl, Gradient[Pr]]: ...
+    ](self, e_signal: Gradient[A], activationStep: F[Dl, A]) -> F[Dl, Gradient[Pr]]: ...
 
     class __reparam__(PutActivation[E, A], PutParameter[E, Pr], Protocol):
         pass
@@ -295,12 +295,18 @@ class PastFacingLearn[Alg: _PfL[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](ABC)
         computeLoss: LossFn[Z, P],
     ):
 
-        e_signal = predictionStep.flat_map(doLoss(computeLoss))
+        lossM = predictionStep.flat_map(doLoss(computeLoss))
 
         @do()
         def total_grad():
             dl = yield from ProxyDl[Alg].askDl()
-            grad_o = yield from doGradient(e_signal, dl.getParameter(), dl.putParameter)
+
+            e_signal: Gradient[A]
+            e_signal = yield from doGradient(
+                lossM, dl.getActivation(), dl.putActivation
+            )
+
+            grad_o = yield from doGradient(lossM, dl.getParameter(), dl.putParameter)
             grad_rec = yield from self.creditAssignment(e_signal, activationStep)
 
             gradient: Gradient[Pr]
@@ -311,7 +317,7 @@ class PastFacingLearn[Alg: _PfL[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](ABC)
 
         return RnnLibrary[Alg, D, E, P, Pr](
             rnn=activationStep.then(predictionStep),
-            rnnWithLoss=activationStep.then(e_signal),
+            rnnWithLoss=activationStep.then(lossM),
             rnnWithGradient=total_grad(),
         )
 
@@ -331,141 +337,47 @@ class InfluenceTensorLearner[Alg: _Infl[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z,
     type F[Dl, T] = Fold[Dl, D, E, T]
     type Grad_Pr = Gradient[Pr]
 
-    class __infl__(
+    class __infl__[E, A, Pr](
         GetInfluenceTensor[E, Gradient[Pr]],
+        GetActivation[E, A],
+        PutActivation[E, A],
+        GetParameter[E, Pr],
+        PutParameter[E, Pr],
         Protocol,
     ):
         pass
 
     @abstractmethod
-    def influence_tensor[Dl: __infl__](self, actvStep: F[Dl, A]) -> F[Dl, Grad_Pr]: ...
-
-    class __ca__(
-        GetInfluenceTensor[E, Gradient[Pr]],
-        PutInfluenceTensor[E, Gradient[Pr]],
-        Protocol,
-    ):
-        pass
+    def influence_tensor[Dl](self, actvStep: F[Dl, A]) -> F[Dl, Grad_Pr]: ...
 
     @do()
-    def creditAssignment[Dl: __ca__](self, e_signal: F[Dl, LOSS], actvStep: F[Dl, A]):
-        dl = yield from ProxyDl[Dl].askDl()
+    def creditAssignment(self, e_signal: Gradient[A], actvStep: F[Alg, A]):
+        dl = yield from ProxyDl[Alg].askDl()
         infl = yield from self.influence_tensor(actvStep)
         _ = yield from dl.putInfluenceTensor(infl)
 
-        immed: Gradient[A]
-        immed = yield from doGradient(e_signal, dl.getActivation(), dl.putActivation)
-
         ca: Gradient[Pr]
-        ca = pytree.tree_map(lambda x: immed.value @ x, infl)
-        m: Fold[Dl, D, E, Gradient[Pr]]
+        ca = pytree.tree_map(lambda x: e_signal.value @ x, infl)
+        m: Fold[Alg, D, E, Gradient[Pr]]
         m = pure(ca)
         return m
 
 
-class PastFacingLearn[D, E, A: Tensor, Pr: PYTREE, X, Y, Z, P](ABC):
-    type DL = _PfL[D, E, A, Pr, X, Y, Z]
-
-    @abstractmethod
-    def influence_tensor(
-        self, activationStep: Fold[DL, D, E, A]
-    ) -> Fold[DL, D, E, Gradient[Pr]]:
-        pass
-
-    # @staticmethod
-    @do()
-    def reparameterize[
-        D, E, A: Tensor, Pr: PYTREE, X, Y, Z
-    ](self, activationStep: Fold[DL, D, E, A]) -> G[
-        Fold[DL, D, E, Callable[[A, Pr], tuple[A, E]]]
-    ]:
-        type DL = _PfL[D, E, A, Pr, X, Y, Z]
-        dl = yield from ProxyDl[DL].askDl()
-        d = yield from ProxyR[D].ask()
-        e = yield from ProxyS[E].get()
-
-        def parametrized(a: A, pr: Pr) -> tuple[A, E]:
-            return (
-                dl.putActivation(a)
-                .then(dl.putParameter(pr))
-                .then(activationStep)
-                .func(dl, d, e)
-            )
-
-        return pure(parametrized)
-
-    def creditAssignment(self) -> G[Fold[DL, D, E, Gradient[Pr]]]:
-        dl = yield from ProxyDl[DL].askDl()
-        _ = yield from dl.putInfluenceTensor(infl)
-        immed: Gradient[A]
-        immed = yield from doGradient(immedL, dl.getActivation(), dl.putActivation)
-
-        ca: Gradient[Pr]
-        ca = pytree.tree_map(lambda x: immed.value @ x, infl)
-
-        # todo: move readout gradients to another section to be overridable
-        readout: Gradient[Pr]
-        readout = yield from doGradient(immedL, dl.getParameter(), dl.putParameter)
-
-        gradient: Gradient[Pr]
-        gradient = pytree.tree_map(lambda x, y: x + y, readout, ca)
-
-        return pure(gradient)
-
-    def onlineLearning(
-        self,
-        activationStep: Fold[DL, D, E, A],
-        predictionStep: Fold[DL, D, E, P],
-        computeLoss: LossFn[Z, P],
-    ) -> RnnLibrary[DL, D, E, P, Pr]:
-        type DL = _PfL[D, E, A, Pr, X, Y, Z]
-
-        immedL = predictionStep.flat_map(doLoss(computeLoss))
-
-        @do()
-        def creditAssignment(
-            infl: Gradient[Pr],
-        ) -> G[Fold[DL, D, E, Gradient[Pr]]]:
-            dl = yield from ProxyDl[DL].askDl()
-            _ = yield from dl.putInfluenceTensor(infl)
-            immed: Gradient[A]
-            immed = yield from doGradient(immedL, dl.getActivation(), dl.putActivation)
-
-            ca: Gradient[Pr]
-            ca = pytree.tree_map(lambda x: immed.value @ x, infl)
-
-            # todo: move readout gradients to another section to be overridable
-            readout: Gradient[Pr]
-            readout = yield from doGradient(immedL, dl.getParameter(), dl.putParameter)
-
-            gradient: Gradient[Pr]
-            gradient = pytree.tree_map(lambda x, y: x + y, readout, ca)
-
-            return pure(gradient)
-
-        gradient = self.influence_tensor(activationStep).flat_map(creditAssignment)
-        return RnnLibrary[DL, D, E, P, Pr](
-            rnn=activationStep.then(predictionStep),
-            rnnWithLoss=activationStep.then(immedL),
-            rnnWithGradient=gradient,
-        )
-
-
-class RTRL[D, E, A: Tensor, Pr: PYTREE, X, Y, Z, P](
-    PastFacingLearn[D, E, A, Pr, X, Y, Z, P]
+class RTRL[Alg: _Infl[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
+    InfluenceTensorLearner[Alg, D, E, A, Pr, Z, P]
 ):
-    type DL = _PfL[D, E, A, Pr, X, Y, Z]
+
+    type F[Dl, T] = Fold[Dl, D, E, T]
+    type Grad_Pr = Gradient[Pr]
+    type constraint = InfluenceTensorLearner.__infl__[E, A, Pr]
 
     @do()
-    def influence_tensor(
-        self, activationStep: Fold[DL, D, E, A]
-    ) -> G[Fold[DL, D, E, Gradient[Pr]]]:
-        type DL = _PfL[D, E, A, Pr, X, Y, Z]
-        dl = yield from ProxyDl[DL].askDl()
+    def influence_tensor[Dl: constraint](self, actvStep: F[Dl, A]):
+        dl = yield from ProxyDl[Dl].askDl()
         influenceTensor = yield from dl.getInfluenceTensor()
         a0 = yield from dl.getActivation()
         p0 = yield from dl.getParameter()
-        parametrized = yield from self.reparameterize(activationStep)
+        parametrized = yield from self.reparameterize(actvStep)
 
         # I take the jvp instead of j @ v, bc I'd like to 1) do a hvp 2) forward over reverse is efficient: https://jax.readthedocs.io/en/latest/notebooks/autodiff_cookbook.html
         immedJacInflProduct: Gradient[Pr]
@@ -482,30 +394,32 @@ class RTRL[D, E, A: Tensor, Pr: PYTREE, X, Y, Z, P](
         infl: Pr
         infl = pytree.tree_map(lambda x, y: x + y, immedInfl, immedJacInflProduct.value)
         _ = yield from put(env)
-        return pure(Gradient(infl))
+        m: Fold[Dl, D, E, Gradient[Pr]]
+        m = pure(Gradient(infl))
+        return m
 
 
-class _RfL[D, E, A, Pr, X, Y, Z](
-    _PfL[D, E, A, Pr, X, Y, Z], GetRfloConfig[E], Protocol
-): ...
+class _RfL[D, E, A, Pr, Z](_Infl[D, E, A, Pr, Z], GetRfloConfig[E], Protocol): ...
 
 
-class RFLO[D, E, A: Tensor, Pr: PYTREE, X, Y, Z, P](
-    PastFacingLearn[D, E, A, Pr, X, Y, Z, P]
+class RFLO[Alg: _RfL[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
+    InfluenceTensorLearner[Alg, D, E, A, Pr, Z, P]
 ):
-    type DL = _RfL[D, E, A, Pr, X, Y, Z]
+    type F[Dl, T] = Fold[Dl, D, E, T]
+    type Grad_Pr = Gradient[Pr]
+
+    class __rflo__(
+        GetRfloConfig[E], InfluenceTensorLearner.__infl__[E, A, Pr], Protocol
+    ): ...
 
     @do()
-    def influence_tensor(
-        self, activationStep: Fold[DL, D, E, A]
-    ) -> G[Fold[DL, D, E, Gradient[Pr]]]:
-        type DL = _RfL[D, E, A, Pr, X, Y, Z]
-        dl = yield from ProxyDl[DL].askDl()
+    def influence_tensor[Dl: __rflo__](self, actvStep: F[Dl, A]):
+        dl = yield from ProxyDl[Dl].askDl()
         alpha = yield from dl.getRfloConfig().fmap(lambda x: x.rflo_alpha)
         influenceTensor = yield from dl.getInfluenceTensor()
         a0 = yield from dl.getActivation()
         p0 = yield from dl.getParameter()
-        parametrized = yield from self.reparameterize(activationStep)
+        parametrized = yield from self.reparameterize(actvStep)
 
         immedInfl: Pr
         env: E
@@ -517,11 +431,13 @@ class RFLO[D, E, A: Tensor, Pr: PYTREE, X, Y, Z, P](
         )
         # print(infl)
         _ = yield from put(env)
-        return pure(Gradient(infl))
+        m: Fold[Dl, D, E, Gradient[Pr]]
+        m = pure(Gradient(infl))
+        return m
 
 
-class _UO[D, E, A, Pr, X, Y, Z](
-    _PfL[D, E, A, Pr, X, Y, Z],
+class _UO[D, E, A, Pr, Z](
+    _PfL[D, E, A, Pr, Z],
     GetUORO[E, Pr],
     PutUORO[E, Pr],
     GetRnnConfig[E],
@@ -529,17 +445,14 @@ class _UO[D, E, A, Pr, X, Y, Z](
 ): ...
 
 
-class UORO[D, E, A: Tensor, Pr: PYTREE, X, Y, Z, P](
-    PastFacingLearn[D, E, A, Pr, X, Y, Z, P]
+class UORO[Alg: _UO[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
+    PastFacingLearn[Alg, D, E, A, Pr, Z, P]
 ):
-    type DL = _UO[D, E, A, Pr, X, Y, Z]
+    type F[Dl, T] = Fold[Dl, D, E, T]
 
     @do()
-    def influence_tensor(
-        self, activationStep: Fold[DL, D, E, A]
-    ) -> G[Fold[DL, D, E, Gradient[Pr]]]:
-        type DL = _UO[D, E, A, Pr, X, Y, Z]
-        dl = yield from ProxyDl[DL].askDl()
+    def creditAssignment(self, e_signal: Gradient[A], activationStep: F[Alg, A]):
+        dl = yield from ProxyDl[Alg].askDl()
         uoro = yield from dl.getUORO()
         rnnConfig = yield from dl.getRnnConfig()
         #!!! WARNING, IMPURITY IN PROGRESS, will address later. Just don't run this function more than once, if autodiffing through it
@@ -551,11 +464,10 @@ class UORO[D, E, A: Tensor, Pr: PYTREE, X, Y, Z, P](
         A_prev = uoro.A  # I don't distinguish between column and row tensor.
         B_prev = uoro.B
 
-        # 1 calculate the a_jacobian vector product with A
+        # 1 calculate the actv_jacobian vector product with A
         immedJac_A_product: Tensor
         immedJac_A_product = jvp(lambda a: parametrized(a, p0)[0], a0, A_prev)
 
-        # 2 do another jacobian matrix product to save on memory
         # doing the vjp saves BIG on memory. Only use O(n^2) as we want
         env: E
         _, vjp_func, env = Tfn.vjp(lambda p: parametrized(a0, p), p0, has_aux=True)
@@ -566,19 +478,15 @@ class UORO[D, E, A: Tensor, Pr: PYTREE, X, Y, Z, P](
 
         A_new = rho0 * immedJac_A_product + rho1 * v
 
-        B_new_: Pr = pytree.tree_map(
-            lambda x, y: x / rho0 + y / rho1, B_prev.value, immedJacInfl_randomProj
+        B_new: Gradient[Pr] = Gradient(
+            pytree.tree_map(
+                lambda x, y: x / rho0 + y / rho1, B_prev.value, immedJacInfl_randomProj
+            )
         )
 
-        B_new: Gradient[Pr] = Gradient(B_new_)
+        dl.putUORO(uoro._replace(A=A_new, B=B_new))
 
-        # can optimize further, if I separate the credit assignment function to be overridable.
-        infl: Gradient[Pr] = pytree.tree_map(lambda x: torch.outer(A_new, x), B_new)
-
-        # infl: Pr
-        # infl = pytree.tree_map(
-        #     lambda x, y: (1 - alpha) * x + alpha * y, influenceTensor.value, immedInfl
-        # )
-        # # print(infl)
-        # _ = yield from put(env)
-        # return pure(Gradient(infl))
+        q = e_signal.value @ A_new
+        ca: Fold[Alg, D, E, Gradient[Pr]]
+        ca = pure(pytree.tree_map(lambda x: x * q, B_new))
+        return ca
