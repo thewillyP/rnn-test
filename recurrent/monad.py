@@ -10,10 +10,6 @@ class Unit:
     __slots__ = ()
 
 
-class Proxy[A]:
-    __slots__ = ()
-
-
 class Fold[D, E, S, A]:
 
     __slots__ = ("func",)
@@ -28,14 +24,14 @@ class Fold[D, E, S, A]:
             value, n_state = self.func(d, env, state)
             return func(value).func(d, env, n_state)
 
-        return Fold[D, E, S, B](next)
+        return Fold(next)
 
     def fmap[B](self, func: Callable[[A], B]):
         def next(d: D, env: E, state: S) -> tuple[B, S]:
             value, n_state = self.func(d, env, state)
             return func(value), n_state
 
-        return Fold[D, E, S, B](next)
+        return Fold(next)
 
     def then[B](self, m: "Fold[D, E, S, B]"):
         return self.flat_map(lambda _: m)
@@ -44,23 +40,35 @@ class Fold[D, E, S, A]:
         def next(_: Pidgen, env: E, state: S):
             return self.func(dl, env, state)
 
-        return Fold[Pidgen, E, S, A](next)  # type: ignore
+        return Fold(next)  # type: ignore
 
 
 def pure[D, E, S, A](value: A) -> Fold[D, E, S, A]:
     return Fold(lambda _d, _e, state: (value, state))
 
 
-def get[D, E, S](_: Proxy[S]) -> Fold[D, E, S, S]:
+def get[D, E, S]() -> Fold[D, E, S, S]:
     return Fold(lambda _d, _e, state: (state, state))
+
+
+class ProxyS[S]:
+    @staticmethod
+    def get[D, E]() -> Fold[D, E, S, S]:
+        return Fold(lambda _d, _e, state: (state, state))
 
 
 def put[D, E, S](new_state: S) -> Fold[D, E, S, Unit]:
     return Fold(lambda _d, _e, _s: (Unit(), new_state))
 
 
-def ask[D, E, S](_: Proxy[E]) -> Fold[D, E, S, E]:
+def ask[D, E, S]() -> Fold[D, E, S, E]:
     return Fold(lambda _d, env, state: (env, state))
+
+
+class ProxyR[E]:
+    @staticmethod
+    def ask[D, S]() -> Fold[D, E, S, E]:
+        return Fold(lambda _d, env, state: (env, state))
 
 
 def asks[D, E, S, A](func: Callable[[E], A]) -> Fold[D, E, S, A]:
@@ -71,8 +79,14 @@ def modifies[D, E, S](func: Callable[[S], S]) -> Fold[D, E, S, Unit]:
     return Fold(lambda _d, _e, state: (Unit(), func(state)))
 
 
-def askDl[D, E, S](_: Proxy[D]) -> Fold[D, E, S, D]:
+def askDl[D, E, S]() -> Fold[D, E, S, D]:
     return Fold(lambda d, _e, state: (d, state))
+
+
+class ProxyDl[D]:
+    @staticmethod
+    def askDl[E, S]() -> Fold[D, E, S, D]:
+        return Fold(lambda d, _e, state: (d, state))
 
 
 def stateToFold[D, E, S, T](func: Callable[[S], tuple[T, S]]) -> Fold[D, E, S, T]:
@@ -81,6 +95,18 @@ def stateToFold[D, E, S, T](func: Callable[[S], tuple[T, S]]) -> Fold[D, E, S, T
 
 def toFold[D, E, S, T](func: Callable[[E, S], tuple[T, S]]):
     return Fold[D, E, S, T](lambda _d, env, state: func(env, state))  # type: ignore
+
+
+def repeatM[Dl, D, E, A](m: "Fold[Dl, D, E, A]"):
+    def wrapper(dl: Dl, ds: Iterable[D], state: E) -> tuple[Unit, E]:
+        def repeat(d: D, pair: tuple[Unit, E]) -> tuple[Unit, E]:
+            _u, state = pair
+            __, new_state = m.func(dl, d, state)
+            return _u, new_state
+
+        return foldr(repeat)(ds, (Unit(), state))
+
+    return Fold(wrapper)
 
 
 # these guys need to be strict
@@ -92,7 +118,7 @@ def foldM[Dl, D, E, B](func: Callable[[B], "Fold[Dl, D, E, B]"], init: B):
 
         return foldr(fold)(ds, (init, state))
 
-    return Fold[Dl, Iterable[D], E, B](wrapper)
+    return Fold(wrapper)
 
 
 def traverse[Dl, D, E, B](m: "Fold[Dl, D, E, B]"):
@@ -105,7 +131,7 @@ def traverse[Dl, D, E, B](m: "Fold[Dl, D, E, B]"):
 
         return foldr(traverse_)(ds, (pvector([]), state))
 
-    return Fold[Dl, Iterable[D], E, PVector[B]](wrapper)
+    return Fold(wrapper)
 
 
 # def reader(run: Callable[[R, S], Tuple[A, S]]) -> ReaderState[R, S, A]:

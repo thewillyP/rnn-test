@@ -1,120 +1,192 @@
 # %%
 import time
+from typing import Iterable, Iterator
 from recurrent.datarecords import Input2Output1
-from recurrent.mylearning import RnnLibrary, createRnnLibrary, offlineLearning
+from recurrent.monad import foldM
+from recurrent.mylearning import *
 from recurrent.myrecords import RnnGodState
 import torch
 from recurrent.mytypes import *
 
-from recurrent.objectalgebra.interpreter import BaseRnnGodInterpreter
-from recurrent.objectalgebra.tensor_intepreter import Input2Output1Interpreter
+from recurrent.objectalgebra.interpreter import BaseRnnInterpreter
 
 from matplotlib import pyplot as plt
-from recurrent.parameters import RfloConfig, RnnParameter, SgdParameter
+from recurrent.parameters import RfloConfig, RnnConfig, RnnParameter, SgdParameter
 from recurrent.util import rnnSplitParameters, tree_stack
+from memory_profiler import profile
+from torch.utils.data import TensorDataset, DataLoader
+from toolz.itertoolz import partition_all
+from torch.utils import _pytree as pytree
+from torch.utils._pytree import PyTree
+import copy
 
 """
 Todo
-1) implement vanilla rnn training loop
+1) implement vanilla rnn training loop 
 2) implement feedforward to show how easy it is
 3) implement oho to show how easy it is
 """
 
-# n_h, n_in = config.n_h, config.n_in
-# w_rec = torch.reshape(w_rec, (n_h, n_h + n_in + 1))
+
+torch.manual_seed(24)
 
 
-def rnnStep(x: torch.Tensor, a: ACTIVATION, param: RnnParameter) -> ACTIVATION:
-    a_ = param.w_rec @ torch.cat((x, a, torch.tensor([1.0])))
-    return ACTIVATION((1 - param.alpha) * a + param.alpha * param.activationFn(a_))
+def generate_add_task_dataset(N, t_1, t_2, deterministic, tau_task):
+    """y(t) = 0.5 + 0.5 * x(t - t_1) - 0.25 * x(t - t_2)"""
+    N = N // tau_task
+
+    x = torch.bernoulli(torch.full((N,), 0.5))
+
+    y = 0.5 + 0.5 * torch.roll(x.float(), t_1) - 0.25 * torch.roll(x.float(), t_2)
+
+    if not deterministic:
+        y = torch.bernoulli(y)
+
+    X = torch.stack([x, 1 - x], dim=-1).repeat(1, tau_task).view(tau_task * N, 2)
+    Y = torch.stack([y, 1 - y], dim=-1).repeat(1, tau_task).view(tau_task * N, 2)
+
+    return X, Y
 
 
-# def rnnStep(
-#     config: WithRnnConfig, x: torch.Tensor, a: torch.Tensor, w_rec: torch.Tensor
-# ) -> torch.Tensor:
-#     n_h, n_in = config.n_h, config.n_in
-#     w_rec = torch.reshape(w_rec, (n_h, n_h + n_in + 1))
-#     input_combined = torch.cat((x, torch.tensor([1.0], device=x.device)), dim=-1)
-#     input_combined = torch.atleast_2d(input_combined)
-#     a_combined = torch.atleast_2d(a)
-#     rnn = torch.nn.RNN(
-#         input_size=n_in + 1,  # Including the bias
-#         hidden_size=n_h,
-#         nonlinearity="tanh",  # Or any other activation function you prefer
-#         bias=False,
-#     )
-#     rnn.weight_hh_l0.data = w_rec[:, :n_h]
-#     rnn.weight_ih_l0.data = w_rec[:, n_h : n_h + n_in + 1]
-#     _, hidden = rnn(input_combined, a_combined)  # Adding batch dimension
+def zeroedInfluenceTensor(out: int, param: PyTree):
+    def update(x: torch.Tensor):
+        n = torch.numel(x)
+        return torch.zeros((out, n))
 
-#     return (1 - config.alpha) * a + config.alpha * hidden[0]
-
-# w_out = torch.reshape(w_out, (config.n_out, config.n_h + 1))
+    return pytree.tree_map(update, param)
 
 
-def rnnReadout(_: torch.Tensor, a: ACTIVATION, param: RnnParameter) -> PREDICTION:
-    return PREDICTION(param.w_out @ torch.cat((a, torch.tensor([1.0]))))
+def pytreeRepeatBatch(batch: int, tree: PyTree):
+    return pytree.tree_map(
+        lambda x: torch.repeat_interleave(x.unsqueeze(0), batch, dim=0), tree
+    )
 
 
-def trainStep(unbatched_time_series: Input2Output1):
+def pytreeNumel(tree: PyTree):
+    leafs, _ = pytree.tree_flatten(tree)
+    return sum((torch.numel(x) for x in leafs))
 
-    n_h = 30
+
+# @profile
+def trainStep(dataloader: Iterable[Input2Output1]):
+
+    n_h = 32
     n_in = 2
-    n_out = 1
-    learning_rate = 0.1
+    n_out = 2
+    learning_rate = torch.tensor(
+        [0.01]
+    )  # parameters should never be floats or single value
     alpha = 1.0
 
-    dialect = BaseRnnGodInterpreter[RnnParameter, SgdParameter, SgdParameter]()
-    dataDialect = Input2Output1Interpreter()
+    type DL = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]
+    type ENV = RnnGodState[RnnParameter, SgdParameter, SgdParameter]
 
-    parameters = torch.randn(n_h * (n_h + n_in + 1) + n_out * (n_h + 1))
-    w_rec, w_out = rnnSplitParameters(n_h, n_in, n_out, parameters)
-    w_rec = torch.reshape(w_rec, (n_h, n_h + n_in + 1))
-    w_out = torch.reshape(w_out, (n_out, n_h + 1))
+    dialect = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]()
+
+    w_rec_, _ = torch.linalg.qr(torch.randn(n_h, n_h))
+    w_in_ = torch.randn(n_h, n_in + 1) * torch.sqrt(torch.tensor(1.0 / (n_in + 1)))
+    w_rec = torch.cat((w_rec_, w_in_), dim=1)
+    w_out = torch.randn(n_out, n_h + 1) * torch.sqrt(torch.tensor(1.0 / (n_h + 1)))
+
+    w_rec = torch.flatten(w_rec)
+    w_out = torch.flatten(w_out)
 
     parameter = RnnParameter(
         w_rec=PARAMETER(w_rec),
         w_out=PARAMETER(w_out),
-        n_h=n_h,
-        n_in=n_in,
-        n_out=n_out,
-        alpha=alpha,
-        activationFn=torch.tanh,
     )
-    sgd = SgdParameter(learning_rate=LEARNING_RATE(torch.tensor(learning_rate)))
+    rnnConfig = RnnConfig(
+        n_h=n_h, n_in=n_in, n_out=n_out, alpha=alpha, activationFn=torch.tanh
+    )
+    sgd = SgdParameter(learning_rate=LEARNING_RATE(learning_rate))
 
     initEnv = RnnGodState[RnnParameter, SgdParameter, SgdParameter](
         # activation=ACTIVATION(torch.randn(batch_size, n_h)),
         activation=ACTIVATION(torch.randn(n_h)),
+        influenceTensor=Gradient[RnnParameter](zeroedInfluenceTensor(n_h, parameter)),
+        ohoInfluenceTensor=Gradient[SgdParameter](
+            zeroedInfluenceTensor(pytreeNumel(sgd), sgd)
+        ),
         parameter=parameter,
         hyperparameter=sgd,
-        influenceTensor=INFLUENCETENSOR(torch.randn(n_h)),
-        ohoInfluenceTensor=INFLUENCETENSOR(torch.randn(n_h)),
         metaHyperparameter=sgd,
-        rfloConfig=RfloConfig(rflo_alpha=0),
-        rfloConfig_bilevel=RfloConfig(rflo_alpha=0),
+        rnnConfig=rnnConfig,
+        rnnConfig_bilevel=rnnConfig,
+        rfloConfig=RfloConfig(rflo_alpha=alpha),
+        rfloConfig_bilevel=RfloConfig(rflo_alpha=alpha),
     )
 
-    # y = PREDICTION(torch.tensor(0.0))
-    rnnLibrary: RnnLibrary[
-        RnnGodState[RnnParameter, SgdParameter, SgdParameter], PREDICTION, Input2Output1
-    ] = createRnnLibrary(
-        dialect,
-        dataDialect,
-        # lambda x, a, w: a,
-        # lambda _, a, w: PREDICTION(a),
-        rnnStep,
-        rnnReadout,
-    )
+    # truncation = 10
+    # dataloader: Iterator[Iterable[Input2Output1]] = partition_all(
+    #     truncation, dataloader
+    # )
+    # truncated_data = map(tree_stack, dataloader)
+    # need to fold over entire dataset man
 
-    rnnLearner = offlineLearning(
-        dialect,
-        dataDialect,
-        lambda a, b: LOSS(torch.functional.F.mse_loss(a, b)),
-        rnnLibrary,
-    )
+    # predictions, _ = rnnLearner.rnn.func(dialect, dataloader, initEnv)
+    # gr, _ = rnnLearner.rnnWithGradient.func(dialect, dataloader, initEnv)
 
-    predictions, _ = rnnLearner.rnn.run(unbatched_time_series, initEnv)
+    # print(gr)
+    # print(_)
+
+    # rnnLearner: RnnLibrary[
+    #     DL, Iterable[Input2Output1], ENV, Iterable[PREDICTION], RnnParameter
+    # ]
+    # print(len(dataloader))
+    # rnnLearner = offlineLearning(
+    #     doRnnStep(),
+    #     doRnnReadout(),
+    #     lambda a, b: LOSS(torch.functional.F.cross_entropy(a, b) / len(dataloader)),
+    # )
+
+    # def run(prev_env):
+    #     _, env = rnnLearner.rnnWithGradient.flat_map(doSgdStep).func(
+    #         dialect, dataloader, prev_env
+    #     )
+    #     loss, _ = rnnLearner.rnnWithLoss.func(dialect, dataloader, env)
+    #     print(loss)
+    #     new_env = copy.replace(prev_env, parameter=env.parameter)
+    #     return new_env
+
+    # for _ in range(200):
+    #     initEnv = run(initEnv)
+
+    # predictions, _ = rnnLearner.rnn.func(dialect, dataloader, initEnv)
+    # predictions = [torch.functional.F.softmax(tensor, dim=0) for tensor in predictions]
+    # return predictions
+
+    rnnLearner: RnnLibrary[DL, Input2Output1, ENV, PREDICTION, RnnParameter]
+    rtrl = RFLO[
+        Input2Output1,
+        RnnGodState[RnnParameter, SgdParameter, SgdParameter],
+        ACTIVATION,
+        RnnParameter,
+        Tensor,
+        Tensor,
+        Tensor,
+        PREDICTION,
+    ]()
+    rnnLearner = rtrl.onlineLearning(
+        doRnnStep(),
+        doRnnReadout(),
+        lambda a, b: LOSS(torch.functional.F.cross_entropy(a, b)),
+    )
+    # gr, _ = rnnLearner.rnnWithGradient.func(dialect, dataloader[0], initEnv)
+
+    # _, initEnv = rnnLearner.trainStep(doSgdStep).func(dialect, dataloader, initEnv)
+    for d in dataloader:
+        _, initEnv = rnnLearner.rnnWithGradient.flat_map(doSgdStep).func(
+            dialect, d, initEnv
+        )
+        # print(initEnv.parameter.w_out)
+        lossFn = foldM(
+            lambda acc: rnnLearner.rnnWithLoss.fmap(lambda l: l + acc), LOSS(0)
+        )
+        loss, _ = lossFn.func(dialect, dataloader, initEnv)
+        print(loss / len(dataloader))
+
+    predictions, _ = traverse(rnnLearner.rnn).func(dialect, dataloader, initEnv)
+    predictions = [torch.functional.F.softmax(tensor, dim=0) for tensor in predictions]
     return predictions
 
 
@@ -123,74 +195,79 @@ def trainStep(unbatched_time_series: Input2Output1):
 
 def main():
 
-    length = 100000
-    random_data = torch.randn(length, 3)
-    dataclass_list = map(lambda row: Input2Output1(x=row[0:2], y=row[2]), random_data)
+    length = 2_000
+    X, Y = generate_add_task_dataset(length, 5, 9, True, 1)
+    dataset = map(lambda data: Input2Output1(data[0], data[1]), zip(X, Y))
+    dataset = list(dataset)
 
-    import cProfile, pstats
+    # import cProfile, pstats
 
-    data = tree_stack(dataclass_list)
+    # profiler = cProfile.Profile()
+    # profiler.enable()
+    # start = time.time()
+    predictions = trainStep(dataset)
+    # print(time.time() - start)
+    # profiler.disable()
+    # stats = pstats.Stats(profiler).sort_stats("cumtime")
+    # stats.print_stats()
+    # stats.dump_stats("profile_results.prof")
 
-    profiler = cProfile.Profile()
-    profiler.enable()
-    predictions = trainStep(data)
-    profiler.disable()
-    stats = pstats.Stats(profiler).sort_stats("cumtime")
-    stats.print_stats()
-    stats.dump_stats("profile_results.prof")
+    predictions = list(predictions)
+    indices = torch.arange(len(predictions))
 
-    # predictions = list(predictions)
-    # indices = torch.arange(len(predictions))
+    predictions = [tensor[0].item() for tensor in predictions]
+    labels = [tensor[0].item() for tensor in Y]
 
-    # # Plot the data
-    # plt.figure(figsize=(8, 5))
-    # plt.plot(indices, predictions, marker="o", label="Data")
-    # plt.title("Plot of List Data with Indices")
-    # plt.xlabel("Indices")
-    # plt.ylabel("Values")
-    # plt.grid(True)
-    # plt.legend()
-    # plt.show()
+    # Plot the data
+    plt.figure(figsize=(8, 5))
+    plt.plot(indices, predictions, marker="o", label="Prediction")
+    plt.plot(indices, labels, marker="o", label="Target")
+    plt.title("Plot of List Data with Indices")
+    plt.xlabel("Indices")
+    plt.ylabel("Values")
+    plt.grid(True)
+    plt.legend()
+    plt.show()
 
-    # %%
+    # # Define the simple RNN model
+    # class SimpleRNN(torch.nn.Module):
+    #     def __init__(self, input_size, hidden_size, output_size):
+    #         super(SimpleRNN, self).__init__()
+    #         self.hidden_size = hidden_size
+    #         # Define the RNN layer
+    #         self.rnn = torch.nn.RNN(input_size, hidden_size)
+    #         # Define a fully connected layer to map RNN output to final prediction
+    #         self.fc = torch.nn.Linear(hidden_size, output_size)
 
-    # Define the simple RNN model
-    class SimpleRNN(torch.nn.Module):
-        def __init__(self, input_size, hidden_size, output_size):
-            super(SimpleRNN, self).__init__()
-            self.hidden_size = hidden_size
-            # Define the RNN layer
-            self.rnn = torch.nn.RNN(input_size, hidden_size)
-            # Define a fully connected layer to map RNN output to final prediction
-            self.fc = torch.nn.Linear(hidden_size, output_size)
+    #     def forward(self, x):
+    #         # Initialize hidden state with zeros
+    #         h0 = torch.zeros(1, self.hidden_size)
+    #         # Get RNN output (output, hidden_state)
+    #         out, _ = self.rnn(x, h0)
+    #         # Pass the RNN output through the fully connected layer for each time step
+    #         out = self.fc(out)  # Apply to all time steps
+    #         return out
 
-        def forward(self, x):
-            # Initialize hidden state with zeros
-            h0 = torch.zeros(1, self.hidden_size)
-            # Get RNN output (output, hidden_state)
-            out, _ = self.rnn(x, h0)
-            # Pass the RNN output through the fully connected layer for each time step
-            out = self.fc(out)  # Apply to all time steps
-            return out
+    # random_data = torch.randn(length, 2)
 
-    random_data = torch.randn(length, 2)
+    # # Initialize the model
+    # input_size = 2  # Corresponding to x1, x2, and y
+    # hidden_size = 30  # Arbitrary size for hidden state
+    # output_size = 1  # We are predicting a single output value
 
-    # Initialize the model
-    input_size = 2  # Corresponding to x1, x2, and y
-    hidden_size = 30  # Arbitrary size for hidden state
-    output_size = 1  # We are predicting a single output value
+    # model = SimpleRNN(input_size, hidden_size, output_size)
 
-    model = SimpleRNN(input_size, hidden_size, output_size)
+    # # Generate predictions for the entire sequence
+    # with torch.no_grad():  # No need to compute gradients
+    #     start_time_vmap = time.time()
+    #     predictions = model(random_data)
+    #     vmap_time = time.time() - start_time_vmap
+    #     print(f"vmap execution time: {vmap_time:.6f} seconds")
 
-    # Generate predictions for the entire sequence
-    with torch.no_grad():  # No need to compute gradients
-        start_time_vmap = time.time()
-        predictions = model(random_data)
-        vmap_time = time.time() - start_time_vmap
-        print(f"vmap execution time: {vmap_time:.6f} seconds")
-
-    print(predictions.shape)
-    # %%
+    # print(predictions.shape)
+    # # %%
 
 
 main()
+
+# %%

@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from typing import Any, Callable, Generic, TypeVar, Protocol, Iterable, cast
 from donotation import do
 import torch
@@ -25,7 +24,7 @@ from recurrent.objectalgebra.typeclasses import (
 
 from recurrent.mytypes import *
 from recurrent.monad import *
-from recurrent.parameters import RnnParameter
+from recurrent.parameters import RnnParameter, SgdParameter
 
 
 # STATEM = Callable[[DATA, ENV], ENV]
@@ -149,7 +148,46 @@ type LossFn[A, B] = Callable[[A, B], LOSS]
 
 
 def jacobian_matrix_product(f, primal, matrix):
-    return torch.vmap(torch.func.jvp, in_dims=(None, None, 0))(f, primal, matrix)[1]
+    # print(primal)
+    # print(matrix)
+    jvp = lambda p, t: torch.func.jvp(f, (p,), (t,))[1]
+    # print(matrix.shape)
+
+    # def jvp(p, t):
+    #     print(p)
+    #     print(p.shape)
+    #     print(t)
+    #     print(t.shape)
+    #     quit()
+    #     a, b = torch.func.jvp(f, (p,), (t,))
+    #     return b
+
+    return torch.vmap(jvp, in_dims=(None, 1), out_dims=1)(primal, matrix)
+
+
+# def SGD(learning_rate: float) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
+#     def SGD_(param: torch.Tensor, grad: torch.Tensor) -> torch.Tensor:
+#         return param - learning_rate * grad
+#     return SGD_
+
+
+class _SGD[E, Pr](
+    GetParameter[E, Pr],
+    PutParameter[E, Pr],
+    GetHyperParameter[E, SgdParameter],
+    Protocol,
+): ...
+
+
+@do()
+def doSgdStep[D, E, Pr: PYTREE](grad: Gradient[Pr]) -> G[Fold[_SGD[E, Pr], D, E, Unit]]:
+    dl = yield from ProxyDl[_SGD[E, Pr]].askDl()
+    param = yield from dl.getParameter()
+    hyperparam = yield from dl.getHyperParameter()
+    new_param = pytree.tree_map(
+        lambda x, y: x - hyperparam.learning_rate * y, param, grad.value
+    )
+    return dl.putParameter(new_param)
 
 
 class _R[D, E](
@@ -164,12 +202,13 @@ class _R[D, E](
 
 @do()
 def doRnnStep[D, E]() -> G[Fold[_R[D, E], D, E, ACTIVATION]]:
-    dl = yield from askDl(Proxy[_R[D, E]]())
+    dl = yield from ProxyDl[_R[D, E]].askDl()
     x = yield from dl.getInput()
     a = yield from dl.getActivation()
     param = yield from dl.getParameter()
     cfg = yield from dl.getRnnConfig()
-    a_rec = param.w_rec @ torch.cat((x, a, torch.tensor([1.0])))
+    w_rec = torch.reshape(param.w_rec, (cfg.n_h, cfg.n_h + cfg.n_in + 1))
+    a_rec = w_rec @ torch.cat((a, x, torch.tensor([1.0])))
     a_new = ACTIVATION((1 - cfg.alpha) * a + cfg.alpha * cfg.activationFn(a_rec))
     _ = yield from dl.putActivation(a_new)
     return pure(a_new)
@@ -178,16 +217,19 @@ def doRnnStep[D, E]() -> G[Fold[_R[D, E], D, E, ACTIVATION]]:
 class _Re[E](
     GetActivation[E, ACTIVATION],
     GetParameter[E, RnnParameter],
+    GetRnnConfig[E],
     Protocol,
 ): ...
 
 
-@do
+@do()
 def doRnnReadout[D, E]() -> G[Fold[_Re[E], D, E, PREDICTION]]:
-    dl = yield from askDl(Proxy[_Re[E]]())
+    dl = yield from ProxyDl[_Re[E]].askDl()
     a = yield from dl.getActivation()
     param = yield from dl.getParameter()
-    return pure(PREDICTION(param.w_out @ torch.cat((a, torch.tensor([1.0])))))
+    cfg = yield from dl.getRnnConfig()
+    w_out = torch.reshape(param.w_out, (cfg.n_out, cfg.n_h + 1))
+    return pure(PREDICTION(w_out @ torch.cat((a, torch.tensor([1.0])))))
 
 
 class _L[D, T](HasLabel[D, T], Protocol): ...
@@ -199,9 +241,10 @@ type DoLossFn[D, E, P, T] = Callable[[P], Fold[_L[D, T], D, E, LOSS]]
 def doLoss[D, E, P, T](lossFn: LossFn[T, P]) -> DoLossFn[D, E, P, T]:
     @do()
     def loss_(pred: P) -> G[Fold[_L[D, T], D, E, LOSS]]:
-        d = yield from askDl(Proxy[_L[D, T]]())
+        d = yield from ProxyDl[_L[D, T]].askDl()
         label = yield from d.getLabel()
-        return pure(lossFn(label, pred))
+        loss = lossFn(pred, label)
+        return pure(loss)
 
     return loss_
 
@@ -215,9 +258,9 @@ def doGradient[
 ):
     @do()
     def doGradient() -> G[Fold[Dl, D, E, Gradient[Pr]]]:
-        dl = yield from askDl(Proxy[Dl]())
-        d = yield from ask(Proxy[D]())
-        e = yield from get(Proxy[E]())
+        dl = yield from ProxyDl[Dl].askDl()
+        d = yield from ProxyR[D].ask()
+        e = yield from ProxyS[E].get()
         pr = yield from read_wrt
 
         def parametrized(p: Pr) -> tuple[LOSS, E]:
@@ -227,7 +270,7 @@ def doGradient[
         env: E
         gr, env = Tfn.jacrev(parametrized, has_aux=True)(pr)
         _ = yield from put(env)
-        return pure(Gradient[Pr](gr))
+        return pure(Gradient(gr))
 
     return doGradient()
 
@@ -243,7 +286,7 @@ def doAvgGradient[
 
     @do()
     def doWeight(gr_accum: Gradient[Pr]) -> G[Fold[DL, D, E, Gradient[Pr]]]:
-        d = yield from ask(Proxy[D]())
+        d = yield from ProxyR[D].ask()
         gr_new = yield from step
         gr_accum_new: Pr
         gr_accum_new = pytree.tree_map(
@@ -251,7 +294,7 @@ def doAvgGradient[
             gr_accum.value,
             gr_new.value,
         )
-        return pure(Gradient[Pr](gr_accum_new))
+        return pure(Gradient(gr_accum_new))
 
     return foldM(doWeight, gr0)
 
@@ -260,20 +303,25 @@ def doAvgGradient[
 def doBatchGradients[
     Dl, D: PYTREE | Tensor, E, Pr: PYTREE
 ](step: Fold[Dl, D, E, Gradient[Pr]], e_dim: E) -> G[Fold[Dl, D, E, Gradient[Pr]]]:
-    dl = yield from askDl(Proxy[Dl]())
+    dl = yield from ProxyDl[Dl].askDl()
     run: Callable[[D, E], tuple[Gradient[Pr], E]]
     run = lambda d, e: step.func(dl, d, e)
     gr_ = yield from toFold(torch.vmap(run, in_dims=(0, e_dim), out_dims=(0, e_dim)))
     gr = cast(Gradient[Pr], gr_)
     gr_summed: Pr
     gr_summed = pytree.tree_map(lambda x: torch.sum(x, dim=0), gr.value)
-    return pure(Gradient[Pr](gr_summed))
+    return pure(Gradient(gr_summed))
 
 
 class RnnLibrary[DL, D, E, P, Pr](NamedTuple):
     rnn: Fold[DL, D, E, P]
     rnnWithLoss: Fold[DL, D, E, LOSS]
     rnnWithGradient: Fold[DL, D, E, Gradient[Pr]]
+
+    type UpdateP = Callable[[Gradient[Pr]], Fold[DL, D, E, Unit]]
+
+    def trainStep(self, updateParam: UpdateP) -> Fold[DL, Iterable[D], E, Unit]:
+        return repeatM(self.rnnWithGradient.flat_map(updateParam))
 
 
 class _OfL[D, E, A, Pr, X, Y, Z](
@@ -295,8 +343,16 @@ def offlineLearning[
     activationStep: Fold[_OfL[D, E, A, Pr, X, Y, Z], D, E, A],
     predictionStep: Fold[_OfL[D, E, A, Pr, X, Y, Z], D, E, P],
     computeLoss: LossFn[Z, P],
-) -> RnnLibrary[_OfL[D, E, A, Pr, X, Y], Iterable[D], E, Iterable[P], Pr]:
+) -> RnnLibrary[_OfL[D, E, A, Pr, X, Y, Z], Iterable[D], E, Iterable[P], Pr]:
     type DL = _OfL[D, E, A, Pr, X, Y, Z]
+
+    @do()
+    def _a():
+        return pure(ACTIVATION(torch.zeros(32)))
+
+    @do()
+    def _p():
+        return pure(PREDICTION(torch.zeros(2)))
 
     rnnStep = activationStep.then(predictionStep)
 
@@ -313,8 +369,12 @@ def offlineLearning[
 
     @do()
     def rnnWithGradient():
-        dl = yield from askDl(Proxy[DL]())
-        return doGradient(rnnWithLoss(), dl.getParameter(), dl.putParameter)
+        dl = yield from ProxyDl[DL].askDl()
+        gr = yield from doGradient(rnnWithLoss(), dl.getParameter(), dl.putParameter)
+        # print(gr.value.w_rec)
+        # print(gr.value.w_out)
+        # quit()
+        return pure(gr)
 
     return RnnLibrary[DL, Iterable[D], E, Iterable[P], Pr](
         rnn=rnn,
@@ -346,15 +406,17 @@ class PastFacingLearn[D, E, A: Tensor, Pr: PYTREE, X, Y, Z, P](ABC):
     ) -> Fold[DL, D, E, Gradient[Pr]]:
         pass
 
-    @staticmethod
+    # @staticmethod
     @do()
-    def reparameterize(
-        activationStep: Fold[DL, D, E, A]
-    ) -> G[Fold[DL, D, E, Callable[[A, Pr], tuple[A, E]]]]:
+    def reparameterize[
+        D, E, A: Tensor, Pr: PYTREE, X, Y, Z
+    ](self, activationStep: Fold[DL, D, E, A]) -> G[
+        Fold[DL, D, E, Callable[[A, Pr], tuple[A, E]]]
+    ]:
         type DL = _PfL[D, E, A, Pr, X, Y, Z]
-        dl = yield from askDl(Proxy[DL]())
-        d = yield from ask(Proxy[D]())
-        e = yield from get(Proxy[E]())
+        dl = yield from ProxyDl[DL].askDl()
+        d = yield from ProxyR[D].ask()
+        e = yield from ProxyS[E].get()
 
         def parametrized(a: A, pr: Pr) -> tuple[A, E]:
             return (
@@ -380,13 +442,22 @@ class PastFacingLearn[D, E, A: Tensor, Pr: PYTREE, X, Y, Z, P](ABC):
         def creditAssignment(
             infl: Gradient[Pr],
         ) -> G[Fold[DL, D, E, Gradient[Pr]]]:
-            dl = yield from askDl(Proxy[DL]())
+            dl = yield from ProxyDl[DL].askDl()
             _ = yield from dl.putInfluenceTensor(infl)
             immed: Gradient[A]
             immed = yield from doGradient(immedL, dl.getActivation(), dl.putActivation)
+
             ca: Gradient[Pr]
             ca = pytree.tree_map(lambda x: immed.value @ x, infl)
-            return pure(ca)
+
+            # todo: move readout gradients to another section to be overridable
+            readout: Gradient[Pr]
+            readout = yield from doGradient(immedL, dl.getParameter(), dl.putParameter)
+
+            gradient: Gradient[Pr]
+            gradient = pytree.tree_map(lambda x, y: x + y, readout, ca)
+
+            return pure(gradient)
 
         gradient = self.influence_tensor(activationStep).flat_map(creditAssignment)
         return RnnLibrary[DL, D, E, P, Pr](
@@ -406,7 +477,7 @@ class RTRL[D, E, A: Tensor, Pr: PYTREE, X, Y, Z, P](
         self, activationStep: Fold[DL, D, E, A]
     ) -> G[Fold[DL, D, E, Gradient[Pr]]]:
         type DL = _PfL[D, E, A, Pr, X, Y, Z]
-        dl = yield from askDl(Proxy[DL]())
+        dl = yield from ProxyDl[DL].askDl()
         influenceTensor = yield from dl.getInfluenceTensor()
         a0 = yield from dl.getActivation()
         p0 = yield from dl.getParameter()
@@ -423,10 +494,11 @@ class RTRL[D, E, A: Tensor, Pr: PYTREE, X, Y, Z, P](
         immedInfl: Pr
         env: E
         immedInfl, env = Tfn.jacfwd(parametrized, argnums=1, has_aux=True)(a0, p0)
+
         infl: Pr
         infl = pytree.tree_map(lambda x, y: x + y, immedInfl, immedJacInflProduct.value)
         _ = yield from put(env)
-        return pure(Gradient[Pr](infl))
+        return pure(Gradient(infl))
 
 
 class _RfL[D, E, A, Pr, X, Y, Z](
@@ -444,7 +516,7 @@ class RFLO[D, E, A: Tensor, Pr: PYTREE, X, Y, Z, P](
         self, activationStep: Fold[DL, D, E, A]
     ) -> G[Fold[DL, D, E, Gradient[Pr]]]:
         type DL = _RfL[D, E, A, Pr, X, Y, Z]
-        dl = yield from askDl(Proxy[DL]())
+        dl = yield from ProxyDl[DL].askDl()
         alpha = yield from dl.getRfloConfig().fmap(lambda x: x.rflo_alpha)
         influenceTensor = yield from dl.getInfluenceTensor()
         a0 = yield from dl.getActivation()
@@ -454,12 +526,14 @@ class RFLO[D, E, A: Tensor, Pr: PYTREE, X, Y, Z, P](
         immedInfl: Pr
         env: E
         immedInfl, env = Tfn.jacrev(parametrized, argnums=1, has_aux=True)(a0, p0)
+
         infl: Pr
         infl = pytree.tree_map(
             lambda x, y: (1 - alpha) * x + alpha * y, influenceTensor.value, immedInfl
         )
+        # print(infl)
         _ = yield from put(env)
-        return pure(Gradient[Pr](infl))
+        return pure(Gradient(infl))
 
 
 # def SGD(learning_rate: float) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:

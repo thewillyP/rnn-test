@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Generic, NamedTuple
 from torch.utils import _pytree as pytree
 from recurrent.mytypes import *
@@ -59,6 +60,49 @@ def batch_vanilla[A, B, C]() -> RnnGodState[A, B, C]:
         rfloConfig=None,
         rfloConfig_bilevel=None,
     )
+
+
+def rnn_god_flatten[A, B, C](godState: RnnGodState[A, B, C]):
+    return (
+        godState.activation,
+        godState.influenceTensor,
+        godState.ohoInfluenceTensor,
+        godState.parameter,
+        godState.hyperparameter,
+        godState.metaHyperparameter,
+    ), (
+        godState.rfloConfig,
+        godState.rfloConfig_bilevel,
+        godState.rnnConfig,
+        godState.rnnConfig_bilevel,
+    )
+
+
+def rnn_god_unflatten(children, aux):
+    (
+        activation,
+        influenceTensor,
+        ohoInfluenceTensor,
+        parameter,
+        hyperparameter,
+        metaHyperparameter,
+    ) = children
+    (rfloConfig, rfloConfig_bilevel, rnnConfig, rnnConfig_bilevel) = aux
+    return RnnGodState(
+        activation=activation,
+        influenceTensor=influenceTensor,
+        ohoInfluenceTensor=ohoInfluenceTensor,
+        parameter=parameter,
+        hyperparameter=hyperparameter,
+        metaHyperparameter=metaHyperparameter,
+        rfloConfig=rfloConfig,
+        rfloConfig_bilevel=rfloConfig_bilevel,
+        rnnConfig=rnnConfig,
+        rnnConfig_bilevel=rnnConfig_bilevel,
+    )
+
+
+pytree.register_pytree_node(RnnGodState, rnn_god_flatten, rnn_god_unflatten)
 
 
 # A_TORCH = TypeVar("A_TORCH", bound=torch.Tensor | PYTREE)
