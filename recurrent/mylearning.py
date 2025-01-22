@@ -43,8 +43,8 @@ def jvp(f, primal, tangent):
 
 def jacobian_matrix_product(f, primal, matrix):
     # jvp = lambda p, t: torch.func.jvp(f, (p,), (t,))[1]
-    f = lambda p, t: jvp(f, p, t)
-    return torch.vmap(f, in_dims=(None, 1), out_dims=1)(primal, matrix)
+    wrapper = lambda p, t: jvp(f, p, t)
+    return torch.vmap(wrapper, in_dims=(None, 1), out_dims=1)(primal, matrix)
 
 
 class _SGD[E, Pr](
@@ -262,31 +262,35 @@ class PastFacingLearn[Alg: _PfL[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](ABC)
     type F[Dl, T] = Fold[Dl, D, E, T]
 
     @abstractmethod
-    def creditAssignment[
+    def creditAndUpdateState[
         Dl
-    ](self, e_signal: Gradient[A], activationStep: F[Dl, A]) -> F[Dl, Gradient[Pr]]: ...
+    ](self, e_signal: F[Dl, Gradient[A]], activationStep: F[Dl, A]) -> F[
+        Dl, Gradient[Pr]
+    ]: ...
 
     class __reparam__(PutActivation[E, A], PutParameter[E, Pr], Protocol):
         pass
 
-    @do()
     def reparameterize[Dl: __reparam__](self, activationStep: F[Dl, A]):
+        @do()
+        def next():
+            dl = yield from ProxyDl[Dl].askDl()
+            d = yield from ProxyR[D].ask()
+            e = yield from ProxyS[E].get()
 
-        dl = yield from ProxyDl[Dl].askDl()
-        d = yield from ProxyR[D].ask()
-        e = yield from ProxyS[E].get()
+            def parametrized(a: A, pr: Pr) -> tuple[A, E]:
+                return (
+                    dl.putActivation(a)
+                    .then(dl.putParameter(pr))
+                    .then(activationStep)
+                    .func(dl, d, e)
+                )
 
-        def parametrized(a: A, pr: Pr) -> tuple[A, E]:
-            return (
-                dl.putActivation(a)
-                .then(dl.putParameter(pr))
-                .then(activationStep)
-                .func(dl, d, e)
-            )
+            m: Fold[Dl, D, E, Callable[[A, Pr], tuple[A, E]]]
+            m = pure(parametrized)
+            return m
 
-        m: Fold[Dl, D, E, Callable[[A, Pr], tuple[A, E]]]
-        m = pure(parametrized)
-        return m
+        return next()
 
     def onlineLearning(
         self,
@@ -295,29 +299,29 @@ class PastFacingLearn[Alg: _PfL[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](ABC)
         computeLoss: LossFn[Z, P],
     ):
 
-        lossM = predictionStep.flat_map(doLoss(computeLoss))
+        immedL = predictionStep.flat_map(doLoss(computeLoss))
 
         @do()
         def total_grad():
             dl = yield from ProxyDl[Alg].askDl()
 
-            e_signal: Gradient[A]
-            e_signal = yield from doGradient(
-                lossM, dl.getActivation(), dl.putActivation
-            )
+            # state issue, updating order is all wrong
+            e_signal = doGradient(immedL, dl.getActivation(), dl.putActivation)
 
-            grad_o = yield from doGradient(lossM, dl.getParameter(), dl.putParameter)
-            grad_rec = yield from self.creditAssignment(e_signal, activationStep)
+            grad_rec = yield from self.creditAndUpdateState(e_signal, activationStep)
+            # order matters, need to update actv b4 grad flow the readout
+            grad_o = yield from doGradient(immedL, dl.getParameter(), dl.putParameter)
 
             gradient: Gradient[Pr]
             gradient = pytree.tree_map(lambda x, y: x + y, grad_o, grad_rec)
             m: Fold[Alg, D, E, Gradient[Pr]]
             m = pure(gradient)
+
             return m
 
         return RnnLibrary[Alg, D, E, P, Pr](
             rnn=activationStep.then(predictionStep),
-            rnnWithLoss=activationStep.then(lossM),
+            rnnWithLoss=activationStep.then(immedL),
             rnnWithGradient=total_grad(),
         )
 
@@ -350,17 +354,23 @@ class InfluenceTensorLearner[Alg: _Infl[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z,
     @abstractmethod
     def influence_tensor[Dl](self, actvStep: F[Dl, A]) -> F[Dl, Grad_Pr]: ...
 
-    @do()
-    def creditAssignment(self, e_signal: Gradient[A], actvStep: F[Alg, A]):
-        dl = yield from ProxyDl[Alg].askDl()
-        infl = yield from self.influence_tensor(actvStep)
-        _ = yield from dl.putInfluenceTensor(infl)
+    def creditAndUpdateState(self, e_signal: F[Alg, Gradient[A]], actvStep: F[Alg, A]):
+        @do()
+        def next():
+            dl = yield from ProxyDl[Alg].askDl()
+            infl = yield from self.influence_tensor(actvStep)
+            _ = yield from dl.putInfluenceTensor(infl)
 
-        ca: Gradient[Pr]
-        ca = pytree.tree_map(lambda x: e_signal.value @ x, infl)
-        m: Fold[Alg, D, E, Gradient[Pr]]
-        m = pure(ca)
-        return m
+            signal = yield from e_signal
+
+            ca: Gradient[Pr]
+            ca = pytree.tree_map(lambda x: signal.value @ x, infl)
+            m: Fold[Alg, D, E, Gradient[Pr]]
+            m = pure(ca)
+
+            return m
+
+        return next()
 
 
 class RTRL[Alg: _Infl[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
@@ -450,43 +460,56 @@ class UORO[Alg: _UO[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
 ):
     type F[Dl, T] = Fold[Dl, D, E, T]
 
-    @do()
-    def creditAssignment(self, e_signal: Gradient[A], activationStep: F[Alg, A]):
-        dl = yield from ProxyDl[Alg].askDl()
-        uoro = yield from dl.getUORO()
-        rnnConfig = yield from dl.getRnnConfig()
-        #!!! WARNING, IMPURITY IN PROGRESS, will address later. Just don't run this function more than once, if autodiffing through it
-        v = torch.distributions.uniform.Uniform(-1, 1).sample(rnnConfig.n_h)
+    def creditAndUpdateState(self, e_signal: F[Alg, Gradient[A]], actvStep: F[Alg, A]):
+        @do()
+        def next():
+            dl = yield from ProxyDl[Alg].askDl()
+            uoro = yield from dl.getUORO()
+            rnnConfig = yield from dl.getRnnConfig()
+            #!!! WARNING, IMPURITY IN PROGRESS, will address later. Just don't run this function more than once, if autodiffing through it
+            v = torch.distributions.uniform.Uniform(-1, 1).sample(rnnConfig.n_h)
 
-        a0 = yield from dl.getActivation()
-        p0 = yield from dl.getParameter()
-        parametrized = yield from self.reparameterize(activationStep)
-        A_prev = uoro.A  # I don't distinguish between column and row tensor.
-        B_prev = uoro.B
+            a0 = yield from dl.getActivation()
+            p0 = yield from dl.getParameter()
+            parametrized = yield from self.reparameterize(actvStep)
+            A_prev = uoro.A  # I don't distinguish between column and row tensor.
+            B_prev = uoro.B
 
-        # 1 calculate the actv_jacobian vector product with A
-        immedJac_A_product: Tensor
-        immedJac_A_product = jvp(lambda a: parametrized(a, p0)[0], a0, A_prev)
+            # 1 calculate the actv_jacobian vector product with A
+            immedJac_A_product: Tensor
+            immedJac_A_product = jvp(lambda a: parametrized(a, p0)[0], a0, A_prev)
 
-        # doing the vjp saves BIG on memory. Only use O(n^2) as we want
-        env: E
-        _, vjp_func, env = Tfn.vjp(lambda p: parametrized(a0, p), p0, has_aux=True)
-        immedJacInfl_randomProj: Pr = vjp_func(v)
+            # doing the vjp saves BIG on memory. Only use O(n^2) as we want
+            env: E
+            _, vjp_func, env = Tfn.vjp(lambda p: parametrized(a0, p), p0, has_aux=True)
+            _ = yield from put(env)
 
-        rho0: Tensor = torch.sqrt(pytree_norm(B_prev) / torch.norm(immedJac_A_product))
-        rho1: Tensor = torch.sqrt(pytree_norm(immedJacInfl_randomProj) / torch.norm(v))
+            immedJacInfl_randomProj: Pr = vjp_func(v)
 
-        A_new = rho0 * immedJac_A_product + rho1 * v
-
-        B_new: Gradient[Pr] = Gradient(
-            pytree.tree_map(
-                lambda x, y: x / rho0 + y / rho1, B_prev.value, immedJacInfl_randomProj
+            rho0: Tensor = torch.sqrt(
+                pytree_norm(B_prev) / torch.norm(immedJac_A_product)
             )
-        )
+            rho1: Tensor = torch.sqrt(
+                pytree_norm(immedJacInfl_randomProj) / torch.norm(v)
+            )
 
-        dl.putUORO(uoro._replace(A=A_new, B=B_new))
+            A_new = rho0 * immedJac_A_product + rho1 * v
 
-        q = e_signal.value @ A_new
-        ca: Fold[Alg, D, E, Gradient[Pr]]
-        ca = pure(pytree.tree_map(lambda x: x * q, B_new))
-        return ca
+            B_new: Gradient[Pr] = Gradient(
+                pytree.tree_map(
+                    lambda x, y: x / rho0 + y / rho1,
+                    B_prev.value,
+                    immedJacInfl_randomProj,
+                )
+            )
+
+            dl.putUORO(uoro._replace(A=A_new, B=B_new))
+
+            signal = yield from e_signal
+
+            q = signal.value @ A_new
+            ca: Fold[Alg, D, E, Gradient[Pr]]
+            ca = pure(pytree.tree_map(lambda x: x * q, B_new))
+            return ca
+
+        return next()
