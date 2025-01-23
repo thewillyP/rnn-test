@@ -21,6 +21,8 @@ class BaseRnnGodInterpreter[A, B, C](
     PutInfluenceTensor[RnnGodState[A, B, C], Gradient[A]],
     GetRfloConfig[RnnGodState[A, B, C]],
     GetRnnConfig[RnnGodState[A, B, C]],
+    GetUORO[RnnGodState[A, B, C], A],
+    PutUORO[RnnGodState[A, B, C], A],
 ):
     type GOD = RnnGodState[A, B, C]
 
@@ -28,31 +30,57 @@ class BaseRnnGodInterpreter[A, B, C](
         return get().fmap(lambda e: e.activation)
 
     def putActivation[D](self, s: ACTIVATION) -> Fold[Self, D, GOD, Unit]:
-        return get().flat_map(lambda e: put(copy.replace(e, activation=s)))
+        return (
+            ProxyS[RnnGodState[A, B, C]]
+            .get()
+            .flat_map(lambda e: put(e._replace(activation=s)))
+        )
 
     def getParameter[D](self) -> Fold[Self, D, GOD, A]:
         return get().fmap(lambda e: e.parameter)
 
     def putParameter[D](self, s: A) -> Fold[Self, D, GOD, Unit]:
-        return get().flat_map(lambda e: put(copy.replace(e, parameter=s)))
+        return (
+            ProxyS[RnnGodState[A, B, C]]
+            .get()
+            .flat_map(lambda e: put(e._replace(parameter=s)))
+        )
 
     def getHyperParameter[D](self) -> Fold[Self, D, GOD, B]:
         return get().fmap(lambda e: e.hyperparameter)
 
     def putHyperParameter[D](self, s: B) -> Fold[Self, D, GOD, Unit]:
-        return get().flat_map(lambda e: put(copy.replace(e, hyperparameter=s)))
+        return (
+            ProxyS[RnnGodState[A, B, C]]
+            .get()
+            .flat_map(lambda e: put(e._replace(hyperparameter=s)))
+        )
 
     def getInfluenceTensor[D](self) -> Fold[Self, D, GOD, Gradient[A]]:
         return get().fmap(lambda e: e.influenceTensor)
 
     def putInfluenceTensor[D](self, s: Gradient[A]) -> Fold[Self, D, GOD, Unit]:
-        return get().flat_map(lambda e: put(copy.replace(e, influenceTensor=s)))
+        return (
+            ProxyS[RnnGodState[A, B, C]]
+            .get()
+            .flat_map(lambda e: put(e._replace(influenceTensor=s)))
+        )
 
     def getRfloConfig[D](self) -> Fold[Self, D, GOD, RfloConfig]:
         return get().fmap(lambda e: e.rfloConfig)
 
     def getRnnConfig[D](self) -> Fold[Self, D, GOD, RnnConfig]:
         return get().fmap(lambda e: e.rnnConfig)
+
+    def getUORO[D](self) -> Fold[Self, D, GOD, UORO_Param[A]]:
+        return get().fmap(lambda e: e.uoro)
+
+    def putUORO[D](self, s: UORO_Param[A]) -> Fold[Self, D, GOD, Unit]:
+        return (
+            ProxyS[RnnGodState[A, B, C]]
+            .get()
+            .flat_map(lambda e: put(e._replace(uoro=s)))
+        )
 
 
 class DataInterpreter(
@@ -121,7 +149,11 @@ class BilevelRnnGodInterpreter[A, B, C](
 
     def putHyperParameter[D](self, s: C) -> Fold[Self, D, GOD, Unit]:
         type GOD = RnnGodState[A, B, C]
-        return get().flat_map(lambda e: put(copy.replace(e, metaHyperparameter=s)))
+        return (
+            ProxyS[RnnGodState[A, B, C]]
+            .get()
+            .flat_map(lambda e: put(e._replace(metaHyperparameter=s)))
+        )
 
     def getInfluenceTensor[D](self) -> Fold[Self, D, GOD, Gradient[B]]:
         type GOD = RnnGodState[A, B, C]
@@ -129,7 +161,11 @@ class BilevelRnnGodInterpreter[A, B, C](
 
     def putInfluenceTensor[D](self, s: Gradient[B]) -> Fold[Self, D, GOD, Unit]:
         type GOD = RnnGodState[A, B, C]
-        return get().flat_map(lambda e: put(copy.replace(e, ohoInfluenceTensor=s)))
+        return (
+            ProxyS[RnnGodState[A, B, C]]
+            .get()
+            .flat_map(lambda e: put(e._replace(ohoInfluenceTensor=s)))
+        )
 
     def getRfloConfig[D](self) -> Fold[Self, D, GOD, RfloConfig]:
         type GOD = RnnGodState[A, B, C]

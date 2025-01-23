@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Generic, NamedTuple
 from torch.utils import _pytree as pytree
 from recurrent.mytypes import *
-from recurrent.parameters import RfloConfig, RnnConfig
+from recurrent.parameters import RfloConfig, RnnConfig, UORO_Param
 
 """
 Expression problem is very hard to solve in python, without there being some resistance.
@@ -30,6 +30,7 @@ class RnnGodState[A, B, C](NamedTuple):
     rnnConfig_bilevel: RnnConfig
     rfloConfig: RfloConfig
     rfloConfig_bilevel: RfloConfig
+    uoro: UORO_Param[A]
 
 
 def batch_rtrl[A, B, C]() -> RnnGodState[A, B, C]:
@@ -44,6 +45,7 @@ def batch_rtrl[A, B, C]() -> RnnGodState[A, B, C]:
         rnnConfig_bilevel=None,
         rfloConfig=None,
         rfloConfig_bilevel=None,
+        uoro=None,
     )
 
 
@@ -59,6 +61,7 @@ def batch_vanilla[A, B, C]() -> RnnGodState[A, B, C]:
         rnnConfig_bilevel=None,
         rfloConfig=None,
         rfloConfig_bilevel=None,
+        uoro=None,
     )
 
 
@@ -70,6 +73,7 @@ def rnn_god_flatten[A, B, C](godState: RnnGodState[A, B, C]):
         godState.parameter,
         godState.hyperparameter,
         godState.metaHyperparameter,
+        godState.uoro,
     ), (
         godState.rfloConfig,
         godState.rfloConfig_bilevel,
@@ -86,6 +90,7 @@ def rnn_god_unflatten(children, aux):
         parameter,
         hyperparameter,
         metaHyperparameter,
+        uoro,
     ) = children
     (rfloConfig, rfloConfig_bilevel, rnnConfig, rnnConfig_bilevel) = aux
     return RnnGodState(
@@ -99,6 +104,7 @@ def rnn_god_unflatten(children, aux):
         rfloConfig_bilevel=rfloConfig_bilevel,
         rnnConfig=rnnConfig,
         rnnConfig_bilevel=rnnConfig_bilevel,
+        uoro=uoro,
     )
 
 

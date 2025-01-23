@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from dataclasses import replace
 from typing import Any, Callable, Generic, TypeVar, Protocol, Iterable, cast
 from donotation import do
 import torch
@@ -126,20 +127,20 @@ def doLoss[D, E, P, T](lossFn: LossFn[T, P]) -> DoLossFn[D, E, P, T]:
 
 
 def doGradient[
-    Dl, D, E, Pr
+    Dl, D, E, Pr, T
 ](
-    lossM: Fold[Dl, D, E, LOSS],
+    lossM: Fold[Dl, D, E, T],
     read_wrt: Fold[Dl, D, E, Pr],
     write_wrt: Callable[[Pr], Fold[Dl, D, E, Unit]],
 ):
     @do()
-    def doGradient() -> G[Fold[Dl, D, E, Gradient[Pr]]]:
+    def doGradient_() -> G[Fold[Dl, D, E, Gradient[Pr]]]:
         dl = yield from ProxyDl[Dl].askDl()
         d = yield from ProxyR[D].ask()
         e = yield from ProxyS[E].get()
         pr = yield from read_wrt
 
-        def parametrized(p: Pr) -> tuple[LOSS, E]:
+        def parametrized(p: Pr) -> tuple[T, E]:
             return write_wrt(p).then(lossM).func(dl, d, e)
 
         gr: Pr
@@ -148,7 +149,7 @@ def doGradient[
         _ = yield from put(env)
         return pure(Gradient(gr))
 
-    return doGradient()
+    return doGradient_()
 
 
 @do()
@@ -439,7 +440,6 @@ class RFLO[Alg: _RfL[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
         infl = pytree.tree_map(
             lambda x, y: (1 - alpha) * x + alpha * y, influenceTensor.value, immedInfl
         )
-        # print(infl)
         _ = yield from put(env)
         m: Fold[Dl, D, E, Gradient[Pr]]
         m = pure(Gradient(infl))
@@ -460,20 +460,16 @@ class UORO[Alg: _UO[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
 ):
     type F[Dl, T] = Fold[Dl, D, E, T]
 
-    def creditAndUpdateState(self, e_signal: F[Alg, Gradient[A]], actvStep: F[Alg, A]):
+    def gradientFlow(self, v: Tensor, actvStep: F[Alg, A]):
         @do()
         def next():
             dl = yield from ProxyDl[Alg].askDl()
             uoro = yield from dl.getUORO()
-            rnnConfig = yield from dl.getRnnConfig()
-            #!!! WARNING, IMPURITY IN PROGRESS, will address later. Just don't run this function more than once, if autodiffing through it
-            v = torch.distributions.uniform.Uniform(-1, 1).sample(rnnConfig.n_h)
 
             a0 = yield from dl.getActivation()
             p0 = yield from dl.getParameter()
             parametrized = yield from self.reparameterize(actvStep)
             A_prev = uoro.A  # I don't distinguish between column and row tensor.
-            B_prev = uoro.B
 
             # 1 calculate the actv_jacobian vector product with A
             immedJac_A_product: Tensor
@@ -484,7 +480,28 @@ class UORO[Alg: _UO[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
             _, vjp_func, env = Tfn.vjp(lambda p: parametrized(a0, p), p0, has_aux=True)
             _ = yield from put(env)
 
-            immedJacInfl_randomProj: Pr = vjp_func(v)
+            immedJacInfl_randomProj: Pr
+            (immedJacInfl_randomProj,) = vjp_func(v)
+
+            immed_grads: Fold[Alg, D, E, tuple[Tensor, Pr]]
+            immed_grads = pure((immedJac_A_product, immedJacInfl_randomProj))
+            return immed_grads
+
+        return next()
+
+    def creditAndUpdateState(self, e_signal: F[Alg, Gradient[A]], actvStep: F[Alg, A]):
+        @do()
+        def next():
+            dl = yield from ProxyDl[Alg].askDl()
+            uoro = yield from dl.getUORO()
+            rnnConfig = yield from dl.getRnnConfig()
+            #!!! WARNING, IMPURITY IN PROGRESS, will address later. Just don't run this function more than once, if autodiffing through it
+            v = torch.distributions.uniform.Uniform(-1, 1).sample((rnnConfig.n_h,))
+            B_prev = uoro.B
+
+            immedJac_A_product, immedJacInfl_randomProj = yield from self.gradientFlow(
+                v, actvStep
+            )
 
             rho0: Tensor = torch.sqrt(
                 pytree_norm(B_prev) / torch.norm(immedJac_A_product)
@@ -494,7 +511,6 @@ class UORO[Alg: _UO[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
             )
 
             A_new = rho0 * immedJac_A_product + rho1 * v
-
             B_new: Gradient[Pr] = Gradient(
                 pytree.tree_map(
                     lambda x, y: x / rho0 + y / rho1,
@@ -503,10 +519,9 @@ class UORO[Alg: _UO[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
                 )
             )
 
-            dl.putUORO(uoro._replace(A=A_new, B=B_new))
+            _ = yield from dl.putUORO(replace(uoro, A=A_new, B=B_new))
 
-            signal = yield from e_signal
-
+            signal = yield from e_signal  # order matters, should be after actv
             q = signal.value @ A_new
             ca: Fold[Alg, D, E, Gradient[Pr]]
             ca = pure(pytree.tree_map(lambda x: x * q, B_new))

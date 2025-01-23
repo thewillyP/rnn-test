@@ -11,14 +11,20 @@ from recurrent.mytypes import *
 from recurrent.objectalgebra.interpreter import BaseRnnInterpreter
 
 from matplotlib import pyplot as plt
-from recurrent.parameters import RfloConfig, RnnConfig, RnnParameter, SgdParameter
+from recurrent.parameters import (
+    RfloConfig,
+    RnnConfig,
+    RnnParameter,
+    SgdParameter,
+    UORO_Param,
+)
 from recurrent.util import rnnSplitParameters, tree_stack
 from memory_profiler import profile
 from torch.utils.data import TensorDataset, DataLoader
 from toolz.itertoolz import partition_all
 from torch.utils import _pytree as pytree
 from torch.utils._pytree import PyTree
-import copy
+from recurrent.util import *
 
 """
 Todo
@@ -48,25 +54,6 @@ def generate_add_task_dataset(N, t_1, t_2, deterministic, tau_task):
     return X, Y
 
 
-def zeroedInfluenceTensor(out: int, param: PyTree):
-    def update(x: torch.Tensor):
-        n = torch.numel(x)
-        return torch.zeros((out, n))
-
-    return pytree.tree_map(update, param)
-
-
-def pytreeRepeatBatch(batch: int, tree: PyTree):
-    return pytree.tree_map(
-        lambda x: torch.repeat_interleave(x.unsqueeze(0), batch, dim=0), tree
-    )
-
-
-def pytreeNumel(tree: PyTree):
-    leafs, _ = pytree.tree_flatten(tree)
-    return sum((torch.numel(x) for x in leafs))
-
-
 # @profile
 def trainStep(dataloader: Iterable[Input2Output1]):
 
@@ -74,7 +61,7 @@ def trainStep(dataloader: Iterable[Input2Output1]):
     n_in = 2
     n_out = 2
     learning_rate = torch.tensor(
-        [0.01]
+        [0.0001]
     )  # parameters should never be floats or single value
     alpha = 1.0
 
@@ -114,6 +101,10 @@ def trainStep(dataloader: Iterable[Input2Output1]):
         rnnConfig_bilevel=rnnConfig,
         rfloConfig=RfloConfig(rflo_alpha=alpha),
         rfloConfig_bilevel=RfloConfig(rflo_alpha=alpha),
+        uoro=UORO_Param[RnnParameter](
+            A=torch.randn(n_h),
+            B=uoroBInit(parameter),
+        ),
     )
 
     # truncation = 10
@@ -156,13 +147,12 @@ def trainStep(dataloader: Iterable[Input2Output1]):
     # return predictions
 
     rnnLearner: RnnLibrary[DL, Input2Output1, ENV, PREDICTION, RnnParameter]
-    rtrl = RFLO[
+    rtrl = RTRL[
+        DL,
         Input2Output1,
         RnnGodState[RnnParameter, SgdParameter, SgdParameter],
         ACTIVATION,
         RnnParameter,
-        Tensor,
-        Tensor,
         Tensor,
         PREDICTION,
     ]()
@@ -175,15 +165,14 @@ def trainStep(dataloader: Iterable[Input2Output1]):
 
     # _, initEnv = rnnLearner.trainStep(doSgdStep).func(dialect, dataloader, initEnv)
     for d in dataloader:
-        _, initEnv = rnnLearner.rnnWithGradient.flat_map(doSgdStep).func(
-            dialect, d, initEnv
-        )
+        model = torch.compile(rnnLearner.rnnWithGradient.flat_map(doSgdStep).func)
+        _, initEnv = model(dialect, d, initEnv)
         # print(initEnv.parameter.w_out)
-        lossFn = foldM(
-            lambda acc: rnnLearner.rnnWithLoss.fmap(lambda l: l + acc), LOSS(0)
-        )
-        loss, _ = lossFn.func(dialect, dataloader, initEnv)
-        print(loss / len(dataloader))
+        # lossFn = foldM(
+        #     lambda acc: rnnLearner.rnnWithLoss.fmap(lambda l: l + acc), LOSS(0)
+        # )
+        # loss, _ = lossFn.func(dialect, dataloader, initEnv)
+        # print(loss / len(dataloader))
 
     predictions, _ = traverse(rnnLearner.rnn).func(dialect, dataloader, initEnv)
     predictions = [torch.functional.F.softmax(tensor, dim=0) for tensor in predictions]
@@ -195,7 +184,7 @@ def trainStep(dataloader: Iterable[Input2Output1]):
 
 def main():
 
-    length = 2_000
+    length = 100
     X, Y = generate_add_task_dataset(length, 5, 9, True, 1)
     dataset = map(lambda data: Input2Output1(data[0], data[1]), zip(X, Y))
     dataset = list(dataset)

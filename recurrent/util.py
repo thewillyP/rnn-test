@@ -1,7 +1,11 @@
 from typing import Iterable, Iterator, TypeVar
 import torch
-from recurrent.mytypes import PARAMETER
+from recurrent.mytypes import *
 from torch.utils import _pytree as pytree
+from recurrent.parameters import (
+    RnnParameter,
+)
+from torch.utils._pytree import PyTree
 
 
 def rnnSplitParameters(
@@ -30,3 +34,39 @@ def tree_stack(trees: Iterable[pytree.PyTree]) -> pytree.PyTree:
 def tree_unstack(tree: pytree.PyTree) -> Iterator[pytree.PyTree]:
     leaves, treedef = pytree.tree_flatten(tree)
     return (treedef.unflatten(leaf) for leaf in zip(*leaves, strict=True))
+
+
+def zeroedInfluenceTensor(out: int, param: PyTree):
+    def update(x: torch.Tensor):
+        n = torch.numel(x)
+        return torch.zeros((out, n))
+
+    return pytree.tree_map(update, param)
+
+
+def zeroedParam(param: PyTree):
+    return pytree.tree_map(lambda x: torch.zeros_like(x), param)
+
+
+def fmapPytree(f, tree: PyTree):
+    return pytree.tree_map(lambda x: f(x), tree)
+
+
+def pytreeRepeatBatch(batch: int, tree: PyTree):
+    return pytree.tree_map(
+        lambda x: torch.repeat_interleave(x.unsqueeze(0), batch, dim=0), tree
+    )
+
+
+def uoroBInit(param: RnnParameter):
+    return Gradient[RnnParameter](
+        RnnParameter(
+            w_rec=PARAMETER(torch.randn_like(param.w_rec)),
+            w_out=PARAMETER(torch.zeros_like(param.w_out)),
+        )
+    )
+
+
+def pytreeNumel(tree: PyTree):
+    leafs, _ = pytree.tree_flatten(tree)
+    return sum((torch.numel(x) for x in leafs))
