@@ -11,6 +11,8 @@ __pycache__/
 wandb/*
 *.out
 *.err
+*.threads
+*.prof
 
 # Distribution / packaging
 .Python

@@ -155,13 +155,13 @@
 # print(result)
 
 
-# import time
-# from typing import Callable, Iterable
-# import torch
-# from torch.utils import _pytree as pytree
-# from dataclasses import dataclass
+import time
+from typing import Callable, Iterable, NamedTuple
+import torch
+from torch.utils import _pytree as pytree
+from dataclasses import dataclass
 
-# torch.manual_seed(0)
+torch.manual_seed(0)
 
 
 # def tree_stack(trees: Iterable[pytree.PyTree]) -> pytree.PyTree:
@@ -203,25 +203,52 @@
 #     print(leaf)
 
 
-# @dataclass(frozen=True)
-# class CustomData:
-#     value: torch.Tensor  # Batched tensor
-#     aux: int  # Static metadata (not batched)
-#     # test: Callable[[int], int]
-
-#     def __iter__(self):
-#         return iter(tree_unstack(self))
+# @dataclass(frozen=True, slots=True)
+# @dataclass
 
 
-# # Register the PyTree
+@dataclass(frozen=True)
+class Custom:
+    b: torch.Tensor
+    c: torch.Tensor
+
+
+def custom_flatten(custom_data: Custom):
+    return (custom_data.b, custom_data.c), None
+
+
+def custom_unflatten(children, aux):
+    return Custom(children[0], children[1])
+
+
+pytree.register_pytree_node(Custom, custom_flatten, custom_unflatten)
+
+# custom_flatten = lambda x: ((x.b,), x.c)
+# custum_unflatten = lambda x, y: Custom(x[0], y)
+# pytree.register_pytree_node(Custom, custom_flatten, custum_unflatten)
+
+
+class CustomData(NamedTuple):
+    value: torch.Tensor  # Batched tensor
+    aux: torch.Tensor  # Static metadata (not batched)
+    a: float
+    tt: Custom
+    # test: Callable[[int], int]
+
+    # def __iter__(self):
+    #     return iter(tree_unstack(self))
+
+
+# Register the PyTree
 # def customdata_flatten(custom_data: CustomData):
-#     return (custom_data.value,), (custom_data.aux,)
+#     return (custom_data.value, custom_data.aux, custom_data.a), None
 
 
 # def customdata_unflatten(children, aux):
 #     return CustomData(
 #         value=children[0],
-#         aux=aux[0],
+#         aux=children[1],
+#         a=children[2],
 #     )
 
 
@@ -232,53 +259,81 @@
 #     return CustomData(data.value, data.aux + 10)
 
 
-# def process_custom_data(data: CustomData):
-#     # Simulate a more expensive computation
-#     env = CustomData(
-#         data.value**data.aux, data.aux + 5
-#     )  # also works!: data.aux + torch.ceil(data.value.mean()).int()
-#     return tester(env)
+def process_custom_data(data: CustomData, x: int):
+    # Simulate a more expensive computation
+    x = data.tt.b * data.aux
+    env = CustomData(
+        data.value * data.aux + x, data.aux * data.a, data.a + 1, data.tt
+    )  # also works!: data.aux + torch.ceil(data.value.mean()).int()
+    return env
 
 
-# # Batched input
-# values1 = torch.randn(100000, 1)  # Larger batched data for meaningful benchmarking
-# values2 = torch.randn(100000, 1)
-# aux_value = 2  # Static metadata (not batched)
-
-# batched_data1 = CustomData(value=values1, aux=aux_value)
-# batched_data2 = CustomData(value=values2, aux=aux_value)
-# batched_data = tree_stack([batched_data1, batched_data2])
-
-
-# # Benchmark manual loop
-# def manual_loop(data):
-#     results = []
-#     for i in range(data.value.shape[0]):
-#         single_data = CustomData(data.value[i], data.aux)
-#         results.append(process_custom_data(single_data))
-#     return CustomData(value=torch.stack([r.value for r in results]), aux=results[0].aux)
+def fn(mydata: Custom, x: int):
+    # Simulate a more expensive computation
+    data = CustomData(torch.tensor([1, 2]), torch.tensor([3, 4]), 2.0, mydata)
+    x = data.tt.b * data.aux
+    env = CustomData(
+        data.value * data.aux + x, data.aux * data.a, data.a + 1, Custom(x, data.tt.c)
+    )  # also works!: data.aux + torch.ceil(data.value.mean()).int()
+    return env.value
 
 
-# # Measure vmap execution time
-# start_time_vmap = time.time()
-# result_vmap = torch.vmap(process_custom_data)(batched_data)
-# vmap_time = time.time() - start_time_vmap
+# def fn1(data: CustomData, x):
+#     shape = CustomData(value=0, aux=0, a=None, tt=Custom(0, None))
+#     l = torch.vmap(fn, in_dims=(shape, None))(data, x)
+#     return torch.sum(l)
 
-# # # Measure manual loop execution time
-# # start_time_loop = time.time()
-# # result_loop = manual_loop(batched_data)
-# # loop_time = time.time() - start_time_loop
 
-# # # Validate correctness
-# # assert torch.allclose(result_vmap.value, result_loop.value)
-# # assert result_vmap.aux == result_loop.aux
+# Batched input
+values1 = torch.randn(3, 1)  # Larger batched data for meaningful benchmarking
+values2 = torch.randn(3, 1)
+aux_value1 = torch.randn(3, 1)
+aux_value2 = torch.randn(3, 1)
+temp = Custom(torch.randn(3, 1), torch.randn(3, 1))
 
-# print(f"vmap execution time: {vmap_time:.6f} seconds")
-# # print(f"Manual loop execution time: {loop_time:.6f} seconds")
 
-# # print(result_vmap)
+batched_data = CustomData(value=values1, aux=aux_value1, a=2.0, tt=temp)
+
+ttttt = CustomData(value=0, aux=0, a=None, tt=0)
+
+# Measure vmap execution time
+start_time_vmap = time.time()
+result_vmap = torch.vmap(process_custom_data, in_dims=(ttttt, None), out_dims=ttttt)(
+    batched_data, 1
+)
+vmap_time = time.time() - start_time_vmap
+
+
+print(f"vmap execution time: {vmap_time:.6f} seconds")
+
+print(result_vmap)
+print(result_vmap.value.shape)
+print(result_vmap.aux.shape)
+
+# jac = torch.func.jacrev(fn)(temp, 1)
+# print(jac)
+
+# # Measure manual loop execution time
+# start_time_loop = time.time()
+# result_loop = manual_loop(batched_data)
+# loop_time = time.time() - start_time_loop
+
+# # Validate correctness
+# assert torch.allclose(result_vmap.value, result_loop.value)
+# assert result_vmap.aux == result_loop.aux
+# print(f"Manual loop execution time: {loop_time:.6f} seconds")
+
+# print(result_vmap)
 # for leaf in result_vmap:
-#     print(leaf.aux)
+#     print(leaf)
+# print(num)
+
+
+# for leaf in result_vmap:
+#     print(leaf)
+
+# for leaf in snd_result:
+#     print(leaf)
 
 
 # from typing import Protocol, Self, TypeVar
@@ -340,15 +395,16 @@
 # @dataclass(frozen=True)
 # class MyPyTree(Generic[T]):
 #     x: T
+#     y: list[torch.Tensor]
 
 
 # # Register the class as a PyTree
 # def tree_flatten(obj: MyPyTree[T]):
 #     # Extract the tensors as a list and return auxiliary data
-#     return [obj.x], None
+#     return (obj.x, obj.y), None
 
 
-# def tree_unflatten(children: tuple[T], aux):
+# def tree_unflatten(children, aux):
 #     # Reconstruct the object from its flattened representation
 #     return MyPyTree[T](*children)
 
@@ -357,22 +413,28 @@
 
 
 # # Define a function to test differentiability
-# def func(pytree: MyPyTree[torch.Tensor]):
-#     return (pytree.x**2).sum()
+# def func(pytree: list[MyPyTree[torch.Tensor]]):
+#     return (pytree[0].x ** 2).sum()
 
 
 # # Create an instance of MyPyTree with tensors
 # x = torch.tensor([1.0, 2.0])
-# p = MyPyTree[torch.Tensor](x)
+# p = MyPyTree[torch.Tensor](x, [torch.tensor([3.0, 4.0])])
 
 # # Compute the Jacobian using jacrev
 # print(p)
-# jacobian = torch.func.jacrev(func)(p)
+# jacobian = torch.func.jacrev(func)([p])
 
 # # Print the Jacobian to verify
-# print("Jacobian for x:", jacobian.x)
+# print(jacobian)
 
-# print(pytree.tree_map(lambda x, y: x + y, jacobian, p))
+# # j, tree = pytree.tree_flatten(jacobian)
+# tree = pytree.tree_structure([p])
+# zeroed = pytree.tree_unflatten((torch.tensor(0),) * tree.num_leaves, tree)
+
+
+# print(pytree.tree_map(lambda x, y: x + y, jacobian, zeroed))
+# print(jacobian + torch.tensor(0))
 
 
 # from typing import Generic, TypeVar
@@ -433,39 +495,39 @@
 # TestMe[Test[int, int]]().test(x)
 
 
-from typing import Any, Generic, NamedTuple, Protocol, Self, TypeVar
-import typing_extensions
+# from typing import Any, Generic, NamedTuple, Protocol, Self, TypeVar
+# import typing_extensions
 
 
-class WithA(Protocol):
-    @property
-    def a(self) -> int: ...
+# class WithA(Protocol):
+#     @property
+#     def a(self) -> int: ...
 
-    # def __replace__(self, /, **changes):
-    #     pass
-    def __replace__(self, **kwargs: Any) -> typing_extensions.Self: ...
-
-
-A = TypeVar("A")
-B = TypeVar("B")
+#     # def __replace__(self, /, **changes):
+#     #     pass
+#     def __replace__(self, **kwargs: Any) -> typing_extensions.Self: ...
 
 
-class Test(NamedTuple, Generic[A, B]):
-    a: A
-    b: B
+# A = TypeVar("A")
+# B = TypeVar("B")
 
 
-T = TypeVar("T", bound=WithA)
+# class Test(NamedTuple, Generic[A, B]):
+#     a: A
+#     b: B
 
 
-def test(x: WithA):
-    pass
+# T = TypeVar("T", bound=WithA)
 
 
-x = Test[int, int](1, 2)
-x._replace
+# def test(x: WithA):
+#     pass
 
-y = test(x)
+
+# x = Test[int, int](1, 2)
+# x._replace
+
+# y = test(x)
 
 
 # import cProfile
