@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import MagicMock
 
 import torch
 
@@ -9,6 +10,7 @@ from recurrent.objectalgebra.interpreter import BaseRnnInterpreter
 from recurrent.parameters import RnnConfig, RnnParameter, UORO_Param
 from recurrent.mytypes import *
 from recurrent.util import *
+from recurrent.monad import pure
 
 
 class Test_UORO(unittest.TestCase):
@@ -57,7 +59,12 @@ class Test_UORO(unittest.TestCase):
             rfloConfig_bilevel=torch.empty(0),
             uoro=UORO_Param[RnnParameter](
                 A=torch.ones(n_h),
-                B=fmapPytree(torch.ones_like, parameter),
+                B=Gradient[RnnParameter](
+                    RnnParameter(
+                        w_rec=PARAMETER(torch.ones_like(parameter.w_rec)),
+                        w_out=PARAMETER(torch.zeros_like(parameter.w_out)),
+                    )
+                ),
             ),
         )
 
@@ -69,6 +76,9 @@ class Test_UORO(unittest.TestCase):
         type ENV = RnnGodState[RnnParameter, None, None]
         cls.dialect = BaseRnnInterpreter[RnnParameter, None, None]()
 
+        distribution = MagicMock()
+        distribution.sample.return_value = torch.tensor([1, -1], dtype=torch.float32)
+
         cls.uoro = UORO[
             DL,
             Input2Output1,
@@ -77,7 +87,7 @@ class Test_UORO(unittest.TestCase):
             RnnParameter,
             torch.Tensor,
             PREDICTION,
-        ]()
+        ](distribution)
 
         cls.rnnLearner = cls.uoro.onlineLearning(
             doRnnStep(),
@@ -99,7 +109,8 @@ class Test_UORO(unittest.TestCase):
         correct_a_J_ = torch.eye(2)
         correct_a_J = correct_a_J_ @ self.initEnv.activation
         correct_papw_ = v @ torch.tensor(
-            [[1, 1, 2, 2, 1], [1, 1, 2, 2, 1]], dtype=torch.float32
+            [[1, 1, 2, 2, 1, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 1, 1, 2, 2, 1]],
+            dtype=torch.float32,
         )
         correct_papw = Gradient[RnnParameter](
             RnnParameter(
@@ -111,6 +122,53 @@ class Test_UORO(unittest.TestCase):
         correct_papw = torch.cat(flats)
 
         torch.allclose(a_j, correct_a_J)
-        print(p_papw_pred)
-        print(correct_papw)
         torch.allclose(p_papw_pred, correct_papw)
+
+    def test_get_influence_estimate(self):
+
+        _, env = self.rnnLearner.rnnWithGradient.func(
+            self.dialect, self.x_input, self.initEnv
+        )
+        A_pred = env.uoro.A
+        B_pred = env.uoro.B
+        flats_, _ = pytree.tree_flatten(B_pred)
+        B_pred = torch.cat(flats_)
+
+        p0 = torch.sqrt(torch.sqrt(torch.tensor(5.0)))
+        p1 = torch.sqrt(torch.sqrt(torch.tensor(11.0)))
+        M_proj = torch.tensor([[1, 1, 2, 2, 1], [-1, -1, -2, -2, -1]])
+        A_correct = p0 * torch.tensor([1, 1]) + p1 * torch.tensor([1, -1])
+        B_correct = (1 / p0) * torch.ones((2, 5)) + (1 / p1) * M_proj
+        B_correct = Gradient[RnnParameter](
+            RnnParameter(
+                w_rec=PARAMETER(torch.flatten(B_correct)),
+                w_out=PARAMETER(torch.zeros_like(self.initEnv.parameter.w_out)),
+            )
+        )
+        flats_, _ = pytree.tree_flatten(B_correct)
+        B_correct = torch.cat(flats_)
+
+        torch.allclose(A_pred, A_correct)
+        torch.allclose(B_pred, B_correct)
+
+    def test_get_rec_grads(self):
+
+        A, B = self.initEnv.uoro.A, self.initEnv.uoro.B
+        error = pure(Gradient(torch.ones(2) * 0.5))
+        rec_grads, _ = self.uoro.creditAssign(A, B, error).func(
+            self.dialect, self.x_input, self.initEnv
+        )
+        flats_, _ = pytree.tree_flatten(rec_grads)
+        rec_grads = torch.cat(flats_)
+
+        correct_rec_grads = torch.ones((2, 5))
+        correct_rec_grads = Gradient[RnnParameter](
+            RnnParameter(
+                w_rec=PARAMETER(torch.flatten(correct_rec_grads)),
+                w_out=PARAMETER(torch.zeros_like(self.initEnv.parameter.w_out)),
+            )
+        )
+        flats_, _ = pytree.tree_flatten(correct_rec_grads)
+        correct_rec_grads = torch.cat(flats_)
+
+        torch.allclose(rec_grads, correct_rec_grads)

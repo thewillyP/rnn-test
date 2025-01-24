@@ -7,6 +7,6 @@ services:
     volumes:
       - ..:/rnn-test:cached
     ports:
-      - "9999:8888"
+      - "10000:10000"
     # command: "/bin/bash -c 'micromamba shell init --shell bash --root-prefix=/opt/conda && source ~/.bashrc && micromamba activate master && cd /rnn-test && git config --global --add safe.directory /rnn-test && mkdir ~/notebooks && jupyter lab --notebook-dir=~/notebooks --ip=\"0.0.0.0\" --port=8888 --no-browser --allow-root'" # command: sleep infinity
     command: "sleep infinity"

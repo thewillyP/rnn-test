@@ -26,6 +26,6 @@ dependencies:
   - pyrsistent
   - snakeviz
   - cython
-  - donotation
   - pip:
     - torchviz    
+    - donotation

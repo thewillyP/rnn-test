@@ -460,6 +460,10 @@ class UORO[Alg: _UO[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
 ):
     type F[Dl, T] = Fold[Dl, D, E, T]
 
+    def __init__(self, distribution: torch.distributions.Distribution):
+        super().__init__()
+        self.distribution = distribution
+
     def gradientFlow(self, v: Tensor, actvStep: F[Alg, A]):
         @do()
         def next():
@@ -489,6 +493,13 @@ class UORO[Alg: _UO[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
 
         return next()
 
+    def creditAssign(self, A_: Tensor, B_: Gradient[Pr], e_signal: F[Alg, Gradient[A]]):
+        def next(signal: Gradient[A]) -> Gradient[Pr]:
+            q = signal.value @ A_
+            return pytree.tree_map(lambda x: x * q, B_)
+
+        return e_signal.fmap(next)
+
     def creditAndUpdateState(self, e_signal: F[Alg, Gradient[A]], actvStep: F[Alg, A]):
         @do()
         def next():
@@ -496,7 +507,7 @@ class UORO[Alg: _UO[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
             uoro = yield from dl.getUORO()
             rnnConfig = yield from dl.getRnnConfig()
             #!!! WARNING, IMPURITY IN PROGRESS, will address later. Just don't run this function more than once, if autodiffing through it
-            v = torch.distributions.uniform.Uniform(-1, 1).sample((rnnConfig.n_h,))
+            v = self.distribution.sample((rnnConfig.n_h,))
             B_prev = uoro.B
 
             immedJac_A_product, immedJacInfl_randomProj = yield from self.gradientFlow(
@@ -521,10 +532,6 @@ class UORO[Alg: _UO[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
 
             _ = yield from dl.putUORO(replace(uoro, A=A_new, B=B_new))
 
-            signal = yield from e_signal  # order matters, should be after actv
-            q = signal.value @ A_new
-            ca: Fold[Alg, D, E, Gradient[Pr]]
-            ca = pure(pytree.tree_map(lambda x: x * q, B_new))
-            return ca
+            return self.creditAssign(A_new, B_new, e_signal)
 
         return next()

@@ -61,7 +61,7 @@ def trainStep(dataloader: Iterable[Input2Output1]):
     n_in = 2
     n_out = 2
     learning_rate = torch.tensor(
-        [0.0001]
+        [0.001]
     )  # parameters should never be floats or single value
     alpha = 1.0
 
@@ -147,7 +147,7 @@ def trainStep(dataloader: Iterable[Input2Output1]):
     # return predictions
 
     rnnLearner: RnnLibrary[DL, Input2Output1, ENV, PREDICTION, RnnParameter]
-    rtrl = RTRL[
+    rtrl = UORO[
         DL,
         Input2Output1,
         RnnGodState[RnnParameter, SgdParameter, SgdParameter],
@@ -155,7 +155,7 @@ def trainStep(dataloader: Iterable[Input2Output1]):
         RnnParameter,
         Tensor,
         PREDICTION,
-    ]()
+    ](torch.distributions.uniform.Uniform(-1, 1))
     rnnLearner = rtrl.onlineLearning(
         doRnnStep(),
         doRnnReadout(),
@@ -164,19 +164,25 @@ def trainStep(dataloader: Iterable[Input2Output1]):
     # gr, _ = rnnLearner.rnnWithGradient.func(dialect, dataloader[0], initEnv)
 
     # _, initEnv = rnnLearner.trainStep(doSgdStep).func(dialect, dataloader, initEnv)
+    model = torch.compile(rnnLearner.rnn.func)
+    _, initEnv = model(dialect, dataloader[0], initEnv)
+
+    start = time.time()
     for d in dataloader:
-        model = torch.compile(rnnLearner.rnnWithGradient.flat_map(doSgdStep).func)
-        _, initEnv = model(dialect, d, initEnv)
-        # print(initEnv.parameter.w_out)
+        # model = rnnLearner.rnnWithGradient.flat_map(doSgdStep).func
+        # _, initEnv = model(dialect, d, initEnv)
+
         # lossFn = foldM(
         #     lambda acc: rnnLearner.rnnWithLoss.fmap(lambda l: l + acc), LOSS(0)
         # )
         # loss, _ = lossFn.func(dialect, dataloader, initEnv)
         # print(loss / len(dataloader))
 
-    predictions, _ = traverse(rnnLearner.rnn).func(dialect, dataloader, initEnv)
-    predictions = [torch.functional.F.softmax(tensor, dim=0) for tensor in predictions]
-    return predictions
+        _, initEnv = model(dialect, d, initEnv)
+    print(time.time() - start)
+    # predictions, _ = traverse(rnnLearner.rnn).func(dialect, dataloader, initEnv)
+    # predictions = [torch.functional.F.softmax(tensor, dim=0) for tensor in predictions]
+    return None
 
 
 # %%
@@ -184,7 +190,7 @@ def trainStep(dataloader: Iterable[Input2Output1]):
 
 def main():
 
-    length = 100
+    length = 10_000
     X, Y = generate_add_task_dataset(length, 5, 9, True, 1)
     dataset = map(lambda data: Input2Output1(data[0], data[1]), zip(X, Y))
     dataset = list(dataset)
@@ -201,22 +207,22 @@ def main():
     # stats.print_stats()
     # stats.dump_stats("profile_results.prof")
 
-    predictions = list(predictions)
-    indices = torch.arange(len(predictions))
+    # predictions = list(predictions)
+    # indices = torch.arange(len(predictions))
 
-    predictions = [tensor[0].item() for tensor in predictions]
-    labels = [tensor[0].item() for tensor in Y]
+    # predictions = [tensor[0].item() for tensor in predictions]
+    # labels = [tensor[0].item() for tensor in Y]
 
-    # Plot the data
-    plt.figure(figsize=(8, 5))
-    plt.plot(indices, predictions, marker="o", label="Prediction")
-    plt.plot(indices, labels, marker="o", label="Target")
-    plt.title("Plot of List Data with Indices")
-    plt.xlabel("Indices")
-    plt.ylabel("Values")
-    plt.grid(True)
-    plt.legend()
-    plt.show()
+    # # Plot the data
+    # plt.figure(figsize=(8, 5))
+    # plt.plot(indices, predictions, marker="o", label="Prediction")
+    # plt.plot(indices, labels, marker="o", label="Target")
+    # plt.title("Plot of List Data with Indices")
+    # plt.xlabel("Indices")
+    # plt.ylabel("Values")
+    # plt.grid(True)
+    # plt.legend()
+    # plt.show()
 
     # # Define the simple RNN model
     # class SimpleRNN(torch.nn.Module):
