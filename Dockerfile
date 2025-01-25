@@ -1,4 +1,4 @@
-FROM thewillyp/devenv:master-1.0.19@sha256:fb9d0830a7239a4e977eea92ff886c9d5ca818f5148b5103ef50bf730248bdf2
+FROM thewillyp/devenv:master-1.0.23@sha256:4ad3c015a5809a914c10bb54576abfb4e200c1ae7a93dfaeb53e842921fd844e
 
 WORKDIR /
 
