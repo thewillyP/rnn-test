@@ -68,3 +68,15 @@ class GetUORO[E, Pr](Protocol):
 
 class PutUORO[E, Pr](Protocol):
     def putUORO[D](self, s: UORO_Param[Pr]) -> Fold[Self, D, E, Unit]: ...
+
+
+class HasPRNG[E, T](Protocol):
+    def generatePRNG[D](self) -> Fold[Self, D, E, tuple[T, T]]: ...
+
+    def putPRNG[D](self, s: T) -> Fold[Self, D, E, Unit]: ...
+
+    @do()
+    def updatePRNG[D](self) -> G[Fold[Self, D, E, T]]:
+        prng, new_prng = yield from self.generatePRNG()
+        _ = yield from self.putPRNG(new_prng)
+        return pure(prng)

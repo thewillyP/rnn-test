@@ -1,25 +1,7 @@
-from dataclasses import dataclass
-import torch
-from torch.utils import _pytree as pytree
-
-from recurrent.util import tree_unstack
+import jax
+import equinox as eqx
 
 
-@dataclass(frozen=True)
-class Input2Output1:
-    x: torch.Tensor
-    y: torch.Tensor
-
-    def __iter__(self):
-        return tree_unstack(self)
-
-
-def customdata_flatten(custom_data: Input2Output1):
-    return (custom_data.x, custom_data.y), None
-
-
-def customdata_unflatten(children, _):
-    return Input2Output1(x=children[0], y=children[1])
-
-
-pytree.register_pytree_node(Input2Output1, customdata_flatten, customdata_unflatten)
+class InputOutput(eqx.Module):
+    x: jax.Array
+    y: jax.Array

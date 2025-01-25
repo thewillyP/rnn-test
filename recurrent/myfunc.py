@@ -16,6 +16,11 @@ def foldr[A, B](f: Callable[[A, B], B]) -> Callable[[Iterable[A], B], B]:
     return foldr_
 
 
+def flipTuple[A, B](pair: tuple[A, B]) -> tuple[B, A]:
+    a, b = pair
+    return (b, a)
+
+
 # def sequenceF2(
 #     fs: Iterable[Callable[[A, B], C]]
 # ) -> Callable[[A], Iterator[Callable[[B], C]]]:

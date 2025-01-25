@@ -1,21 +1,21 @@
-from typing import Callable, Generator, Generic, Iterable, TypeVar
+from typing import Callable, Generator, Iterable, NamedTuple
 
+from donotation import do
 from pyrsistent import pvector
 from pyrsistent.typing import PVector
 
 from recurrent.myfunc import foldr
+import jax
+
+from recurrent.mytypes import Traversable, G
 
 
-class Unit:
-    __slots__ = ()
+class Unit(NamedTuple): ...
 
 
-class Fold[D, E, S, A]:
+class Fold[D, E, S, A](NamedTuple):
 
-    __slots__ = ("func",)
-
-    def __init__(self, func: Callable[[D, E, S], tuple[A, S]]):
-        self.func = func
+    func: Callable[[D, E, S], tuple[A, S]]
 
     def __iter__(self) -> Generator[None, None, A]: ...  # type: ignore
 
@@ -75,8 +75,19 @@ def asks[D, E, S, A](func: Callable[[E], A]) -> Fold[D, E, S, A]:
     return Fold(lambda _d, env, state: (func(env), state))
 
 
+def gets[D, E, S, A](func: Callable[[S], A]) -> Fold[D, E, S, A]:
+    return Fold(lambda _d, _e, state: (func(state), state))
+
+
 def modifies[D, E, S](func: Callable[[S], S]) -> Fold[D, E, S, Unit]:
     return Fold(lambda _d, _e, state: (Unit(), func(state)))
+
+
+@do()
+def modifies_[D, E, S, A](func: Callable[[S], tuple[A, S]]) -> G[Fold[D, E, S, A]]:
+    a, s = yield from gets(func)
+    _ = yield from put(s)
+    return pure(a)
 
 
 def askDl[D, E, S]() -> Fold[D, E, S, D]:
@@ -97,39 +108,50 @@ def toFold[D, E, S, T](func: Callable[[E, S], tuple[T, S]]):
     return Fold[D, E, S, T](lambda _d, env, state: func(env, state))  # type: ignore
 
 
-def repeatM[Dl, D, E, A](m: "Fold[Dl, D, E, A]"):
-    def wrapper(dl: Dl, ds: Iterable[D], state: E) -> tuple[Unit, E]:
-        def repeat(d: D, pair: tuple[Unit, E]) -> tuple[Unit, E]:
-            _u, state = pair
-            __, new_state = m.func(dl, d, state)
-            return _u, new_state
+# def repeatM[Dl, D, E, A](m: "Fold[Dl, D, E, A]"):
+#     def wrapper(dl: Dl, ds: Iterable[D], state: E) -> tuple[Unit, E]:
+#         def repeat(d: D, pair: tuple[Unit, E]) -> tuple[Unit, E]:
+#             _u, state = pair
+#             __, new_state = m.func(dl, d, state)
+#             return _u, new_state
 
-        return foldr(repeat)(ds, (Unit(), state))
+#         return foldr(repeat)(ds, (Unit(), state))
 
-    return Fold(wrapper)
+#     return Fold(wrapper)
 
 
 # these guys need to be strict
-def foldM[Dl, D, E, B](func: Callable[[B], "Fold[Dl, D, E, B]"], init: B):
-    def wrapper(dl: Dl, ds: Iterable[D], state: E) -> tuple[B, E]:
-        def fold(d: D, pair: tuple[B, E]) -> tuple[B, E]:
-            acc, state = pair
-            return func(acc).func(dl, d, state)
+# def foldM[Dl, D, E, B](func: Callable[[B], "Fold[Dl, D, E, B]"], init: B):
+#     def wrapper(dl: Dl, ds: Iterable[D], state: E) -> tuple[B, E]:
+#         def fold(d: D, pair: tuple[B, E]) -> tuple[B, E]:
+#             acc, state = pair
+#             return func(acc).func(dl, d, state)
 
-        return foldr(fold)(ds, (init, state))
+#         return foldr(fold)(ds, (init, state))
+
+#     return Fold(wrapper)
+
+
+def foldM[Dl, D, E, B](func: Callable[[B], Fold[Dl, D, E, B]], init: B):
+    def wrapper(dl: Dl, ds: Traversable[D], state: E):
+        def fold(pair: tuple[B, E], d: D):
+            acc, state = pair
+            return func(acc).func(dl, d, state), None
+
+        return jax.lax.scan(fold, (init, state), ds.value)[0]
 
     return Fold(wrapper)
 
 
 def traverse[Dl, D, E, B](m: "Fold[Dl, D, E, B]"):
 
-    def wrapper(dl: Dl, ds: Iterable[D], state: E) -> tuple[PVector[B], E]:
-        def traverse_(x: D, pair: tuple[PVector[B], E]) -> tuple[PVector[B], E]:
-            acc, state = pair
-            b, s = m.func(dl, x, state)
-            return acc.append(b), s
+    def wrapper(dl: Dl, ds: Traversable[D], state: E) -> tuple[Traversable[B], E]:
+        def traverse_(s_prev: E, d: D):
+            b, s = m.func(dl, d, s_prev)
+            return s, b
 
-        return foldr(traverse_)(ds, (pvector([]), state))
+        new_state, bs = jax.lax.scan(traverse_, state, ds.value)
+        return Traversable(bs), new_state
 
     return Fold(wrapper)
 

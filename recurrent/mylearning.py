@@ -1,29 +1,15 @@
 from abc import ABC, abstractmethod
 from dataclasses import replace
-from typing import Any, Callable, Generic, TypeVar, Protocol, Iterable, cast
+from typing import Callable, Protocol
 from donotation import do
-import torch
-from torch import Tensor
-from torch.utils import _pytree as pytree
-from torch.utils._pytree import PyTree
-import torch.func as Tfn
+import jax
+from jax import Array
+import jax.numpy as jnp
+import equinox as eqx
+from equinox import Module
+from operator import add
 
-from recurrent.objectalgebra.typeclasses import (
-    GetActivation,
-    GetHyperParameter,
-    GetInfluenceTensor,
-    GetParameter,
-    GetRfloConfig,
-    GetRnnConfig,
-    HasInput,
-    HasPredictionInput,
-    HasLabel,
-    PutActivation,
-    PutInfluenceTensor,
-    PutParameter,
-    GetUORO,
-    PutUORO,
-)
+from recurrent.objectalgebra.typeclasses import *
 
 from recurrent.mytypes import *
 from recurrent.monad import *
@@ -31,21 +17,24 @@ from recurrent.parameters import RnnParameter, SgdParameter
 
 
 type LossFn[A, B] = Callable[[A, B], LOSS]
+type GR[A] = Gradient[A]
 
 
+@eqx.filter_jit
 def pytree_norm(tree):
-    leaves, _ = pytree.tree_flatten(tree)
-    return torch.sqrt(sum(torch.sum(leaf**2) for leaf in leaves))
+    squared = jax.tree.map(lambda x: jnp.sum(x**2), tree)
+    return jnp.sqrt(jax.tree.reduce(jnp.add, squared))
 
 
+@eqx.filter_jit
 def jvp(f, primal, tangent):
-    return torch.func.jvp(f, (primal,), (tangent,))[1]
+    return eqx.filter_jvp(f, (primal,), (tangent,))[1]
 
 
+@eqx.filter_jit
 def jacobian_matrix_product(f, primal, matrix):
-    # jvp = lambda p, t: torch.func.jvp(f, (p,), (t,))[1]
     wrapper = lambda p, t: jvp(f, p, t)
-    return torch.vmap(wrapper, in_dims=(None, 1), out_dims=1)(primal, matrix)
+    return jax.vmap(wrapper, in_axes=(None, 1), out_axes=1)(primal, matrix)
 
 
 class _SGD[E, Pr](
@@ -57,12 +46,12 @@ class _SGD[E, Pr](
 
 
 @do()
-def doSgdStep[D, E, Pr: PYTREE](grad: Gradient[Pr]) -> G[Fold[_SGD[E, Pr], D, E, Unit]]:
-    dl = yield from ProxyDl[_SGD[E, Pr]].askDl()
+def doSgdStep[Dl: _SGD[E, Pr], D, E, Pr: Module](gr: GR[Pr]) -> G[Fold[Dl, D, E, Unit]]:
+    dl = yield from ProxyDl[Dl].askDl()
     param = yield from dl.getParameter()
     hyperparam = yield from dl.getHyperParameter()
-    new_param = pytree.tree_map(
-        lambda x, y: x - hyperparam.learning_rate * y, param, grad.value
+    new_param = jax.tree.map(
+        lambda x, y: x - hyperparam.learning_rate * y, param, gr.value
     )
     return dl.putParameter(new_param)
 
@@ -71,21 +60,21 @@ class _R[D, E](
     GetActivation[E, ACTIVATION],
     PutActivation[E, ACTIVATION],
     GetParameter[E, RnnParameter],
-    HasInput[D, torch.Tensor],
+    HasInput[D, Array],
     GetRnnConfig[E],
     Protocol,
 ): ...
 
 
 @do()
-def doRnnStep[D, E]() -> G[Fold[_R[D, E], D, E, ACTIVATION]]:
-    dl = yield from ProxyDl[_R[D, E]].askDl()
+def doRnnStep[Dl: _R[D, E], D, E]() -> G[Fold[Dl, D, E, ACTIVATION]]:
+    dl = yield from ProxyDl[Dl].askDl()
     x = yield from dl.getInput()
     a = yield from dl.getActivation()
     param = yield from dl.getParameter()
     cfg = yield from dl.getRnnConfig()
-    w_rec = torch.reshape(param.w_rec, (cfg.n_h, cfg.n_h + cfg.n_in + 1))
-    a_rec = w_rec @ torch.cat((a, x, torch.tensor([1.0])))
+    w_rec = jnp.reshape(param.w_rec, (cfg.n_h, cfg.n_h + cfg.n_in + 1))
+    a_rec = w_rec @ jnp.concat((a, x, jnp.array([1.0])))
     a_new = ACTIVATION((1 - cfg.alpha) * a + cfg.alpha * cfg.activationFn(a_rec))
     _ = yield from dl.putActivation(a_new)
     return pure(a_new)
@@ -100,25 +89,25 @@ class _Re[E](
 
 
 @do()
-def doRnnReadout[D, E]() -> G[Fold[_Re[E], D, E, PREDICTION]]:
-    dl = yield from ProxyDl[_Re[E]].askDl()
+def doRnnReadout[Dl: _Re[E], D, E]() -> G[Fold[Dl, D, E, PREDICTION]]:
+    dl = yield from ProxyDl[Dl].askDl()
     a = yield from dl.getActivation()
     param = yield from dl.getParameter()
     cfg = yield from dl.getRnnConfig()
-    w_out = torch.reshape(param.w_out, (cfg.n_out, cfg.n_h + 1))
-    return pure(PREDICTION(w_out @ torch.cat((a, torch.tensor([1.0])))))
+    w_out = jnp.reshape(param.w_out, (cfg.n_out, cfg.n_h + 1))
+    return pure(PREDICTION(w_out @ jnp.concat((a, jnp.array([1.0])))))
 
 
 class _L[D, T](HasLabel[D, T], Protocol): ...
 
 
-type DoLossFn[D, E, P, T] = Callable[[P], Fold[_L[D, T], D, E, LOSS]]
+type DoLossFn[Dl: _L[D, T], D, E, P, T] = Callable[[P], Fold[Dl, D, E, LOSS]]
 
 
-def doLoss[D, E, P, T](lossFn: LossFn[T, P]) -> DoLossFn[D, E, P, T]:
+def doLoss[Dl: _L[D, T], D, E, P, T](lossFn: LossFn[T, P]) -> DoLossFn[Dl, D, E, P, T]:
     @do()
-    def loss_(pred: P) -> G[Fold[_L[D, T], D, E, LOSS]]:
-        d = yield from ProxyDl[_L[D, T]].askDl()
+    def loss_(pred: P) -> G[Fold[Dl, D, E, LOSS]]:
+        d = yield from ProxyDl[Dl].askDl()
         label = yield from d.getLabel()
         loss = lossFn(pred, label)
         return pure(loss)
@@ -126,67 +115,64 @@ def doLoss[D, E, P, T](lossFn: LossFn[T, P]) -> DoLossFn[D, E, P, T]:
     return loss_
 
 
+@do()
 def doGradient[
-    Dl, D, E, Pr, T
+    Dl, D, E, Pr: Module, T
 ](
     lossM: Fold[Dl, D, E, T],
     read_wrt: Fold[Dl, D, E, Pr],
     write_wrt: Callable[[Pr], Fold[Dl, D, E, Unit]],
-):
-    @do()
-    def doGradient_() -> G[Fold[Dl, D, E, Gradient[Pr]]]:
-        dl = yield from ProxyDl[Dl].askDl()
-        d = yield from ProxyR[D].ask()
-        e = yield from ProxyS[E].get()
-        pr = yield from read_wrt
+) -> G[Fold[Dl, D, E, Gradient[Pr]]]:
 
-        def parametrized(p: Pr) -> tuple[T, E]:
-            return write_wrt(p).then(lossM).func(dl, d, e)
+    dl = yield from ProxyDl[Dl].askDl()
+    d = yield from ProxyR[D].ask()
+    e = yield from ProxyS[E].get()
+    pr = yield from read_wrt
 
-        gr: Pr
-        env: E
-        gr, env = Tfn.jacrev(parametrized, has_aux=True)(pr)
-        _ = yield from put(env)
-        return pure(Gradient(gr))
+    def parametrized(p: Pr) -> tuple[T, E]:
+        return write_wrt(p).then(lossM).func(dl, d, e)
 
-    return doGradient_()
+    gr: Pr
+    env: E
+    gr, env = eqx.filter_jacrev(parametrized, has_aux=True)(pr)
+    _ = yield from put(env)
+    return pure(Gradient(gr))
 
 
 @do()
 def doAvgGradient[
-    DL, D, E, Pr: PYTREE
+    DL, D, E, Pr: Module
 ](
     step: Fold[DL, D, E, Gradient[Pr]],
     weightFn: Callable[[D], float],
     gr0: Gradient[Pr],
-) -> G[Fold[DL, Iterable[D], E, Gradient[Pr]]]:
+) -> G[Fold[DL, Traversable[D], E, Gradient[Pr]]]:
 
     @do()
     def doWeight(gr_accum: Gradient[Pr]) -> G[Fold[DL, D, E, Gradient[Pr]]]:
         d = yield from ProxyR[D].ask()
         gr_new = yield from step
-        gr_accum_new: Pr
-        gr_accum_new = pytree.tree_map(
+        gr_accum_new: GR[Pr]
+        gr_accum_new = jax.tree.map(
             lambda x, y: x + y * weightFn(d),
-            gr_accum.value,
-            gr_new.value,
+            gr_accum,
+            gr_new,
         )
-        return pure(Gradient(gr_accum_new))
+        return pure(gr_accum_new)
 
     return foldM(doWeight, gr0)
 
 
 @do()
 def doBatchGradients[
-    Dl, D: PYTREE | Tensor, E, Pr: PYTREE
+    Dl, D: Module | Array, E, Pr: Module
 ](step: Fold[Dl, D, E, Gradient[Pr]], e_dim: E) -> G[Fold[Dl, D, E, Gradient[Pr]]]:
     dl = yield from ProxyDl[Dl].askDl()
     run: Callable[[D, E], tuple[Gradient[Pr], E]]
     run = lambda d, e: step.func(dl, d, e)
-    gr_ = yield from toFold(torch.vmap(run, in_dims=(0, e_dim), out_dims=(0, e_dim)))
-    gr = cast(Gradient[Pr], gr_)
+    gr = yield from toFold(jax.vmap(run, in_axes=(0, e_dim), out_axes=(0, e_dim)))
     gr_summed: Pr
-    gr_summed = pytree.tree_map(lambda x: torch.sum(x, dim=0), gr.value)
+    gr_summed = jax.tree.map(lambda x: jnp.sum(x, axis=0), gr.value)
     return pure(Gradient(gr_summed))
 
 
@@ -194,11 +180,6 @@ class RnnLibrary[DL, D, E, P, Pr](NamedTuple):
     rnn: Fold[DL, D, E, P]
     rnnWithLoss: Fold[DL, D, E, LOSS]
     rnnWithGradient: Fold[DL, D, E, Gradient[Pr]]
-
-    type UpdateP = Callable[[Gradient[Pr]], Fold[DL, D, E, Unit]]
-
-    def trainStep(self, updateParam: UpdateP) -> Fold[DL, Iterable[D], E, Unit]:
-        return repeatM(self.rnnWithGradient.flat_map(updateParam))
 
 
 class _OfL[D, E, A, Pr, X, Y, Z](
@@ -213,15 +194,13 @@ class _OfL[D, E, A, Pr, X, Y, Z](
 ): ...
 
 
-# GradientLibrary[ENV, Iterable[PRED], Iterable[DATA]]:
 def offlineLearning[
-    D, E, A, Pr, X, Y, Z, P
+    Dl: _OfL[D, E, A, Pr, X, Y, Z], D, E, A, Pr, X, Y, Z, P
 ](
-    activationStep: Fold[_OfL[D, E, A, Pr, X, Y, Z], D, E, A],
-    predictionStep: Fold[_OfL[D, E, A, Pr, X, Y, Z], D, E, P],
+    activationStep: Fold[Dl, D, E, A],
+    predictionStep: Fold[Dl, D, E, P],
     computeLoss: LossFn[Z, P],
-) -> RnnLibrary[_OfL[D, E, A, Pr, X, Y, Z], Iterable[D], E, Iterable[P], Pr]:
-    type DL = _OfL[D, E, A, Pr, X, Y, Z]
+) -> RnnLibrary[Dl, Traversable[D], E, Traversable[P], Pr]:
 
     rnnStep = activationStep.then(predictionStep)
 
@@ -230,18 +209,18 @@ def offlineLearning[
     @do()
     def rnnWithLoss():
         @do()
-        def accumFn(accum: LOSS) -> G[Fold[DL, D, E, LOSS]]:
+        def accumFn(accum: LOSS) -> G[Fold[Dl, D, E, LOSS]]:
             loss = yield from rnnStep.flat_map(doLoss(computeLoss))
             return pure(LOSS(accum + loss))
 
-        return foldM(accumFn, LOSS(torch.tensor(0)))
+        return foldM(accumFn, LOSS(jnp.array(0.0)))
 
     @do()
     def rnnWithGradient():
-        dl = yield from ProxyDl[DL].askDl()
+        dl = yield from ProxyDl[Dl].askDl()
         return doGradient(rnnWithLoss(), dl.getParameter(), dl.putParameter)
 
-    return RnnLibrary[DL, Iterable[D], E, Iterable[P], Pr](
+    return RnnLibrary[Dl, Traversable[D], E, Traversable[P], Pr](
         rnn=rnn,
         rnnWithLoss=rnnWithLoss(),
         rnnWithGradient=rnnWithGradient(),
@@ -258,7 +237,7 @@ class _PfL[D, E, A, Pr, Z](
 ): ...
 
 
-class PastFacingLearn[Alg: _PfL[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](ABC):
+class PastFacingLearn[Alg: _PfL[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](ABC):
 
     type F[Dl, T] = Fold[Dl, D, E, T]
 
@@ -314,7 +293,7 @@ class PastFacingLearn[Alg: _PfL[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](ABC)
             grad_o = yield from doGradient(immedL, dl.getParameter(), dl.putParameter)
 
             gradient: Gradient[Pr]
-            gradient = pytree.tree_map(lambda x, y: x + y, grad_o, grad_rec)
+            gradient = jax.tree.map(lambda x, y: x + y, grad_o, grad_rec)
             m: Fold[Alg, D, E, Gradient[Pr]]
             m = pure(gradient)
 
@@ -335,7 +314,7 @@ class _Infl[D, E, A, Pr, Z](
 ): ...
 
 
-class InfluenceTensorLearner[Alg: _Infl[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
+class InfluenceTensorLearner[Alg: _Infl[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](
     PastFacingLearn[Alg, D, E, A, Pr, Z, P], ABC
 ):
 
@@ -365,7 +344,7 @@ class InfluenceTensorLearner[Alg: _Infl[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z,
             signal = yield from e_signal
 
             ca: Gradient[Pr]
-            ca = pytree.tree_map(lambda x: signal.value @ x, infl)
+            ca = jax.tree.map(lambda x: signal.value @ x, infl)
             m: Fold[Alg, D, E, Gradient[Pr]]
             m = pure(ca)
 
@@ -374,7 +353,7 @@ class InfluenceTensorLearner[Alg: _Infl[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z,
         return next()
 
 
-class RTRL[Alg: _Infl[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
+class RTRL[Alg: _Infl[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](
     InfluenceTensorLearner[Alg, D, E, A, Pr, Z, P]
 ):
 
@@ -392,7 +371,7 @@ class RTRL[Alg: _Infl[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
 
         # I take the jvp instead of j @ v, bc I'd like to 1) do a hvp 2) forward over reverse is efficient: https://jax.readthedocs.io/en/latest/notebooks/autodiff_cookbook.html
         immedJacInflProduct: Gradient[Pr]
-        immedJacInflProduct = pytree.tree_map(
+        immedJacInflProduct = jax.tree.map(
             lambda x: jacobian_matrix_product(lambda a: parametrized(a, p0)[0], a0, x),
             influenceTensor,
         )
@@ -400,10 +379,12 @@ class RTRL[Alg: _Infl[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
         # performance below really depends on the problem. For RTRL, I should use jacrev. For OHO, jacfwd. Will make this configurable later.
         immedInfl: Pr
         env: E
-        immedInfl, env = Tfn.jacfwd(parametrized, argnums=1, has_aux=True)(a0, p0)
+        immedInfl, env = eqx.filter_jacfwd(lambda p: parametrized(a0, p), has_aux=True)(
+            p0
+        )
 
         infl: Pr
-        infl = pytree.tree_map(lambda x, y: x + y, immedInfl, immedJacInflProduct.value)
+        infl = jax.tree.map(lambda x, y: x + y, immedInfl, immedJacInflProduct.value)
         _ = yield from put(env)
         m: Fold[Dl, D, E, Gradient[Pr]]
         m = pure(Gradient(infl))
@@ -413,7 +394,7 @@ class RTRL[Alg: _Infl[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
 class _RfL[D, E, A, Pr, Z](_Infl[D, E, A, Pr, Z], GetRfloConfig[E], Protocol): ...
 
 
-class RFLO[Alg: _RfL[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
+class RFLO[Alg: _RfL[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](
     InfluenceTensorLearner[Alg, D, E, A, Pr, Z, P]
 ):
     type F[Dl, T] = Fold[Dl, D, E, T]
@@ -434,10 +415,12 @@ class RFLO[Alg: _RfL[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
 
         immedInfl: Pr
         env: E
-        immedInfl, env = Tfn.jacrev(parametrized, argnums=1, has_aux=True)(a0, p0)
+        immedInfl, env = eqx.filter_jacrev(lambda p: parametrized(a0, p), has_aux=True)(
+            p0
+        )
 
         infl: Pr
-        infl = pytree.tree_map(
+        infl = jax.tree.map(
             lambda x, y: (1 - alpha) * x + alpha * y, influenceTensor.value, immedInfl
         )
         _ = yield from put(env)
@@ -451,20 +434,21 @@ class _UO[D, E, A, Pr, Z](
     GetUORO[E, Pr],
     PutUORO[E, Pr],
     GetRnnConfig[E],
+    HasPRNG[E, jax.Array],
     Protocol,
 ): ...
 
 
-class UORO[Alg: _UO[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
+class UORO[Alg: _UO[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](
     PastFacingLearn[Alg, D, E, A, Pr, Z, P]
 ):
     type F[Dl, T] = Fold[Dl, D, E, T]
 
-    def __init__(self, distribution: torch.distributions.Distribution):
+    def __init__(self, distribution: Callable[[Array, tuple], Array]):
         super().__init__()
         self.distribution = distribution
 
-    def gradientFlow(self, v: Tensor, actvStep: F[Alg, A]):
+    def gradientFlow(self, v: Array, actvStep: F[Alg, A]):
         @do()
         def next():
             dl = yield from ProxyDl[Alg].askDl()
@@ -476,27 +460,27 @@ class UORO[Alg: _UO[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
             A_prev = uoro.A  # I don't distinguish between column and row tensor.
 
             # 1 calculate the actv_jacobian vector product with A
-            immedJac_A_product: Tensor
+            immedJac_A_product: Array
             immedJac_A_product = jvp(lambda a: parametrized(a, p0)[0], a0, A_prev)
 
             # doing the vjp saves BIG on memory. Only use O(n^2) as we want
-            env: E
-            _, vjp_func, env = Tfn.vjp(lambda p: parametrized(a0, p), p0, has_aux=True)
+            fn: Callable[[Pr], tuple[A, E]] = lambda p: parametrized(a0, p)
+            _, vjp_func, env = eqx.filter_vjp(fn, p0, has_aux=True)
             _ = yield from put(env)
 
             immedJacInfl_randomProj: Pr
             (immedJacInfl_randomProj,) = vjp_func(v)
 
-            immed_grads: Fold[Alg, D, E, tuple[Tensor, Pr]]
+            immed_grads: Fold[Alg, D, E, tuple[Array, Pr]]
             immed_grads = pure((immedJac_A_product, immedJacInfl_randomProj))
             return immed_grads
 
         return next()
 
-    def creditAssign(self, A_: Tensor, B_: Gradient[Pr], e_signal: F[Alg, Gradient[A]]):
+    def creditAssign(self, A_: Array, B_: Gradient[Pr], e_signal: F[Alg, Gradient[A]]):
         def next(signal: Gradient[A]) -> Gradient[Pr]:
             q = signal.value @ A_
-            return pytree.tree_map(lambda x: x * q, B_)
+            return jax.tree.map(lambda x: x * q, B_)
 
         return e_signal.fmap(next)
 
@@ -507,23 +491,24 @@ class UORO[Alg: _UO[D, E, A, Pr, Z], D, E, A, Pr: PYTREE, Z, P](
             uoro = yield from dl.getUORO()
             rnnConfig = yield from dl.getRnnConfig()
             #!!! WARNING, IMPURITY IN PROGRESS, will address later. Just don't run this function more than once, if autodiffing through it
-            v = self.distribution.sample((rnnConfig.n_h,))
+            key = yield from dl.updatePRNG()
+            v = self.distribution(key, (rnnConfig.n_h,))
             B_prev = uoro.B
 
             immedJac_A_product, immedJacInfl_randomProj = yield from self.gradientFlow(
                 v, actvStep
             )
 
-            rho0: Tensor = torch.sqrt(
-                pytree_norm(B_prev) / torch.norm(immedJac_A_product)
+            rho0: Array = jnp.sqrt(
+                pytree_norm(B_prev) / jnp.linalg.norm(immedJac_A_product)
             )
-            rho1: Tensor = torch.sqrt(
-                pytree_norm(immedJacInfl_randomProj) / torch.norm(v)
+            rho1: Array = jnp.sqrt(
+                pytree_norm(immedJacInfl_randomProj) / jnp.linalg.norm(v)
             )
 
             A_new = rho0 * immedJac_A_product + rho1 * v
             B_new: Gradient[Pr] = Gradient(
-                pytree.tree_map(
+                jax.tree.map(
                     lambda x, y: x / rho0 + y / rho1,
                     B_prev.value,
                     immedJacInfl_randomProj,

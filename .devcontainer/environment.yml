@@ -4,7 +4,7 @@ channels:
   - nvidia
   - conda-forge
 dependencies:
-  - python=3.12
+  - python>=3.8
   - pip
   - jupyterlab
   - pandas
@@ -15,7 +15,6 @@ dependencies:
   - seaborn
   - pytorch #=2.5.0
   # - pytorch-cuda=12.4
-  - torchvision
   - toolz
   - memory_profiler
   - typing-extensions
@@ -25,7 +24,10 @@ dependencies:
   - line_profiler
   - pyrsistent
   - snakeviz
-  - cython
+  - equinox
+  - jaxlib==*=*cpu*
+  - jax
+  - optax
   - pip:
     - torchviz    
     - donotation

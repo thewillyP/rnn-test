@@ -1,6 +1,3 @@
-from dataclasses import dataclass
-from typing import Generic, NamedTuple
-from torch.utils import _pytree as pytree
 from recurrent.mytypes import *
 from recurrent.parameters import RfloConfig, RnnConfig, UORO_Param
 
@@ -16,10 +13,15 @@ Compromise: Everytime I add a field, this file is the only place I should need t
 I will have to specify vmap batch dimensions for all fields regardless of whether I solve the EP.
 
 On the good side, Object Algebras still buys me extensible interfaces which is already cracked on its own.
+
+^
+|
+equinox solves this problem for me with eqx.Module which supports inheritance and is also a PyTree. 
+Will refactor later, but global god state is fine for now. 
 """
 
 
-class RnnGodState[A, B, C](NamedTuple):
+class RnnGodState[A: eqx.Module, B: eqx.Module, C: eqx.Module](eqx.Module):
     activation: ACTIVATION
     influenceTensor: Gradient[A]
     ohoInfluenceTensor: Gradient[B]
@@ -31,9 +33,10 @@ class RnnGodState[A, B, C](NamedTuple):
     rfloConfig: RfloConfig
     rfloConfig_bilevel: RfloConfig
     uoro: UORO_Param[A]
+    prng: PRNG
 
 
-def batch_rtrl[A, B, C]() -> RnnGodState[A, B, C]:
+def batch_rtrl[A: eqx.Module, B: eqx.Module, C: eqx.Module]() -> RnnGodState[A, B, C]:
     return RnnGodState(
         activation=0,
         influenceTensor=0,
@@ -46,10 +49,13 @@ def batch_rtrl[A, B, C]() -> RnnGodState[A, B, C]:
         rfloConfig=None,
         rfloConfig_bilevel=None,
         uoro=None,
+        prng=None,
     )
 
 
-def batch_vanilla[A, B, C]() -> RnnGodState[A, B, C]:
+def batch_vanilla[
+    A: eqx.Module, B: eqx.Module, C: eqx.Module
+]() -> RnnGodState[A, B, C]:
     return RnnGodState(
         activation=0,
         influenceTensor=None,
@@ -62,53 +68,8 @@ def batch_vanilla[A, B, C]() -> RnnGodState[A, B, C]:
         rfloConfig=None,
         rfloConfig_bilevel=None,
         uoro=None,
+        prng=None,
     )
-
-
-def rnn_god_flatten[A, B, C](godState: RnnGodState[A, B, C]):
-    return (
-        godState.activation,
-        godState.influenceTensor,
-        godState.ohoInfluenceTensor,
-        godState.parameter,
-        godState.hyperparameter,
-        godState.metaHyperparameter,
-        godState.uoro,
-    ), (
-        godState.rfloConfig,
-        godState.rfloConfig_bilevel,
-        godState.rnnConfig,
-        godState.rnnConfig_bilevel,
-    )
-
-
-def rnn_god_unflatten(children, aux):
-    (
-        activation,
-        influenceTensor,
-        ohoInfluenceTensor,
-        parameter,
-        hyperparameter,
-        metaHyperparameter,
-        uoro,
-    ) = children
-    (rfloConfig, rfloConfig_bilevel, rnnConfig, rnnConfig_bilevel) = aux
-    return RnnGodState(
-        activation=activation,
-        influenceTensor=influenceTensor,
-        ohoInfluenceTensor=ohoInfluenceTensor,
-        parameter=parameter,
-        hyperparameter=hyperparameter,
-        metaHyperparameter=metaHyperparameter,
-        rfloConfig=rfloConfig,
-        rfloConfig_bilevel=rfloConfig_bilevel,
-        rnnConfig=rnnConfig,
-        rnnConfig_bilevel=rnnConfig_bilevel,
-        uoro=uoro,
-    )
-
-
-pytree.register_pytree_node(RnnGodState, rnn_god_flatten, rnn_god_unflatten)
 
 
 # A_TORCH = TypeVar("A_TORCH", bound=torch.Tensor | PYTREE)
