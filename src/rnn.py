@@ -134,14 +134,14 @@ class RNN():
         
         # gru_init(self.rnn, self.fc, config)
 
-        with torch.no_grad():
-            W_rec, W_in, b_rec, W_out, b_out = initializeParameters(config.n_in, config.n_h, config.n_out)
-            self.rnn.weight_ih_l0.copy_(W_in)
-            self.rnn.weight_hh_l0.copy_(W_rec)
-            self.rnn.bias_ih_l0.copy_(b_rec)
-            self.rnn.bias_hh_l0.copy_(b_rec)
-            self.fc.weight.copy_(W_out)
-            self.fc.bias.copy_(b_out)
+        # with torch.no_grad():
+        #     W_rec, W_in, b_rec, W_out, b_out = initializeParameters(config.n_in, config.n_h, config.n_out)
+        #     self.rnn.weight_ih_l0.copy_(W_in)
+        #     self.rnn.weight_hh_l0.copy_(W_rec)
+        #     self.rnn.bias_ih_l0.copy_(b_rec)
+        #     self.rnn.bias_hh_l0.copy_(b_rec)
+        #     self.fc.weight.copy_(W_out)
+        #     self.fc.bias.copy_(b_out)
 
         # self.interface = RNNInterface(
         #     baseCase=getRNNInit(config.scheme)(config.num_layers, config.n_h),

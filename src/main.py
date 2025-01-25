@@ -149,6 +149,7 @@ def get_grad_valid(config: Config, model, data, target):
     val_model.load_state_dict(model.state_dict())
     val_model.train()
     val_loss = trainStepIO(config, data, target, val_model)
+    torch.nn.utils.clip_grad_norm_(val_model.parameters(), 1)
     grad_val = get_grads(val_model)
 
     wandb.log({"validation_loss": val_loss}, commit=False)
@@ -293,6 +294,7 @@ def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, va
             counter += x.size(0)
             real_loss = trainStepIO(config, x, y, model)
             real_loss *= x.size(0)
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
             optimizer.step()
             grad_valid = torch.zeros(1)
 

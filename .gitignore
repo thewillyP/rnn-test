@@ -3,13 +3,16 @@ __pycache__/
 *.py[cod]
 *$py.class
 *-ubyte*
-
+*.dat
+*.png
 # C extensions
 *.so
 *.pt
 wandb/*
 *.out
 *.err
+*.threads
+*.prof
 
 # Distribution / packaging
 .Python

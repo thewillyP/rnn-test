@@ -1,8 +1,6 @@
-#!/bin/bash
-
 python ./src/main.py \
     --n_in 2 \
-    --n_h 30 \
+    --n_h 200 \
     --n_out 1 \
     --num_layers 1 \
     --task Random \
@@ -14,22 +12,22 @@ python ./src/main.py \
     --batch_size_tr 4 \
     --batch_size_vl 2 \
     --batch_size_te 5000 \
-    --t1 3 \
-    --t2 5 \
-    --num_epochs 200 \
-    --learning_rate 0.01 \
+    --t1 5 \
+    --t2 9 \
+    --num_epochs 100 \
+    --learning_rate 0.001 \
     --optimizerFn SGD \
     --lossFn mse \
     --mode experiment \
-    --checkpoint_freq 20 \
-    --seed 2 \
-    --projectName "mlr-test" \
+    --checkpoint_freq 800 \
+    --seed 3 \
+    --projectName "oho-rnn-generalization-gap8" \
     --logger "wandb" \
     --performance_samples 9 \
     --init_scheme StaticRandomInit \
     --activation_fn tanh \
     --log_freq 1 \
-    --meta_learning_rate 0.0002 \
-    --l2_regularization 0.0 \
+    --meta_learning_rate 0.0005 \
+    --l2_regularization 0 \
     --is_oho 1 \
     --time_chunk_size 10
