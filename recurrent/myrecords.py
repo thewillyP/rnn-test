@@ -28,10 +28,10 @@ class RnnGodState[A: eqx.Module, B: eqx.Module, C: eqx.Module](eqx.Module):
     parameter: A
     hyperparameter: B
     metaHyperparameter: C
-    rnnConfig: RnnConfig
-    rnnConfig_bilevel: RnnConfig
-    rfloConfig: RfloConfig
-    rfloConfig_bilevel: RfloConfig
+    rnnConfig: RnnConfig = eqx.field(static=True)
+    rnnConfig_bilevel: RnnConfig = eqx.field(static=True)
+    rfloConfig: RfloConfig = eqx.field(static=True)
+    rfloConfig_bilevel: RfloConfig = eqx.field(static=True)
     uoro: UORO_Param[A]
     prng: PRNG
 

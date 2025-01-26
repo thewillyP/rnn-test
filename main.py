@@ -60,7 +60,7 @@ def trainStep(dataloader: Traversable[InputOutput]):
     n_in = 2
     n_out = 2
     learning_rate = jnp.array(
-        [0.0001]
+        [0.01]
     )  # parameters should never be floats or single value
     alpha = 1.0
 
@@ -156,7 +156,7 @@ def trainStep(dataloader: Traversable[InputOutput]):
     # return predictions
 
     rnnLearner: RnnLibrary[DL, InputOutput, ENV, PREDICTION, RnnParameter]
-    rtrl = UORO[
+    rtrl = RTRL[
         DL,
         InputOutput,
         RnnGodState[RnnParameter, SgdParameter, SgdParameter],
@@ -164,7 +164,7 @@ def trainStep(dataloader: Traversable[InputOutput]):
         RnnParameter,
         jax.Array,
         PREDICTION,
-    ](lambda a, b: jax.random.uniform(a, b, minval=-1, maxval=1))
+    ]()  #
 
     rnnLearner = rtrl.onlineLearning(
         doRnnStep(),
@@ -184,7 +184,7 @@ def trainStep(dataloader: Traversable[InputOutput]):
 
         loss_jit = lossFn.func
 
-        predictFn = traverse(rnnLearner.rnn).func
+        # predictFn = traverse(rnnLearner.rnn).func
 
         _, final_env = model(dialect, dataloader, initEnv)
 
@@ -226,7 +226,7 @@ def trainStep(dataloader: Traversable[InputOutput]):
 
 def main():
 
-    length = 1_010_000
+    length = 10_000
     rng_key = jax.random.key(0)
     X, Y = generate_add_task_dataset(length, 5, 9, 1, rng_key)
     dataset = Traversable[InputOutput](InputOutput(X, Y))
