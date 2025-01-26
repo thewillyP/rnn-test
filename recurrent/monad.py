@@ -124,17 +124,12 @@ def toFold[D, E, S, T](func: Callable[[E, S], tuple[T, S]]):
 
 def repeatM[Dl, D, E, A](m: Fold[Dl, D, E, A]):
     def wrapper(dl: Dl, ds: Traversable[D], state: E):
+        def repeat(s: E, d: D):
+            __, new_state = m.func(dl, d, s)
+            return new_state, None
 
-        params, static = eqx.partition(state, eqx.is_array)
-
-        def repeat(arr: E, d: D):
-            state: E = eqx.combine(arr, static)
-            __, new_state = m.func(dl, d, state)
-            carry, _ = eqx.partition(new_state, eqx.is_array)
-            return carry, None
-
-        env = jax.lax.scan(repeat, params, ds.value)[0]
-        return Unit(), eqx.combine(env, static)
+        env, _ = jax.lax.scan(repeat, state, ds.value)
+        return Unit(), env
 
     return Fold(wrapper)
 
@@ -142,35 +137,24 @@ def repeatM[Dl, D, E, A](m: Fold[Dl, D, E, A]):
 def traverse[Dl, D, E, B](m: "Fold[Dl, D, E, B]"):
 
     def wrapper(dl: Dl, ds: Traversable[D], state: E) -> tuple[Traversable[B], E]:
-
-        params, static = eqx.partition(state, eqx.is_array)
-
-        def traverse_(arr: E, d: D):
-            s_prev: E = eqx.combine(arr, static)
+        def traverse_(s_prev: E, d: D):
             b, s = m.func(dl, d, s_prev)
-            carry, _ = eqx.partition(s, eqx.is_array)
-            return carry, b
+            return s, b
 
-        new_state, bs = jax.lax.scan(traverse_, params, ds.value)
-        return Traversable(bs), eqx.combine(new_state, static)
+        new_state, bs = jax.lax.scan(traverse_, state, ds.value)
+        return Traversable(bs), new_state
 
     return Fold(wrapper)
 
 
 def foldM[Dl, D, E, B](func: Callable[[B], Fold[Dl, D, E, B]], init: B):
     def wrapper(dl: Dl, ds: Traversable[D], state: E):
-        params, static = eqx.partition(state, eqx.is_array)
-
         def fold(pair: tuple[B, E], d: D):
-            acc, arr = pair
-            s = eqx.combine(arr, static)
-            b, new_s = func(acc).func(dl, d, s)
-            carry: E
-            carry, _ = eqx.partition(new_s, eqx.is_array)
-            return (b, carry), None
+            acc, s = pair
+            return func(acc).func(dl, d, s), None
 
-        b, arr = jax.lax.scan(fold, (init, params), ds.value)[0]
-        return b, eqx.combine(arr, static)
+        accum, _ = jax.lax.scan(fold, (init, state), ds.value)
+        return accum
 
     return Fold(wrapper)
 
