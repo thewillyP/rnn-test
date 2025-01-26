@@ -6,7 +6,7 @@ from recurrent.datarecords import InputOutput
 from recurrent.myfunc import flipTuple
 from recurrent.myrecords import RnnGodState
 from recurrent.mytypes import *
-from recurrent.parameters import RfloConfig
+from recurrent.parameters import Logs, RfloConfig
 from recurrent.objectalgebra.typeclasses import *
 from recurrent.monad import *
 import jax

@@ -13,7 +13,7 @@ from recurrent.objectalgebra.typeclasses import *
 
 from recurrent.mytypes import *
 from recurrent.monad import *
-from recurrent.parameters import RnnParameter, SgdParameter
+from recurrent.parameters import Logs, RnnParameter, SgdParameter
 
 
 type LossFn[A, B] = Callable[[A, B], LOSS]
