@@ -80,3 +80,7 @@ class HasPRNG[E, T](Protocol):
         prng, new_prng = yield from self.generatePRNG()
         _ = yield from self.putPRNG(new_prng)
         return pure(prng)
+
+
+class PutLog[E, T](Protocol):
+    def putLog[D](self, s: T) -> Fold[Self, D, E, Unit]: ...

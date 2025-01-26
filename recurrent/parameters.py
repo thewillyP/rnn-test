@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Callable, Optional
 from recurrent.mytypes import *
 import jax
 import equinox as eqx
@@ -28,3 +28,7 @@ class RnnConfig(eqx.Module):
 class UORO_Param[Pr: eqx.Module](eqx.Module):
     A: jax.Array
     B: Gradient[Pr]
+
+
+class Logs(eqx.Module):
+    loss: Optional[LOSS] = eqx.field(default=None)

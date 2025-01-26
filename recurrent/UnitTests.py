@@ -6,7 +6,7 @@ from recurrent.datarecords import InputOutput
 from recurrent.mylearning import UORO, doRnnReadout, doRnnStep
 from recurrent.myrecords import RnnGodState
 from recurrent.objectalgebra.interpreter import BaseRnnInterpreter
-from recurrent.parameters import RnnConfig, RnnParameter, UORO_Param
+from recurrent.parameters import Logs, RnnConfig, RnnParameter, UORO_Param
 from recurrent.mytypes import *
 from recurrent.util import *
 from recurrent.monad import pure
@@ -71,6 +71,7 @@ class Test_UORO(unittest.TestCase):
                 ),
             ),
             prng=cls.key,
+            logs=Logs(loss=jnp.empty(0, dtype=jnp.float32)),
         )
 
         x = 2 * jnp.ones(n_in)
@@ -107,9 +108,7 @@ class Test_UORO(unittest.TestCase):
 
         model = eqx.filter_jit(self.uoro.gradientFlow(v, doRnnStep()).func)
         safe_model = model.lower(self.dialect, self.x_input, self.initEnv).compile()
-        (a_j, p_papw), env = safe_model(
-            self.dialect, self.x_input, self.initEnv
-        )
+        (a_j, p_papw), env = safe_model(self.dialect, self.x_input, self.initEnv)
 
         flats_, _ = jax.tree.flatten(p_papw)
         p_papw_pred = jnp.concat(flats_)
@@ -129,7 +128,6 @@ class Test_UORO(unittest.TestCase):
         flats, _ = jax.tree.flatten(correct_papw)
         correct_papw = jnp.concat(flats)
 
-
         jnp.allclose(a_j, correct_a_J)
         jnp.allclose(p_papw_pred, correct_papw)
 
@@ -137,9 +135,7 @@ class Test_UORO(unittest.TestCase):
 
         model = eqx.filter_jit(self.rnnLearner.rnnWithGradient.func)
         safe_model = model.lower(self.dialect, self.x_input, self.initEnv).compile()
-        _, env = safe_model(
-            self.dialect, self.x_input, self.initEnv
-        )
+        _, env = safe_model(self.dialect, self.x_input, self.initEnv)
         A_pred = env.uoro.A
         B_pred = env.uoro.B
         flats_, _ = jax.tree.flatten(B_pred)
@@ -168,9 +164,7 @@ class Test_UORO(unittest.TestCase):
         error = pure(Gradient(jnp.ones(2) * 0.5))
         model = eqx.filter_jit(self.uoro.creditAssign(A, B, error).func)
         safe_model = model.lower(self.dialect, self.x_input, self.initEnv).compile()
-        rec_grads, _ = safe_model(
-            self.dialect, self.x_input, self.initEnv
-        )
+        rec_grads, _ = safe_model(self.dialect, self.x_input, self.initEnv)
         flats_, _ = jax.tree.flatten(rec_grads)
         rec_grads = jnp.concat(flats_)
 

@@ -1,5 +1,5 @@
 from recurrent.mytypes import *
-from recurrent.parameters import RfloConfig, RnnConfig, UORO_Param
+from recurrent.parameters import Logs, RfloConfig, RnnConfig, UORO_Param
 
 """
 Expression problem is very hard to solve in python, without there being some resistance.
@@ -34,6 +34,7 @@ class RnnGodState[A: eqx.Module, B: eqx.Module, C: eqx.Module](eqx.Module):
     rfloConfig_bilevel: RfloConfig = eqx.field(static=True)
     uoro: UORO_Param[A]
     prng: PRNG
+    logs: Logs
 
 
 def batch_rtrl[A: eqx.Module, B: eqx.Module, C: eqx.Module]() -> RnnGodState[A, B, C]:
@@ -50,6 +51,7 @@ def batch_rtrl[A: eqx.Module, B: eqx.Module, C: eqx.Module]() -> RnnGodState[A, 
         rfloConfig_bilevel=None,
         uoro=None,
         prng=None,
+        logs=0,
     )
 
 
@@ -69,6 +71,7 @@ def batch_vanilla[
         rfloConfig_bilevel=None,
         uoro=None,
         prng=None,
+        logs=0,
     )
 
 

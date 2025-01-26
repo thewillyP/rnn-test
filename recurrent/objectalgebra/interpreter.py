@@ -32,6 +32,7 @@ class BaseRnnGodInterpreter[A, B, C](
     GetRnnConfig[GOD[A, B, C]],
     GetUORO[GOD[A, B, C], A],
     PutUORO[GOD[A, B, C], A],
+    PutLog[GOD[A, B, C], Logs],
 ):
 
     type God = GOD[A, B, C]
@@ -71,6 +72,11 @@ class BaseRnnGodInterpreter[A, B, C](
 
     def putUORO[D](self, s: UORO_Param[A]) -> Fold[Self, D, God, Unit]:
         return modifies(lambda e: eqx.tree_at(lambda t: t.uoro, e, s))
+
+    def putLog[D](self, s: Logs) -> Fold[Self, D, God, Unit]:
+        return modifies(
+            lambda e: eqx.tree_at(lambda t: t.logs, e, eqx.combine(s, e.logs))
+        )
 
 
 class DataInterpreter(
