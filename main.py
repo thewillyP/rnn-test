@@ -1,11 +1,12 @@
 # %%
 import time
-from typing import Iterable, Iterator
-from recurrent.datarecords import Input2Output1
+from typing import Iterable
+
+import optax
+from recurrent.datarecords import InputOutput
 from recurrent.monad import foldM
 from recurrent.mylearning import *
 from recurrent.myrecords import RnnGodState
-import torch
 from recurrent.mytypes import *
 
 from recurrent.objectalgebra.interpreter import BaseRnnInterpreter
@@ -18,13 +19,13 @@ from recurrent.parameters import (
     SgdParameter,
     UORO_Param,
 )
-from recurrent.util import rnnSplitParameters, tree_stack
 from memory_profiler import profile
 from torch.utils.data import TensorDataset, DataLoader
 from toolz.itertoolz import partition_all
-from torch.utils import _pytree as pytree
-from torch.utils._pytree import PyTree
 from recurrent.util import *
+import jax.numpy as jnp
+import equinox as eqx
+import jax
 
 """
 Todo
@@ -34,34 +35,32 @@ Todo
 """
 
 
-torch.manual_seed(24)
-
-
-def generate_add_task_dataset(N, t_1, t_2, deterministic, tau_task):
+def generate_add_task_dataset(N, t_1, t_2, tau_task, rng_key):
     """y(t) = 0.5 + 0.5 * x(t - t_1) - 0.25 * x(t - t_2)"""
     N = N // tau_task
 
-    x = torch.bernoulli(torch.full((N,), 0.5))
+    x = jax.random.bernoulli(rng_key, 0.5, (N,)).astype(jnp.float32)
 
-    y = 0.5 + 0.5 * torch.roll(x.float(), t_1) - 0.25 * torch.roll(x.float(), t_2)
+    y = 0.5 + 0.5 * jnp.roll(x, t_1) - 0.25 * jnp.roll(x, t_2)
 
-    if not deterministic:
-        y = torch.bernoulli(y)
+    X = jnp.array([x, 1 - x]).T
+    Y = jnp.array([y, 1 - y]).T
 
-    X = torch.stack([x, 1 - x], dim=-1).repeat(1, tau_task).view(tau_task * N, 2)
-    Y = torch.stack([y, 1 - y], dim=-1).repeat(1, tau_task).view(tau_task * N, 2)
+    # Temporally stretch according to the desire timescale of change.
+    X = jnp.tile(X, tau_task).reshape((tau_task * N, 2))
+    Y = jnp.tile(Y, tau_task).reshape((tau_task * N, 2))
 
     return X, Y
 
 
 # @profile
-def trainStep(dataloader: Iterable[Input2Output1]):
+def trainStep(dataloader: Traversable[InputOutput]):
 
     n_h = 32
     n_in = 2
     n_out = 2
-    learning_rate = torch.tensor(
-        [0.001]
+    learning_rate = jnp.array(
+        [0.0001]
     )  # parameters should never be floats or single value
     alpha = 1.0
 
@@ -69,27 +68,36 @@ def trainStep(dataloader: Iterable[Input2Output1]):
     type ENV = RnnGodState[RnnParameter, SgdParameter, SgdParameter]
 
     dialect = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]()
+    rng_key = jax.random.key(42)
+    rng_key, prng = jax.random.split(rng_key)
 
-    w_rec_, _ = torch.linalg.qr(torch.randn(n_h, n_h))
-    w_in_ = torch.randn(n_h, n_in + 1) * torch.sqrt(torch.tensor(1.0 / (n_in + 1)))
-    w_rec = torch.cat((w_rec_, w_in_), dim=1)
-    w_out = torch.randn(n_out, n_h + 1) * torch.sqrt(torch.tensor(1.0 / (n_h + 1)))
+    w_rec_, _ = jnp.linalg.qr(jax.random.normal(prng, (n_h, n_h)))
+    rng_key, prng = jax.random.split(rng_key)
+    w_in_ = jax.random.normal(prng, (n_h, n_in + 1)) * jnp.sqrt(1.0 / (n_in + 1))
+    w_rec = jnp.concat((w_rec_, w_in_), axis=1)
+    rng_key, prng = jax.random.split(rng_key)
+    w_out = jax.random.normal(prng, (n_out, n_h + 1)) * jnp.sqrt(1.0 / (n_h + 1))
 
-    w_rec = torch.flatten(w_rec)
-    w_out = torch.flatten(w_out)
+    w_rec = jnp.ravel(w_rec)
+    w_out = jnp.ravel(w_out)
 
     parameter = RnnParameter(
         w_rec=PARAMETER(w_rec),
         w_out=PARAMETER(w_out),
     )
     rnnConfig = RnnConfig(
-        n_h=n_h, n_in=n_in, n_out=n_out, alpha=alpha, activationFn=torch.tanh
+        n_h=n_h, n_in=n_in, n_out=n_out, alpha=alpha, activationFn=jnp.tanh
     )
     sgd = SgdParameter(learning_rate=LEARNING_RATE(learning_rate))
 
+    rng_key, prng1 = jax.random.split(rng_key)
+    rng_key, prng2 = jax.random.split(rng_key)
+    rng_key, prng3 = jax.random.split(rng_key)
+
     initEnv = RnnGodState[RnnParameter, SgdParameter, SgdParameter](
         # activation=ACTIVATION(torch.randn(batch_size, n_h)),
-        activation=ACTIVATION(torch.randn(n_h)),
+        # activation=ACTIVATION(torch.randn(n_h)),
+        activation=ACTIVATION(jax.random.normal(prng1, (n_h,))),
         influenceTensor=Gradient[RnnParameter](zeroedInfluenceTensor(n_h, parameter)),
         ohoInfluenceTensor=Gradient[SgdParameter](
             zeroedInfluenceTensor(pytreeNumel(sgd), sgd)
@@ -102,9 +110,10 @@ def trainStep(dataloader: Iterable[Input2Output1]):
         rfloConfig=RfloConfig(rflo_alpha=alpha),
         rfloConfig_bilevel=RfloConfig(rflo_alpha=alpha),
         uoro=UORO_Param[RnnParameter](
-            A=torch.randn(n_h),
-            B=uoroBInit(parameter),
+            A=jax.random.normal(prng2, (n_h,)),
+            B=uoroBInit(parameter, prng3),
         ),
+        prng=rng_key,
     )
 
     # truncation = 10
@@ -146,40 +155,67 @@ def trainStep(dataloader: Iterable[Input2Output1]):
     # predictions = [torch.functional.F.softmax(tensor, dim=0) for tensor in predictions]
     # return predictions
 
-    rnnLearner: RnnLibrary[DL, Input2Output1, ENV, PREDICTION, RnnParameter]
+    rnnLearner: RnnLibrary[DL, InputOutput, ENV, PREDICTION, RnnParameter]
     rtrl = UORO[
         DL,
-        Input2Output1,
+        InputOutput,
         RnnGodState[RnnParameter, SgdParameter, SgdParameter],
         ACTIVATION,
         RnnParameter,
-        Tensor,
+        jax.Array,
         PREDICTION,
-    ](torch.distributions.uniform.Uniform(-1, 1))
+    ](lambda a, b: jax.random.uniform(a, b, minval=-1, maxval=1))
+
     rnnLearner = rtrl.onlineLearning(
         doRnnStep(),
         doRnnReadout(),
-        lambda a, b: LOSS(torch.functional.F.cross_entropy(a, b)),
+        lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b)),
     )
     # gr, _ = rnnLearner.rnnWithGradient.func(dialect, dataloader[0], initEnv)
 
     # _, initEnv = rnnLearner.trainStep(doSgdStep).func(dialect, dataloader, initEnv)
-    model = torch.compile(rnnLearner.rnn.func)
-    _, initEnv = model(dialect, dataloader[0], initEnv)
+
+    def compile():
+        model = repeatM(rnnLearner.rnnWithGradient.flat_map(doSgdStep)).func
+
+        lossFn = foldM(
+            lambda acc: rnnLearner.rnnWithLoss.fmap(lambda l: l + acc), LOSS(0)
+        )
+
+        loss_jit = lossFn.func
+
+        predictFn = traverse(rnnLearner.rnn).func
+
+        _, final_env = model(dialect, dataloader, initEnv)
+
+        loss, _ = loss_jit(dialect, dataloader, final_env)
+
+        return loss
 
     start = time.time()
-    for d in dataloader:
-        # model = rnnLearner.rnnWithGradient.flat_map(doSgdStep).func
-        # _, initEnv = model(dialect, d, initEnv)
-
-        # lossFn = foldM(
-        #     lambda acc: rnnLearner.rnnWithLoss.fmap(lambda l: l + acc), LOSS(0)
-        # )
-        # loss, _ = lossFn.func(dialect, dataloader, initEnv)
-        # print(loss / len(dataloader))
-
-        _, initEnv = model(dialect, d, initEnv)
+    loss = eqx.filter_jit(compile).lower().compile()()
+    print(loss / dataloader.value.x.shape[0])
     print(time.time() - start)
+
+    # start = time.time()
+    # predictions, _ = predictFn(dialect, dataloader, final_env)
+    # print(time.time() - start)
+
+    # start = time.time()
+    # predictions, _ = predictFn(dialect, dataloader, final_env)
+    # print(time.time() - start)
+
+    # start = time.time()
+    # predictions, _ = predictFn(dialect, dataloader, final_env)
+    # print(time.time() - start)
+
+    # print(predictions.value[0])
+
+    # start = time.time()
+    # loss, _ = loss_jit(dialect, dataloader, final_env)
+    # print(time.time() - start)
+    # print(loss / dataloader.value.x.shape[0])
+
     # predictions, _ = traverse(rnnLearner.rnn).func(dialect, dataloader, initEnv)
     # predictions = [torch.functional.F.softmax(tensor, dim=0) for tensor in predictions]
     return None
@@ -190,10 +226,13 @@ def trainStep(dataloader: Iterable[Input2Output1]):
 
 def main():
 
-    length = 10_000
-    X, Y = generate_add_task_dataset(length, 5, 9, True, 1)
-    dataset = map(lambda data: Input2Output1(data[0], data[1]), zip(X, Y))
-    dataset = list(dataset)
+    length = 1_010_000
+    rng_key = jax.random.key(0)
+    X, Y = generate_add_task_dataset(length, 5, 9, 1, rng_key)
+    dataset = Traversable[InputOutput](InputOutput(X, Y))
+
+    # dataset = map(lambda data: InputOutput(data[0], data[1]), zip(X, Y))
+    # dataset = list(dataset)
 
     # import cProfile, pstats
 

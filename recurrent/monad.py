@@ -6,6 +6,8 @@ from pyrsistent.typing import PVector
 
 from recurrent.myfunc import foldr
 import jax
+import equinox as eqx
+import functools as ft
 
 from recurrent.mytypes import Traversable, G
 
@@ -108,18 +110,6 @@ def toFold[D, E, S, T](func: Callable[[E, S], tuple[T, S]]):
     return Fold[D, E, S, T](lambda _d, env, state: func(env, state))  # type: ignore
 
 
-# def repeatM[Dl, D, E, A](m: "Fold[Dl, D, E, A]"):
-#     def wrapper(dl: Dl, ds: Iterable[D], state: E) -> tuple[Unit, E]:
-#         def repeat(d: D, pair: tuple[Unit, E]) -> tuple[Unit, E]:
-#             _u, state = pair
-#             __, new_state = m.func(dl, d, state)
-#             return _u, new_state
-
-#         return foldr(repeat)(ds, (Unit(), state))
-
-#     return Fold(wrapper)
-
-
 # these guys need to be strict
 # def foldM[Dl, D, E, B](func: Callable[[B], "Fold[Dl, D, E, B]"], init: B):
 #     def wrapper(dl: Dl, ds: Iterable[D], state: E) -> tuple[B, E]:
@@ -132,13 +122,19 @@ def toFold[D, E, S, T](func: Callable[[E, S], tuple[T, S]]):
 #     return Fold(wrapper)
 
 
-def foldM[Dl, D, E, B](func: Callable[[B], Fold[Dl, D, E, B]], init: B):
+def repeatM[Dl, D, E, A](m: Fold[Dl, D, E, A]):
     def wrapper(dl: Dl, ds: Traversable[D], state: E):
-        def fold(pair: tuple[B, E], d: D):
-            acc, state = pair
-            return func(acc).func(dl, d, state), None
 
-        return jax.lax.scan(fold, (init, state), ds.value)[0]
+        params, static = eqx.partition(state, eqx.is_array)
+
+        def repeat(arr: E, d: D):
+            state: E = eqx.combine(arr, static)
+            __, new_state = m.func(dl, d, state)
+            carry, _ = eqx.partition(new_state, eqx.is_array)
+            return carry, None
+
+        env = jax.lax.scan(repeat, params, ds.value)[0]
+        return Unit(), eqx.combine(env, static)
 
     return Fold(wrapper)
 
@@ -146,12 +142,35 @@ def foldM[Dl, D, E, B](func: Callable[[B], Fold[Dl, D, E, B]], init: B):
 def traverse[Dl, D, E, B](m: "Fold[Dl, D, E, B]"):
 
     def wrapper(dl: Dl, ds: Traversable[D], state: E) -> tuple[Traversable[B], E]:
-        def traverse_(s_prev: E, d: D):
-            b, s = m.func(dl, d, s_prev)
-            return s, b
 
-        new_state, bs = jax.lax.scan(traverse_, state, ds.value)
-        return Traversable(bs), new_state
+        params, static = eqx.partition(state, eqx.is_array)
+
+        def traverse_(arr: E, d: D):
+            s_prev: E = eqx.combine(arr, static)
+            b, s = m.func(dl, d, s_prev)
+            carry, _ = eqx.partition(s, eqx.is_array)
+            return carry, b
+
+        new_state, bs = jax.lax.scan(traverse_, params, ds.value)
+        return Traversable(bs), eqx.combine(new_state, static)
+
+    return Fold(wrapper)
+
+
+def foldM[Dl, D, E, B](func: Callable[[B], Fold[Dl, D, E, B]], init: B):
+    def wrapper(dl: Dl, ds: Traversable[D], state: E):
+        params, static = eqx.partition(state, eqx.is_array)
+
+        def fold(pair: tuple[B, E], d: D):
+            acc, arr = pair
+            s = eqx.combine(arr, static)
+            b, new_s = func(acc).func(dl, d, s)
+            carry: E
+            carry, _ = eqx.partition(new_s, eqx.is_array)
+            return (b, carry), None
+
+        b, arr = jax.lax.scan(fold, (init, params), ds.value)[0]
+        return b, eqx.combine(arr, static)
 
     return Fold(wrapper)
 

@@ -27,12 +27,12 @@ class Test_UORO(unittest.TestCase):
 
         _w_rec = jnp.eye(n_h)
         _w_in = jnp.eye(n_in)
-        _b_rec = jnp.zeros(n_h, 1)
-        w_rec = jnp.concat((_w_rec, _w_in, _b_rec), dim=1)
+        _b_rec = jnp.zeros((n_h, 1))
+        w_rec = jnp.concat((_w_rec, _w_in, _b_rec), axis=1)
 
         _w_out = jnp.eye(n_out)
-        _b_out = jnp.zeros(n_out, 1)
-        w_out = jnp.concat((_w_out, _b_out), dim=1)
+        _b_out = jnp.zeros((n_out, 1))
+        w_out = jnp.concat((_w_out, _b_out), axis=1)
 
         w_rec = jnp.ravel(w_rec)
         w_out = jnp.ravel(w_out)
@@ -100,81 +100,88 @@ class Test_UORO(unittest.TestCase):
             lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b)),
         )
 
-    # def test_update_learning_vars(self):
-    #     v = jax.random.uniform(
-    #         self.key, (self.initEnv.rnnConfig.n_h,), minval=-1, maxval=1
-    #     )
+    def test_update_learning_vars(self):
+        v = jax.random.uniform(
+            self.key, (self.initEnv.rnnConfig.n_h,), minval=-1, maxval=1
+        )
 
-    #     (a_j, p_papw), env = self.uoro.gradientFlow(v, doRnnStep()).func(
-    #         self.dialect, self.x_input, self.initEnv
-    #     )
+        model = eqx.filter_jit(self.uoro.gradientFlow(v, doRnnStep()).func)
+        safe_model = model.lower(self.dialect, self.x_input, self.initEnv).compile()
+        (a_j, p_papw), env = safe_model(
+            self.dialect, self.x_input, self.initEnv
+        )
 
-    #     flats_, _ = jax.tree.flatten(p_papw)
-    #     p_papw_pred = jax.concat(flats_)
+        flats_, _ = jax.tree.flatten(p_papw)
+        p_papw_pred = jnp.concat(flats_)
 
-    #     correct_a_J_ = jnp.eye(2)
-    #     correct_a_J = correct_a_J_ @ self.initEnv.activation
-    #     correct_papw_ = v @ jnp.array(
-    #         [[1, 1, 2, 2, 1, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 1, 1, 2, 2, 1]],
-    #         dtype=jnp.float32,
-    #     )
-    #     correct_papw = Gradient[RnnParameter](
-    #         RnnParameter(
-    #             w_rec=PARAMETER(jnp.ravel(correct_papw_)),
-    #             w_out=PARAMETER(jnp.zeros_like(self.initEnv.parameter.w_out)),
-    #         )
-    #     )
-    #     flats, _ = jax.tree.flatten(correct_papw)
-    #     correct_papw = jnp.concat(flats)
+        correct_a_J_ = jnp.eye(2)
+        correct_a_J = correct_a_J_ @ self.initEnv.activation
+        correct_papw_ = v @ jnp.array(
+            [[1, 1, 2, 2, 1, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 1, 1, 2, 2, 1]],
+            dtype=jnp.float32,
+        )
+        correct_papw = Gradient[RnnParameter](
+            RnnParameter(
+                w_rec=PARAMETER(jnp.ravel(correct_papw_)),
+                w_out=PARAMETER(jnp.zeros_like(self.initEnv.parameter.w_out)),
+            )
+        )
+        flats, _ = jax.tree.flatten(correct_papw)
+        correct_papw = jnp.concat(flats)
 
-    #     jnp.allclose(a_j, correct_a_J)
-    #     jnp.allclose(p_papw_pred, correct_papw)
 
-    # def test_get_influence_estimate(self):
+        jnp.allclose(a_j, correct_a_J)
+        jnp.allclose(p_papw_pred, correct_papw)
 
-    #     _, env = self.rnnLearner.rnnWithGradient.func(
-    #         self.dialect, self.x_input, self.initEnv
-    #     )
-    #     A_pred = env.uoro.A
-    #     B_pred = env.uoro.B
-    #     flats_, _ = jax.tree.flatten(B_pred)
-    #     B_pred = jnp.concat(flats_)
+    def test_get_influence_estimate(self):
 
-    #     p0 = jnp.sqrt(jnp.sqrt(jnp.array(5.0)))
-    #     p1 = jnp.sqrt(jnp.sqrt(jnp.array(11.0)))
-    #     M_proj = jnp.array([[1, 1, 2, 2, 1], [-1, -1, -2, -2, -1]])
-    #     A_correct = p0 * jnp.array([1, 1]) + p1 * jnp.array([1, -1])
-    #     B_correct = (1 / p0) * jnp.ones((2, 5)) + (1 / p1) * M_proj
-    #     B_correct = Gradient[RnnParameter](
-    #         RnnParameter(
-    #             w_rec=PARAMETER(jnp.ravel(B_correct)),
-    #             w_out=PARAMETER(jnp.zeros_like(self.initEnv.parameter.w_out)),
-    #         )
-    #     )
-    #     flats_, _ = jax.tree.flatten(B_correct)
-    #     B_correct = jnp.concat(flats_)
+        model = eqx.filter_jit(self.rnnLearner.rnnWithGradient.func)
+        safe_model = model.lower(self.dialect, self.x_input, self.initEnv).compile()
+        _, env = safe_model(
+            self.dialect, self.x_input, self.initEnv
+        )
+        A_pred = env.uoro.A
+        B_pred = env.uoro.B
+        flats_, _ = jax.tree.flatten(B_pred)
+        B_pred = jnp.concat(flats_)
 
-    #     jnp.allclose(A_pred, A_correct)
-    #     jnp.allclose(B_pred, B_correct)
+        p0 = jnp.sqrt(jnp.sqrt(jnp.array(5.0)))
+        p1 = jnp.sqrt(jnp.sqrt(jnp.array(11.0)))
+        M_proj = jnp.array([[1, 1, 2, 2, 1], [-1, -1, -2, -2, -1]])
+        A_correct = p0 * jnp.array([1, 1]) + p1 * jnp.array([1, -1])
+        B_correct = (1 / p0) * jnp.ones((2, 5)) + (1 / p1) * M_proj
+        B_correct = Gradient[RnnParameter](
+            RnnParameter(
+                w_rec=PARAMETER(jnp.ravel(B_correct)),
+                w_out=PARAMETER(jnp.zeros_like(self.initEnv.parameter.w_out)),
+            )
+        )
+        flats_, _ = jax.tree.flatten(B_correct)
+        B_correct = jnp.concat(flats_)
 
-    # def test_get_rec_grads(self):
+        jnp.allclose(A_pred, A_correct)
+        jnp.allclose(B_pred, B_correct)
 
-    #     A, B = self.initEnv.uoro.A, self.initEnv.uoro.B
-    #     error = pure(Gradient(jnp.ones(2) * 0.5))
-    #     rec_grads, _ = self.uoro.creditAssign(A, B, error).func(
-    #         self.dialect, self.x_input, self.initEnv
-    #     )
-    #     flats_, _ = jax.tree.flatten(rec_grads)
-    #     rec_grads = jnp.concat(flats_)
+    def test_get_rec_grads(self):
 
-    #     correct_rec_grads = jnp.ones((2, 5))
-    #     correct_rec_grads = Gradient[RnnParameter](
-    #         RnnParameter(
-    #             w_rec=PARAMETER(jnp.ravel(correct_rec_grads)),
-    #             w_out=PARAMETER(jnp.zeros_like(self.initEnv.parameter.w_out)),
-    #         )
-    #     )
-    #     flats_, _ = jax.tree.flatten(correct_rec_grads)
-    #     correct_rec_grads = jnp.concat(flats_)
+        A, B = self.initEnv.uoro.A, self.initEnv.uoro.B
+        error = pure(Gradient(jnp.ones(2) * 0.5))
+        model = eqx.filter_jit(self.uoro.creditAssign(A, B, error).func)
+        safe_model = model.lower(self.dialect, self.x_input, self.initEnv).compile()
+        rec_grads, _ = safe_model(
+            self.dialect, self.x_input, self.initEnv
+        )
+        flats_, _ = jax.tree.flatten(rec_grads)
+        rec_grads = jnp.concat(flats_)
 
-    #     jnp.allclose(rec_grads, correct_rec_grads)
+        correct_rec_grads = jnp.ones((2, 5))
+        correct_rec_grads = Gradient[RnnParameter](
+            RnnParameter(
+                w_rec=PARAMETER(jnp.ravel(correct_rec_grads)),
+                w_out=PARAMETER(jnp.zeros_like(self.initEnv.parameter.w_out)),
+            )
+        )
+        flats_, _ = jax.tree.flatten(correct_rec_grads)
+        correct_rec_grads = jnp.concat(flats_)
+
+        jnp.allclose(rec_grads, correct_rec_grads)

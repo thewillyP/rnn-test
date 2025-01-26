@@ -1,10 +1,37 @@
 import jax
-from recurrent.mytypes import PRNG
+from recurrent.mytypes import *
+import equinox as eqx
+import jax.numpy as jnp
+
+from recurrent.parameters import RnnParameter
 
 
 def prng_split(key: PRNG) -> tuple[PRNG, PRNG]:
     new_key, prng = jax.random.split(key)
     return PRNG(prng), PRNG(new_key)
+
+
+def zeroedInfluenceTensor(out: int, param: eqx.Module):
+    def update(x: jax.Array):
+        n = jnp.size(x)
+        return jnp.zeros((out, n))
+
+    return jax.tree.map(update, param)
+
+
+def uoroBInit(param: RnnParameter, key: jax.Array):
+
+    return Gradient[RnnParameter](
+        RnnParameter(
+            w_rec=PARAMETER(jax.random.normal(key, param.w_rec.shape)),
+            w_out=PARAMETER(jnp.zeros_like(param.w_out)),
+        )
+    )
+
+
+def pytreeNumel(tree: eqx.Module):
+    leafs, _ = jax.tree.flatten(tree)
+    return sum((jnp.size(x) for x in leafs))
 
 
 # from typing import Iterable, Iterator, TypeVar
