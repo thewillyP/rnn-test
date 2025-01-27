@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import jax
 from recurrent.mytypes import *
 import equinox as eqx
@@ -36,6 +37,26 @@ def pytreeNumel(tree: eqx.Module):
 
 def pytreeSumZero[T: eqx.Module](tree: T) -> T:
     return jax.tree.map(lambda x: jnp.zeros_like(x), tree)
+
+
+@dataclass(frozen=True)
+class SplitResult:
+    reshaped: jax.Array
+    leftover: jax.Array
+
+
+def split_and_reshape(arr: jax.Array, T: int):
+    n_complete = (len(arr) // T) * T
+    main_part = arr[:n_complete].reshape((-1, T) + arr.shape[1:])
+    extra_part = arr[n_complete:]
+    return SplitResult(main_part, extra_part)
+
+
+def pytree_split[Tree: eqx.Module](tree: Tree, T: int) -> tuple[Tree, Tree]:
+    reshaped_pytree_: Tree = jax.tree.map(lambda arr: split_and_reshape(arr, T), tree)
+    reshaped_pytree = jax.tree.map(lambda x: x.reshaped, reshaped_pytree_)
+    leftover_pytree = jax.tree.map(lambda x: x.leftover, reshaped_pytree_)
+    return reshaped_pytree, leftover_pytree
 
 
 # from typing import Iterable, Iterator, TypeVar

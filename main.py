@@ -1,6 +1,5 @@
 # %%
 import time
-from typing import Iterable
 
 import optax
 from recurrent.datarecords import InputOutput
@@ -30,8 +29,8 @@ import jax
 """
 Todo
 1) implement vanilla rnn training loop 
-2) implement feedforward to show how easy it is
-3) implement oho to show how easy it is
+2) implement oho to show how easy it is
+3) implement feedforward to show how easy it is
 """
 
 
@@ -114,6 +113,7 @@ def trainStep(dataloader: Traversable[InputOutput]):
             B=uoroBInit(parameter, prng3),
         ),
         prng=rng_key,
+        logs=Logs(loss=jnp.array(0, dtype=jnp.float32)),
     )
 
     # truncation = 10
@@ -164,31 +164,45 @@ def trainStep(dataloader: Traversable[InputOutput]):
         RnnParameter,
         jax.Array,
         PREDICTION,
-    ]()  #
+    ]()  # implement feedforward to show how easy it is
 
-    rnnLearner = rtrl.onlineLearning(
+    onlineLearner = rtrl.onlineLearning(
         doRnnStep(),
         doRnnReadout(),
         lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b)),
+    )
+
+    onlineLearner_folded = foldRnnLearner(onlineLearner, initEnv.parameter)
+
+    rnnLearner = endowAverageGradients(
+        onlineLearner_folded, 10, dataloader.value.x.shape[0]
     )
     # gr, _ = rnnLearner.rnnWithGradient.func(dialect, dataloader[0], initEnv)
 
     # _, initEnv = rnnLearner.trainStep(doSgdStep).func(dialect, dataloader, initEnv)
 
     def compile():
-        model = repeatM(rnnLearner.rnnWithGradient.flat_map(doSgdStep)).func
+        print("recompiled")
+        model = rnnLearner.rnnWithGradient.flat_map(doSgdStep).func
 
-        lossFn = foldM(
-            lambda acc: rnnLearner.rnnWithLoss.fmap(lambda l: l + acc), LOSS(0)
-        )
-
-        loss_jit = lossFn.func
+        # lossFn = foldM(
+        #     lambda acc: rnnLearner.rnnWithLoss.fmap(lambda l: l + acc), LOSS(0)
+        # )
 
         # predictFn = traverse(rnnLearner.rnn).func
 
         _, final_env = model(dialect, dataloader, initEnv)
+        _, final_env = model(dialect, dataloader, final_env)
+        _, final_env = model(dialect, dataloader, final_env)
+        _, final_env = model(dialect, dataloader, final_env)
+        _, final_env = model(dialect, dataloader, final_env)
+        _, final_env = model(dialect, dataloader, final_env)
+        _, final_env = model(dialect, dataloader, final_env)
+        _, final_env = model(dialect, dataloader, final_env)
+        _, final_env = model(dialect, dataloader, final_env)
+        _, final_env = model(dialect, dataloader, final_env)
 
-        loss, _ = loss_jit(dialect, dataloader, final_env)
+        loss, _ = rnnLearner.rnnWithLoss.func(dialect, dataloader, final_env)
 
         return loss
 
@@ -226,7 +240,7 @@ def trainStep(dataloader: Traversable[InputOutput]):
 
 def main():
 
-    length = 10_000
+    length = 1000
     rng_key = jax.random.key(0)
     X, Y = generate_add_task_dataset(length, 5, 9, 1, rng_key)
     dataset = Traversable[InputOutput](InputOutput(X, Y))

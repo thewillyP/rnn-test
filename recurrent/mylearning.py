@@ -15,11 +15,17 @@ from recurrent.objectalgebra.typeclasses import *
 from recurrent.mytypes import *
 from recurrent.monad import *
 from recurrent.parameters import Logs, RnnParameter, SgdParameter
-from recurrent.util import pytreeSumZero
+from recurrent.util import pytree_split, pytreeSumZero
 
 
 type LossFn[A, B] = Callable[[A, B], LOSS]
 type GR[A] = Gradient[A]
+
+
+class RnnLibrary[DL, D, E, P, Pr](NamedTuple):
+    rnn: Fold[DL, D, E, P]
+    rnnWithLoss: Fold[DL, D, E, LOSS]
+    rnnWithGradient: Fold[DL, D, E, Gradient[Pr]]
 
 
 @eqx.filter_jit
@@ -165,6 +171,54 @@ def doAvgGradient[
     return foldM(doWeight, gr0)
 
 
+def endowAverageGradients[
+    Dl: GetParameter[E, Pr], D: Module, E, P, Pr: Module
+](
+    rnnLibrary: RnnLibrary[Dl, Traversable[D], E, P, Pr], trunc: int, N: int
+) -> RnnLibrary[Dl, Traversable[D], E, P, Pr]:
+    @do()
+    def avgGradient() -> G[Fold[Dl, Traversable[D], E, Gradient[Pr]]]:
+        n_complete = (N // trunc) * trunc
+        n_leftover = N - n_complete
+        dl = yield from ProxyDl[Dl].askDl()
+        pr = yield from dl.getParameter()
+        ds = yield from ProxyR[Traversable[D]].ask()
+
+        ds_scannable_, ds_leftover = pytree_split(ds, trunc)
+        ds_scannable: Traversable[Traversable[D]] = Traversable(ds_scannable_)
+        # ORDER MATTERS, need to scan first, then do the leftover, since they are contiguous activations
+        gr_scanned = yield from doAvgGradient(
+            rnnLibrary.rnnWithGradient,
+            lambda _: 1.0,
+            Gradient(pytreeSumZero(pr)),
+        ).switch_data(ds_scannable)
+        e = yield from ProxyS[E].get()
+
+        def ifLeftover(leftover) -> Fold[Dl, Traversable[D], E, Gradient[Pr]]:
+            gr_leftover, e_new = rnnLibrary.rnnWithGradient.func(dl, leftover, e)
+            gr: Gradient[Pr] = jax.tree.map(
+                lambda x, y: (trunc / N) * x + (n_leftover / N) * y,
+                gr_scanned,
+                gr_leftover,
+            )
+            return gr, e_new
+
+        gr_new, e_final = jax.lax.cond(
+            n_leftover == 0,
+            lambda _: (jax.tree.map(lambda x: (trunc / N) * x, gr_scanned), e),
+            ifLeftover,
+            ds_leftover,
+        )
+        _ = yield from put(e_final)
+        return pure(gr_new)
+
+    return RnnLibrary(
+        rnn=rnnLibrary.rnn,
+        rnnWithLoss=rnnLibrary.rnnWithLoss,
+        rnnWithGradient=avgGradient(),
+    )
+
+
 @do()
 def doBatchGradients[
     Dl, D: Module | Array, E, Pr: Module
@@ -183,12 +237,6 @@ def doLog[Dl: PutLog[E, Logs], D, E](loss: LOSS) -> G[Fold[Dl, D, E, LOSS]]:
     dl = yield from ProxyDl[Dl].askDl()
     _ = yield from dl.putLog(Logs(loss=loss))
     return pure(loss)
-
-
-class RnnLibrary[DL, D, E, P, Pr](NamedTuple):
-    rnn: Fold[DL, D, E, P]
-    rnnWithLoss: Fold[DL, D, E, LOSS]
-    rnnWithGradient: Fold[DL, D, E, Gradient[Pr]]
 
 
 class _OfL[D, E, A, Pr, X, Y, Z](

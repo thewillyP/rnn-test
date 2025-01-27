@@ -44,6 +44,12 @@ class Fold[D, E, S, A](NamedTuple):
 
         return Fold(next)  # type: ignore
 
+    def switch_data[E_new](self, data: E):
+        def next(d: D, _: E_new, state: S):
+            return self.func(d, data, state)
+
+        return Fold(next)  # type: ignore
+
 
 def pure[D, E, S, A](value: A) -> Fold[D, E, S, A]:
     return Fold(lambda _d, _e, state: (value, state))
