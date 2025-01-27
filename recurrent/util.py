@@ -34,6 +34,10 @@ def pytreeNumel(tree: eqx.Module):
     return sum((jnp.size(x) for x in leafs))
 
 
+def pytreeSumZero[T: eqx.Module](tree: T) -> T:
+    return jax.tree.map(lambda x: jnp.zeros_like(x), tree)
+
+
 # from typing import Iterable, Iterator, TypeVar
 # import torch
 # from recurrent.mytypes import *

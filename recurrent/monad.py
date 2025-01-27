@@ -147,6 +147,10 @@ def traverse[Dl, D, E, B](m: "Fold[Dl, D, E, B]"):
     return Fold(wrapper)
 
 
+def accumulate[Dl, D, E, B](m: Fold[Dl, D, E, B], fn: Callable[[B, B], B], init: B):
+    return foldM(lambda accum: m.fmap(lambda value: fn(accum, value)), init)
+
+
 def foldM[Dl, D, E, B](func: Callable[[B], Fold[Dl, D, E, B]], init: B):
     def wrapper(dl: Dl, ds: Traversable[D], state: E):
         def fold(pair: tuple[B, E], d: D):

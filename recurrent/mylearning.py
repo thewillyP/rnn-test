@@ -9,11 +9,13 @@ import equinox as eqx
 from equinox import Module
 from operator import add
 
+from recurrent.myfunc import flip
 from recurrent.objectalgebra.typeclasses import *
 
 from recurrent.mytypes import *
 from recurrent.monad import *
 from recurrent.parameters import Logs, RnnParameter, SgdParameter
+from recurrent.util import pytreeSumZero
 
 
 type LossFn[A, B] = Callable[[A, B], LOSS]
@@ -176,25 +178,17 @@ def doBatchGradients[
     return pure(Gradient(gr_summed))
 
 
-class RnnLibrary[DL: PutLog[E, Logs], D, E, P, Pr](NamedTuple):
+@do()
+def doLog[Dl: PutLog[E, Logs], D, E](loss: LOSS) -> G[Fold[Dl, D, E, LOSS]]:
+    dl = yield from ProxyDl[Dl].askDl()
+    _ = yield from dl.putLog(Logs(loss=loss))
+    return pure(loss)
+
+
+class RnnLibrary[DL, D, E, P, Pr](NamedTuple):
     rnn: Fold[DL, D, E, P]
     rnnWithLoss: Fold[DL, D, E, LOSS]
-    lossForGrad__: Fold[DL, D, E, LOSS]
-    rnnWithGradient__: Callable[[Fold[DL, D, E, LOSS]], Fold[DL, D, E, Gradient[Pr]]]
-
-    def lossForGradLogged__(self):
-        @do()
-        def next() -> G[Fold[DL, D, E, LOSS]]:
-            dl = yield from ProxyDl[DL].askDl()
-            loss = yield from self.lossForGrad__
-            _ = yield from dl.putLog(Logs(loss=loss))
-            return pure(loss)
-
-        return next()
-
-    @property
-    def rnnWithGradient(self) -> Fold[DL, D, E, Gradient[Pr]]:
-        return self.rnnWithGradient__(self.lossForGradLogged__())
+    rnnWithGradient: Fold[DL, D, E, Gradient[Pr]]
 
 
 class _OfL[D, E, A, Pr, X, Y, Z](
@@ -205,6 +199,7 @@ class _OfL[D, E, A, Pr, X, Y, Z](
     HasInput[D, X],
     HasPredictionInput[D, Y],
     HasLabel[D, Z],
+    PutLog[E, Logs],
     Protocol,
 ): ...
 
@@ -228,18 +223,30 @@ def offlineLearning[
             loss = yield from rnnStep.flat_map(doLoss(computeLoss))
             return pure(LOSS(accum + loss))
 
-        return foldM(accumFn, LOSS(jnp.array(0.0)))
+        return foldM(accumFn, LOSS(jnp.array(0.0))).flat_map(doLog)
 
     @do()
-    def rnnWithGradient(lossM: Fold[Dl, Traversable[D], E, LOSS]):
+    def rnnWithGradient():
         dl = yield from ProxyDl[Dl].askDl()
-        return doGradient(lossM, dl.getParameter(), dl.putParameter)
+        return doGradient(rnnWithLoss(), dl.getParameter(), dl.putParameter)
 
     return RnnLibrary[Dl, Traversable[D], E, Traversable[P], Pr](
         rnn=rnn,
         rnnWithLoss=rnnWithLoss(),
-        lossForGrad__=rnnWithLoss(),
-        rnnWithGradient__=rnnWithGradient,
+        rnnWithGradient=rnnWithGradient(),
+    )
+
+
+def foldRnnLearner[
+    Dl, D, E, P, Pr: Module
+](rnnLearner: RnnLibrary[Dl, D, E, P, Pr], pr: Pr):
+    initGr = pytreeSumZero(pr)
+    return RnnLibrary[Dl, Traversable[D], E, Traversable[P], Pr](
+        rnn=traverse(rnnLearner.rnn),
+        rnnWithLoss=accumulate(rnnLearner.rnnWithLoss, add, LOSS(jnp.array(0.0))),
+        rnnWithGradient=accumulate(
+            rnnLearner.rnnWithGradient, eqx.apply_updates, Gradient(initGr)
+        ),
     )
 
 
@@ -249,6 +256,7 @@ class _PfL[D, E, A, Pr, Z](
     PutParameter[E, Pr],
     GetParameter[E, Pr],
     HasLabel[D, Z],
+    PutLog[E, Logs],
     Protocol,
 ): ...
 
@@ -295,20 +303,17 @@ class PastFacingLearn[Alg: _PfL[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](ABC)
         computeLoss: LossFn[Z, P],
     ):
 
-        immedL = predictionStep.flat_map(doLoss(computeLoss))
+        immedL = predictionStep.flat_map(doLoss(computeLoss)).flat_map(doLog)
 
         @do()
-        def total_grad(
-            lossM: Fold[Alg, D, E, LOSS]
-        ) -> G[Fold[Alg, D, E, Gradient[Pr]]]:
+        def total_grad() -> G[Fold[Alg, D, E, Gradient[Pr]]]:
             dl = yield from ProxyDl[Alg].askDl()
 
-            # state issue, updating order is all wrong
-            e_signal = doGradient(lossM, dl.getActivation(), dl.putActivation)
+            e_signal = doGradient(immedL, dl.getActivation(), dl.putActivation)
 
             grad_rec = yield from self.creditAndUpdateState(e_signal, activationStep)
-            # order matters, need to update actv b4 grad flow the readout
-            grad_o = yield from doGradient(lossM, dl.getParameter(), dl.putParameter)
+            # order matters, need to update readout AFTER updating activation
+            grad_o = yield from doGradient(immedL, dl.getParameter(), dl.putParameter)
 
             gradient: Gradient[Pr]
             gradient = jax.tree.map(lambda x, y: x + y, grad_o, grad_rec)
@@ -317,8 +322,7 @@ class PastFacingLearn[Alg: _PfL[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](ABC)
         return RnnLibrary[Alg, D, E, P, Pr](
             rnn=activationStep.then(predictionStep),
             rnnWithLoss=activationStep.then(immedL),
-            lossForGrad__=immedL,
-            rnnWithGradient__=total_grad,
+            rnnWithGradient=total_grad(),
         )
 
 

@@ -21,6 +21,13 @@ def flipTuple[A, B](pair: tuple[A, B]) -> tuple[B, A]:
     return (b, a)
 
 
+def flip[A, B, C](f: Callable[[A, B], C]) -> Callable[[B, A], C]:
+    def flip_(b: B, a: A) -> C:
+        return f(a, b)
+
+    return flip_
+
+
 # def sequenceF2(
 #     fs: Iterable[Callable[[A, B], C]]
 # ) -> Callable[[A], Iterator[Callable[[B], C]]]:
@@ -145,13 +152,6 @@ def flipTuple[A, B](pair: tuple[A, B]) -> tuple[B, A]:
 
 # # def liftA1(f: Callable[[B], C], g: Callable[[A], B]) -> Callable[[A], C]:
 # #     return flip(compose2)
-
-
-# def flip(f: Callable[[A, B], C]) -> Callable[[B, A], C]:
-#     def flip_(b: B, a: A) -> C:
-#         return f(a, b)
-
-#     return flip_
 
 
 # def apply(f: Callable[[A], B], x: A) -> B:
