@@ -35,6 +35,7 @@ class RnnGodState[A: eqx.Module, B: eqx.Module, C: eqx.Module](eqx.Module):
     uoro: UORO_Param[A]
     prng: PRNG
     logs: Logs
+    oho_logs: Logs
 
 
 def batch_rtrl[A: eqx.Module, B: eqx.Module, C: eqx.Module]() -> RnnGodState[A, B, C]:
@@ -52,6 +53,7 @@ def batch_rtrl[A: eqx.Module, B: eqx.Module, C: eqx.Module]() -> RnnGodState[A, 
         uoro=None,
         prng=None,
         logs=0,
+        oho_logs=0,
     )
 
 
@@ -72,6 +74,7 @@ def batch_vanilla[
         uoro=None,
         prng=None,
         logs=0,
+        oho_logs=0,
     )
 
 

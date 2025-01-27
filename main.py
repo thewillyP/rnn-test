@@ -1,6 +1,7 @@
 # %%
 import time
 
+import jax.experimental
 import optax
 from recurrent.datarecords import InputOutput
 from recurrent.monad import foldM
@@ -8,7 +9,12 @@ from recurrent.mylearning import *
 from recurrent.myrecords import RnnGodState
 from recurrent.mytypes import *
 
-from recurrent.objectalgebra.interpreter import BaseRnnInterpreter
+from recurrent.objectalgebra.interpreter import (
+    BaseRnnInterpreter,
+    OhoInterpreter,
+    OhoRnnTrainInterpreter,
+    OhoRnnValidationInterpreter,
+)
 
 from matplotlib import pyplot as plt
 from recurrent.parameters import (
@@ -57,9 +63,9 @@ def constructRnnEnv(rng_key: Array):
     n_h = 32
     n_in = 2
     n_out = 2
-    learning_rate = jnp.array(
-        [0.001]
-    )  # parameters should never be floats or single value
+    # parameters should never be floats or single value
+    learning_rate = jnp.array([0.0001])
+    meta_learning_rate = jnp.array([0.0001])
     alpha = 1.0
 
     rng_key, prng = jax.random.split(rng_key)
@@ -81,22 +87,25 @@ def constructRnnEnv(rng_key: Array):
         n_h=n_h, n_in=n_in, n_out=n_out, alpha=alpha, activationFn=jnp.tanh
     )
     sgd = SgdParameter(learning_rate=LEARNING_RATE(learning_rate))
+    sgd_mlr = SgdParameter(learning_rate=LEARNING_RATE(meta_learning_rate))
 
     rng_key, prng1 = jax.random.split(rng_key)
     rng_key, prng2 = jax.random.split(rng_key)
     rng_key, prng3 = jax.random.split(rng_key)
 
+    activation = ACTIVATION(jax.random.normal(prng1, (n_h,)))
+
     initEnv = RnnGodState[RnnParameter, SgdParameter, SgdParameter](
         # activation=ACTIVATION(torch.randn(batch_size, n_h)),
         # activation=ACTIVATION(torch.randn(n_h)),
-        activation=ACTIVATION(jax.random.normal(prng1, (n_h,))),
-        influenceTensor=Gradient[RnnParameter](zeroedInfluenceTensor(n_h, parameter)),
-        ohoInfluenceTensor=Gradient[SgdParameter](
-            zeroedInfluenceTensor(pytreeNumel(sgd), sgd)
+        activation=activation,
+        influenceTensor=Gradient[RnnParameter](
+            eqx.filter_jacrev(lambda _: activation)(parameter)
         ),
+        ohoInfluenceTensor=Gradient(eqx.filter_jacrev(lambda _: parameter)(sgd)),
         parameter=parameter,
         hyperparameter=sgd,
-        metaHyperparameter=sgd,
+        metaHyperparameter=sgd_mlr,
         rnnConfig=rnnConfig,
         rnnConfig_bilevel=rnnConfig,
         rfloConfig=RfloConfig(rflo_alpha=alpha),
@@ -107,7 +116,9 @@ def constructRnnEnv(rng_key: Array):
         ),
         prng=rng_key,
         logs=Logs(loss=jnp.array(0, dtype=jnp.float32)),
+        oho_logs=Logs(loss=jnp.array(0, dtype=jnp.float32)),
     )
+
     return rng_key, initEnv
 
 
@@ -123,9 +134,9 @@ def mainLoop(
 
     rng_key = jax.random.key(0)
     rng_key, prng = jax.random.split(rng_key)
-    rng_key, initEnv = constructRnnEnv(rng_key)
+    rng_key, initEnv = constructRnnEnv(prng)
 
-    rtrl = UORO[
+    rtrl = RTRL[
         DL,
         InputOutput,
         RnnGodState[RnnParameter, SgdParameter, SgdParameter],
@@ -133,7 +144,8 @@ def mainLoop(
         RnnParameter,
         jax.Array,
         PREDICTION,
-    ](lambda key, shape: jax.random.uniform(key, shape, minval=-1.0, maxval=1.0))
+    ]()
+    # lambda key, shape: jax.random.uniform(key, shape, minval=-1.0, maxval=1.0)
 
     onlineLearner = rtrl.onlineLearning(
         doRnnStep(),
@@ -163,28 +175,220 @@ def mainLoop(
         # print(time.time() - start)
 
 
-# %%
+def ohoLoop(
+    dataloader: Iterable[Traversable[OhoInputOutput]],
+    t_series_length: int,
+    trunc_length: int,
+):
+
+    type Train_Dl = OhoRnnTrainInterpreter[RnnParameter, SgdParameter, SgdParameter]
+    type Valid_Dl = OhoRnnValidationInterpreter[
+        RnnParameter, SgdParameter, SgdParameter
+    ]
+    type OHO = OhoInterpreter[RnnParameter, SgdParameter, SgdParameter]
+    type ENV = RnnGodState[RnnParameter, SgdParameter, SgdParameter]
+
+    rng_key = jax.random.key(0)
+    rng_key, prng = jax.random.split(rng_key)
+    rng_key, initEnv = constructRnnEnv(prng)
+
+    rtrl = RFLO[
+        Train_Dl | Valid_Dl,
+        OhoInputOutput,
+        ENV,
+        ACTIVATION,
+        RnnParameter,
+        jax.Array,
+        PREDICTION,
+    ]()
+    # lambda key, shape: jax.random.uniform(key, shape, minval=-1.0, maxval=1.0)
+
+    onlineLearner = rtrl.onlineLearning(
+        doRnnStep(),
+        doRnnReadout(),
+        lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b)),
+    )
+
+    onlineLearner_folded = foldRnnLearner(onlineLearner, initEnv.parameter)
+
+    rnnLearner = endowAverageGradients(
+        onlineLearner_folded, trunc_length, t_series_length
+    )
+
+    trainDialect = OhoRnnTrainInterpreter[RnnParameter, SgdParameter, SgdParameter]()
+    validationDialect = OhoRnnValidationInterpreter[
+        RnnParameter, SgdParameter, SgdParameter
+    ]()
+    dialect = OhoInterpreter[RnnParameter, SgdParameter, SgdParameter](trainDialect)
+
+    oho_rtrl = RTRL[
+        OHO,
+        OhoInputOutput,
+        ENV,
+        RnnParameter,
+        SgdParameter,
+        jax.Array,
+        Traversable[PREDICTION],
+    ]()
+
+    def compute_loss(label: jax.Array, prediction: Traversable[PREDICTION]):
+        return LOSS(optax.safe_softmax_cross_entropy(label, prediction.value))
+
+    oho: RnnLibrary[
+        OHO, Traversable[OhoInputOutput], ENV, Traversable[PREDICTION], SgdParameter
+    ]
+    oho = endowOho(
+        rnnLearner, doSgdStep, trainDialect, validationDialect, oho_rtrl, compute_loss
+    )
+
+    learner = oho.rnnWithGradient.flat_map(doSgdStep)
+
+    lossFn = eqx.filter_jit(rnnLearner.rnnWithLoss.func)
+
+    for time_series in dataloader:
+        # start = time.time()
+        final_env = trainStep(learner, dialect, time_series, initEnv)
+        initEnv = final_env
+        loss, _ = lossFn(dialect, time_series, final_env)
+        print(loss / t_series_length)
+        # print(time.time() - start)
+
+
+def onlineLearnerLoop(
+    dataloader: Traversable[InputOutput],
+    t_series_length: int,
+):
+
+    type DL = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]
+    type ENV = RnnGodState[RnnParameter, SgdParameter, SgdParameter]
+
+    rng_key = jax.random.key(0)
+    rng_key, prng = jax.random.split(rng_key)
+    rng_key, initEnv = constructRnnEnv(prng)
+
+    rtrl = UORO[
+        DL,
+        InputOutput,
+        RnnGodState[RnnParameter, SgdParameter, SgdParameter],
+        ACTIVATION,
+        RnnParameter,
+        jax.Array,
+        PREDICTION,
+    ](lambda key, shape: jax.random.uniform(key, shape, minval=-1.0, maxval=1.0))
+    # lambda key, shape: jax.random.uniform(key, shape, minval=-1.0, maxval=1.0)
+
+    onlineLearner = rtrl.onlineLearning(
+        doRnnStep(),
+        doRnnReadout(),
+        lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b)),
+    )
+
+    learner = onlineLearner.rnnWithGradient.flat_map(doSgdStep)
+
+    losses = []
+
+    def appendLoss(loss):
+        losses.append(loss / t_series_length)
+        # print(loss / t_series_length)
+
+    @do()
+    def next():
+        print("recompiled")
+        e = yield from ProxyS[ENV].get()
+        dl = yield from ProxyDl[DL].askDl()
+        loss, _ = accumulate(onlineLearner.rnnWithLoss, add, 0).func(dl, dataloader, e)
+        jax.experimental.io_callback(appendLoss, None, loss)
+
+        return onlineLearner.rnnWithGradient.flat_map(doSgdStep)
+
+    dialect = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]()
+
+    # lossFn = eqx.filter_jit(accumulate(onlineLearner.rnnWithLoss, add, 0).func)
+
+    # .lower((dialect, dataloader, initEnv))
+    # .compile()
+    start = time.time()
+    model = (
+        eqx.filter_jit(repeatM(next()).func)
+        .lower(dialect, dataloader, initEnv)
+        .compile()
+    )
+    jax.block_until_ready(model(dialect, dataloader, initEnv))
+    print(f"Train Time: {time.time() - start}")
+
+    # for time_series in map(
+    #     lambda x: InputOutput(x[0], x[1]), zip(dataloader.value.x, dataloader.value.y)
+    # ):
+    #     # start = time.time()
+    #     loss, _ = lossFn(dialect, dataloader, initEnv)
+    #     losses.append(loss / t_series_length)
+    #     print(loss / t_series_length)
+    #     final_env = trainStep(learner, dialect, time_series, initEnv)
+    #     initEnv = final_env
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(losses, linestyle="-", color="b", label="Loss")
+    plt.title("Training Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.grid(True, linestyle="--", alpha=0.6)
+    plt.legend()
+    plt.tight_layout()
+
+    # Save the plot to disk
+    output_path = "test2.png"
+    plt.savefig(output_path)
+    print(f"Plot saved to {output_path}")
+
+
+def main2():
+    N = 10_000
+    rng_key = jax.random.key(0)
+    rng_key, prng1, prng2 = jax.random.split(rng_key, 3)
+    X, Y = generate_add_task_dataset(N, 5, 9, 1, prng1)
+
+    dataloader = Traversable(InputOutput(x=X, y=Y))
+
+    onlineLearnerLoop(dataloader, N)
 
 
 def main():
 
-    N = 1_000_000
+    N = 100_000
+    N_val = 10_000
     t_series_length = 100  # how much time series goines into ONE param update
     trunc_length = 1  # controls how much avging done in one t_series
     # if trunc_length = 1, then divide by t_series_length. if trunc_length = t_series_length, then no normalization done
     rng_key = jax.random.key(0)
-    X, Y = generate_add_task_dataset(N, 5, 9, 1, rng_key)
+    rng_key, prng1, prng2 = jax.random.split(rng_key, 3)
+    X, Y = generate_add_task_dataset(N, 5, 9, 1, prng1)
+    X_val, Y_val = generate_add_task_dataset(N_val, 5, 9, 1, prng2)
 
     def transform(arr: Array, _t: int):
-        return jnp.split(arr, _t)
+        return arr.reshape((_t, -1) + arr.shape[1:])
 
     X = transform(X, N // t_series_length)
     Y = transform(Y, N // t_series_length)
+    # X_val = transform(X_val, N // t_series_length)
+    # Y_val = transform(Y_val, N // t_series_length)
+
     dataloader = map(
-        lambda data: Traversable[InputOutput](InputOutput(data[0], data[1])), zip(X, Y)
+        lambda data: Traversable(
+            OhoInputOutput(
+                train=InputOutput(x=data[0], y=data[1]),
+                val=InputOutput(x=X_val, y=Y_val),
+            )
+        ),
+        zip(X, Y),
     )
 
-    mainLoop(dataloader, t_series_length, trunc_length)
+    ohoLoop(dataloader, t_series_length, trunc_length)
+
+    # dataloader = map(
+    #     lambda data: Traversable[InputOutput](InputOutput(data[0], data[1])), zip(X, Y)
+    # )
+
+    # mainLoop(dataloader, t_series_length, trunc_length)
 
     # dataset = map(lambda data: InputOutput(data[0], data[1]), zip(X, Y))
     # dataset = list(dataset)

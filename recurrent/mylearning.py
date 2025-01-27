@@ -9,6 +9,7 @@ import equinox as eqx
 from equinox import Module
 from operator import add
 
+from recurrent.datarecords import OhoInputOutput
 from recurrent.myfunc import flip
 from recurrent.objectalgebra.typeclasses import *
 
@@ -246,7 +247,6 @@ class _OfL[D, E, A, Pr, X, Y, Z](
     PutParameter[E, Pr],
     GetParameter[E, Pr],
     HasInput[D, X],
-    HasPredictionInput[D, Y],
     HasLabel[D, Z],
     PutLog[E, Logs],
     Protocol,
@@ -439,9 +439,16 @@ class RTRL[Alg: _Infl[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](
         parametrized = yield from self.reparameterize(actvStep)
 
         # I take the jvp instead of j @ v, bc I'd like to 1) do a hvp 2) forward over reverse is efficient: https://jax.readthedocs.io/en/latest/notebooks/autodiff_cookbook.html
+        print(influenceTensor)
+        print(a0)
+        print(p0)
+
         immedJacInflProduct: Gradient[Pr]
         immedJacInflProduct = jax.tree.map(
-            lambda x: jacobian_matrix_product(lambda a: parametrized(a, p0)[0], a0, x),
+            lambda x, y: jacobian_matrix_product(
+                lambda a: parametrized(a, p0)[0], x, y
+            ),
+            a0,
             influenceTensor,
         )
 
@@ -593,7 +600,7 @@ class UORO[Alg: _UO[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](
 
 @eqx.filter_jit
 def trainStep[
-    Dl, D, E, P, Pr: Module
+    Dl, D, E
 ](
     learner: Fold[Dl, D, E, Unit],
     dialect: Dl,
@@ -603,3 +610,36 @@ def trainStep[
     model = learner.func
     _, final_env = model(dialect, t_series, initEnv)
     return final_env
+
+
+def endowOho[
+    OHO: PastFacingLearn[OHO_Dl, D, E, Pr, OHO_Pr, Z, P],
+    OHO_Dl: _PfL[D, E, Pr, OHO_Pr, Z],
+    OHO_Pr: Module,
+    Dl1: GetParameter[E, Pr],
+    Dl2,
+    D,
+    E,
+    P,
+    Pr,
+    Z,
+](
+    rnnLearner: RnnLibrary[Dl1 | Dl2, D, E, P, Pr],
+    paramFn: ParamFn[Dl1 | Dl2, D, E, Pr],
+    dl1: Dl1,
+    dl2: Dl2,
+    oho: OHO,
+    computeLoss: LossFn[Z, P],
+):
+    @do()
+    def parameter_step() -> G[Fold[Dl1, D, E, Pr]]:
+        dl = yield from ProxyDl[Dl1].askDl()
+        return rnnLearner.rnnWithGradient.flat_map(paramFn).then(dl.getParameter())
+
+    activationStep: Fold[OHO_Dl, D, E, Pr]
+    activationStep = parameter_step().switch_dl(dl1)
+
+    predictionStep: Fold[OHO_Dl, D, E, P]
+    predictionStep = rnnLearner.rnn.switch_dl(dl2)
+
+    return oho.onlineLearning(activationStep, predictionStep, computeLoss)

@@ -2,7 +2,7 @@ from typing import Self
 
 from donotation import do
 
-from recurrent.datarecords import InputOutput
+from recurrent.datarecords import InputOutput, OhoInputOutput
 from recurrent.myfunc import flipTuple
 from recurrent.myrecords import RnnGodState
 from recurrent.mytypes import *
@@ -82,9 +82,7 @@ class BaseRnnGodInterpreter[A, B, C](
 class DataInterpreter(
     HasInput[InputOutput, jax.Array],
     HasLabel[InputOutput, jax.Array],
-    HasPredictionInput[InputOutput, jax.Array],
 ):
-    _prediction_input = jnp.empty(0)
 
     def getInput[E](self) -> Fold[Self, InputOutput, E, jax.Array]:
         return asks(lambda e: e.x)
@@ -92,8 +90,29 @@ class DataInterpreter(
     def getLabel[E](self) -> Fold[Self, InputOutput, E, jax.Array]:
         return asks(lambda e: e.y)
 
-    def getPredictionInput[E](self) -> Fold[Self, InputOutput, E, jax.Array]:
-        return pure(self._prediction_input)
+
+class BilevelTrainInterpreter(
+    HasInput[OhoInputOutput, jax.Array],
+    HasLabel[OhoInputOutput, jax.Array],
+):
+
+    def getInput[E](self) -> Fold[Self, OhoInputOutput, E, jax.Array]:
+        return asks(lambda e: e.train.x)
+
+    def getLabel[E](self) -> Fold[Self, OhoInputOutput, E, jax.Array]:
+        return asks(lambda e: e.train.y)
+
+
+class BilevelValidationInterpreter(
+    HasInput[OhoInputOutput, jax.Array],
+    HasLabel[OhoInputOutput, jax.Array],
+):
+
+    def getInput[E](self) -> Fold[Self, OhoInputOutput, E, jax.Array]:
+        return asks(lambda e: e.val.x)
+
+    def getLabel[E](self) -> Fold[Self, OhoInputOutput, E, jax.Array]:
+        return asks(lambda e: e.val.y)
 
 
 class RNGInterpreter[A, B, C](HasPRNG[GOD[A, B, C], PRNG]):
@@ -109,6 +128,18 @@ class RNGInterpreter[A, B, C](HasPRNG[GOD[A, B, C], PRNG]):
 # use this as my default interpreter
 class BaseRnnInterpreter[A, B, C](
     BaseRnnGodInterpreter[A, B, C], DataInterpreter, RNGInterpreter[A, B, C]
+): ...
+
+
+class OhoRnnTrainInterpreter[A, B, C](
+    BaseRnnGodInterpreter[A, B, C], BilevelTrainInterpreter, RNGInterpreter[A, B, C]
+): ...
+
+
+class OhoRnnValidationInterpreter[A, B, C](
+    BaseRnnGodInterpreter[A, B, C],
+    BilevelValidationInterpreter,
+    RNGInterpreter[A, B, C],
 ): ...
 
 
@@ -132,6 +163,7 @@ class BilevelRnnGodInterpreter[A, B, C](
     GetInfluenceTensor[GOD[A, B, C], Gradient[B]],
     PutInfluenceTensor[GOD[A, B, C], Gradient[B]],
     GetRfloConfig[GOD[A, B, C]],
+    PutLog[GOD[A, B, C], Logs],
 ):
     type G = GOD[A, B, C]
 
@@ -168,3 +200,13 @@ class BilevelRnnGodInterpreter[A, B, C](
 
     def getRnnConfig[D](self) -> Fold[Self, D, G, RnnConfig]:
         return gets(lambda e: e.rnnConfig_bilevel)
+
+    def putLog[D](self, s: Logs) -> Fold[Self, D, G, Unit]:
+        return modifies(
+            lambda e: eqx.tree_at(lambda t: t.oho_logs, e, eqx.combine(s, e.oho_logs))
+        )
+
+
+class OhoInterpreter[A, B, C](
+    BilevelRnnGodInterpreter[A, B, C], RNGInterpreter[A, B, C]
+): ...
