@@ -20,6 +20,7 @@ from recurrent.util import pytree_split, pytreeSumZero
 
 type LossFn[A, B] = Callable[[A, B], LOSS]
 type GR[A] = Gradient[A]
+type ParamFn[Dl, D, E, Pr] = Callable[[Gradient[Pr]], Fold[Dl, D, E, Unit]]
 
 
 class RnnLibrary[DL, D, E, P, Pr](NamedTuple):
@@ -588,3 +589,17 @@ class UORO[Alg: _UO[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](
             return self.creditAssign(A_new, B_new, e_signal)
 
         return next()
+
+
+@eqx.filter_jit
+def trainStep[
+    Dl, D, E, P, Pr: Module
+](
+    learner: Fold[Dl, D, E, Unit],
+    dialect: Dl,
+    t_series: Traversable[D],
+    initEnv: E,
+) -> E:
+    model = learner.func
+    _, final_env = model(dialect, t_series, initEnv)
+    return final_env

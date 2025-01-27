@@ -52,24 +52,17 @@ def generate_add_task_dataset(N, t_1, t_2, tau_task, rng_key):
     return X, Y
 
 
-# @profile
-def trainStep(dataloader: Traversable[InputOutput]):
-
+def constructRnnEnv(rng_key: Array):
+    # hard code these guys for now
     n_h = 32
     n_in = 2
     n_out = 2
     learning_rate = jnp.array(
-        [0.01]
+        [0.001]
     )  # parameters should never be floats or single value
     alpha = 1.0
 
-    type DL = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]
-    type ENV = RnnGodState[RnnParameter, SgdParameter, SgdParameter]
-
-    dialect = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]()
-    rng_key = jax.random.key(42)
     rng_key, prng = jax.random.split(rng_key)
-
     w_rec_, _ = jnp.linalg.qr(jax.random.normal(prng, (n_h, n_h)))
     rng_key, prng = jax.random.split(rng_key)
     w_in_ = jax.random.normal(prng, (n_h, n_in + 1)) * jnp.sqrt(1.0 / (n_in + 1))
@@ -115,48 +108,24 @@ def trainStep(dataloader: Traversable[InputOutput]):
         prng=rng_key,
         logs=Logs(loss=jnp.array(0, dtype=jnp.float32)),
     )
+    return rng_key, initEnv
 
-    # truncation = 10
-    # dataloader: Iterator[Iterable[Input2Output1]] = partition_all(
-    #     truncation, dataloader
-    # )
-    # truncated_data = map(tree_stack, dataloader)
-    # need to fold over entire dataset man
 
-    # predictions, _ = rnnLearner.rnn.func(dialect, dataloader, initEnv)
-    # gr, _ = rnnLearner.rnnWithGradient.func(dialect, dataloader, initEnv)
+# @profile
+def mainLoop(
+    dataloader: Iterable[Traversable[InputOutput]],
+    t_series_length: int,
+    trunc_length: int,
+):
 
-    # print(gr)
-    # print(_)
+    type DL = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]
+    type ENV = RnnGodState[RnnParameter, SgdParameter, SgdParameter]
 
-    # rnnLearner: RnnLibrary[
-    #     DL, Iterable[Input2Output1], ENV, Iterable[PREDICTION], RnnParameter
-    # ]
-    # print(len(dataloader))
-    # rnnLearner = offlineLearning(
-    #     doRnnStep(),
-    #     doRnnReadout(),
-    #     lambda a, b: LOSS(torch.functional.F.cross_entropy(a, b) / len(dataloader)),
-    # )
+    rng_key = jax.random.key(0)
+    rng_key, prng = jax.random.split(rng_key)
+    rng_key, initEnv = constructRnnEnv(rng_key)
 
-    # def run(prev_env):
-    #     _, env = rnnLearner.rnnWithGradient.flat_map(doSgdStep).func(
-    #         dialect, dataloader, prev_env
-    #     )
-    #     loss, _ = rnnLearner.rnnWithLoss.func(dialect, dataloader, env)
-    #     print(loss)
-    #     new_env = copy.replace(prev_env, parameter=env.parameter)
-    #     return new_env
-
-    # for _ in range(200):
-    #     initEnv = run(initEnv)
-
-    # predictions, _ = rnnLearner.rnn.func(dialect, dataloader, initEnv)
-    # predictions = [torch.functional.F.softmax(tensor, dim=0) for tensor in predictions]
-    # return predictions
-
-    rnnLearner: RnnLibrary[DL, InputOutput, ENV, PREDICTION, RnnParameter]
-    rtrl = RTRL[
+    rtrl = UORO[
         DL,
         InputOutput,
         RnnGodState[RnnParameter, SgdParameter, SgdParameter],
@@ -164,7 +133,7 @@ def trainStep(dataloader: Traversable[InputOutput]):
         RnnParameter,
         jax.Array,
         PREDICTION,
-    ]()  # implement feedforward to show how easy it is
+    ](lambda key, shape: jax.random.uniform(key, shape, minval=-1.0, maxval=1.0))
 
     onlineLearner = rtrl.onlineLearning(
         doRnnStep(),
@@ -175,64 +144,23 @@ def trainStep(dataloader: Traversable[InputOutput]):
     onlineLearner_folded = foldRnnLearner(onlineLearner, initEnv.parameter)
 
     rnnLearner = endowAverageGradients(
-        onlineLearner_folded, 10, dataloader.value.x.shape[0]
+        onlineLearner_folded, trunc_length, t_series_length
     )
-    # gr, _ = rnnLearner.rnnWithGradient.func(dialect, dataloader[0], initEnv)
+    learner = rnnLearner.rnnWithGradient.flat_map(doSgdStep)
+    # for online, do foldM(rnnLearner.rnnWithGradient.flat_map(doSgdStep)) and have dataloader load entire on first
 
-    # _, initEnv = rnnLearner.trainStep(doSgdStep).func(dialect, dataloader, initEnv)
+    dialect = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]()
 
-    def compile():
-        print("recompiled")
-        model = rnnLearner.rnnWithGradient.flat_map(doSgdStep).func
+    lossFn = eqx.filter_jit(rnnLearner.rnnWithLoss.func)
 
-        # lossFn = foldM(
-        #     lambda acc: rnnLearner.rnnWithLoss.fmap(lambda l: l + acc), LOSS(0)
-        # )
+    for time_series in dataloader:
+        # start = time.time()
 
-        # predictFn = traverse(rnnLearner.rnn).func
-
-        _, final_env = model(dialect, dataloader, initEnv)
-        _, final_env = model(dialect, dataloader, final_env)
-        _, final_env = model(dialect, dataloader, final_env)
-        _, final_env = model(dialect, dataloader, final_env)
-        _, final_env = model(dialect, dataloader, final_env)
-        _, final_env = model(dialect, dataloader, final_env)
-        _, final_env = model(dialect, dataloader, final_env)
-        _, final_env = model(dialect, dataloader, final_env)
-        _, final_env = model(dialect, dataloader, final_env)
-        _, final_env = model(dialect, dataloader, final_env)
-
-        loss, _ = rnnLearner.rnnWithLoss.func(dialect, dataloader, final_env)
-
-        return loss
-
-    start = time.time()
-    loss = eqx.filter_jit(compile).lower().compile()()
-    print(loss / dataloader.value.x.shape[0])
-    print(time.time() - start)
-
-    # start = time.time()
-    # predictions, _ = predictFn(dialect, dataloader, final_env)
-    # print(time.time() - start)
-
-    # start = time.time()
-    # predictions, _ = predictFn(dialect, dataloader, final_env)
-    # print(time.time() - start)
-
-    # start = time.time()
-    # predictions, _ = predictFn(dialect, dataloader, final_env)
-    # print(time.time() - start)
-
-    # print(predictions.value[0])
-
-    # start = time.time()
-    # loss, _ = loss_jit(dialect, dataloader, final_env)
-    # print(time.time() - start)
-    # print(loss / dataloader.value.x.shape[0])
-
-    # predictions, _ = traverse(rnnLearner.rnn).func(dialect, dataloader, initEnv)
-    # predictions = [torch.functional.F.softmax(tensor, dim=0) for tensor in predictions]
-    return None
+        final_env = trainStep(learner, dialect, time_series, initEnv)
+        initEnv = final_env
+        loss, _ = lossFn(dialect, time_series, final_env)
+        print(loss / t_series_length)
+        # print(time.time() - start)
 
 
 # %%
@@ -240,10 +168,23 @@ def trainStep(dataloader: Traversable[InputOutput]):
 
 def main():
 
-    length = 1000
+    N = 1_000_000
+    t_series_length = 100  # how much time series goines into ONE param update
+    trunc_length = 1  # controls how much avging done in one t_series
+    # if trunc_length = 1, then divide by t_series_length. if trunc_length = t_series_length, then no normalization done
     rng_key = jax.random.key(0)
-    X, Y = generate_add_task_dataset(length, 5, 9, 1, rng_key)
-    dataset = Traversable[InputOutput](InputOutput(X, Y))
+    X, Y = generate_add_task_dataset(N, 5, 9, 1, rng_key)
+
+    def transform(arr: Array, _t: int):
+        return jnp.split(arr, _t)
+
+    X = transform(X, N // t_series_length)
+    Y = transform(Y, N // t_series_length)
+    dataloader = map(
+        lambda data: Traversable[InputOutput](InputOutput(data[0], data[1])), zip(X, Y)
+    )
+
+    mainLoop(dataloader, t_series_length, trunc_length)
 
     # dataset = map(lambda data: InputOutput(data[0], data[1]), zip(X, Y))
     # dataset = list(dataset)
@@ -253,7 +194,7 @@ def main():
     # profiler = cProfile.Profile()
     # profiler.enable()
     # start = time.time()
-    predictions = trainStep(dataset)
+    # predictions = temp(dataset)
     # print(time.time() - start)
     # profiler.disable()
     # stats = pstats.Stats(profiler).sort_stats("cumtime")
