@@ -15,7 +15,7 @@ from recurrent.objectalgebra.typeclasses import *
 
 from recurrent.mytypes import *
 from recurrent.monad import *
-from recurrent.parameters import Logs, RnnParameter, SgdParameter
+from recurrent.parameters import *
 from recurrent.util import pytree_split, pytreeSumZero
 
 
@@ -48,28 +48,26 @@ def jacobian_matrix_product(f, primal, matrix):
 
 
 class _SGD[E, Pr](
-    GetParameter[E, Pr],
-    PutParameter[E, Pr],
-    GetHyperParameter[E, SgdParameter],
+    GetParameter[E, IsVector[Pr]],
+    PutParameter[E, IsVector[Pr]],
+    GetHyperParameter[E, IsVector[SgdParameter]],
     Protocol,
 ): ...
 
 
 @do()
-def doSgdStep[Dl: _SGD[E, Pr], D, E, Pr: Module](gr: GR[Pr]) -> G[Fold[Dl, D, E, Unit]]:
+def doSgdStep[Dl: _SGD[E, Pr], D, E, Pr](gr: GR[Pr]) -> G[Fold[Dl, D, E, Unit]]:
     dl = yield from ProxyDl[Dl].askDl()
-    param = yield from dl.getParameter()
-    hyperparam = yield from dl.getHyperParameter()
-    new_param = jax.tree.map(
-        lambda x, y: x - hyperparam.learning_rate * y, param, gr.value
-    )
-    return dl.putParameter(new_param)
+    isParam = yield from dl.getParameter()
+    hyperparam = yield from dl.getHyperParameter().fmap(toParam)
+    new_param = isParam.vector - hyperparam.learning_rate * gr.value
+    return dl.putParameter(updateVector(isParam, new_param))
 
 
 class _R[D, E](
-    GetActivation[E, ACTIVATION],
-    PutActivation[E, ACTIVATION],
-    GetParameter[E, RnnParameter],
+    GetActivation[E, IsVector[ACTIVATION]],
+    PutActivation[E, IsVector[ACTIVATION]],
+    GetParameter[E, IsVector[RnnParameter]],
     HasInput[D, Array],
     GetRnnConfig[E],
     Protocol,
@@ -80,19 +78,18 @@ class _R[D, E](
 def doRnnStep[Dl: _R[D, E], D, E]() -> G[Fold[Dl, D, E, ACTIVATION]]:
     dl = yield from ProxyDl[Dl].askDl()
     x = yield from dl.getInput()
-    a = yield from dl.getActivation()
-    param = yield from dl.getParameter()
+    a = yield from dl.getActivation().fmap(toVector)
+    param = yield from dl.getParameter().fmap(toParam)
     cfg = yield from dl.getRnnConfig()
-    w_rec = jnp.reshape(param.w_rec, (cfg.n_h, cfg.n_h + cfg.n_in + 1))
-    a_rec = w_rec @ jnp.concat((a, x, jnp.array([1.0])))
+    a_rec = param.w_rec @ jnp.concat((a, x, jnp.array([1.0])))
     a_new = ACTIVATION((1 - cfg.alpha) * a + cfg.alpha * cfg.activationFn(a_rec))
     _ = yield from dl.putActivation(a_new)
     return pure(a_new)
 
 
 class _Re[E](
-    GetActivation[E, ACTIVATION],
-    GetParameter[E, RnnParameter],
+    GetActivation[E, IsVector[ACTIVATION]],
+    GetParameter[E, IsVector[RnnParameter]],
     GetRnnConfig[E],
     Protocol,
 ): ...
@@ -101,11 +98,9 @@ class _Re[E](
 @do()
 def doRnnReadout[Dl: _Re[E], D, E]() -> G[Fold[Dl, D, E, PREDICTION]]:
     dl = yield from ProxyDl[Dl].askDl()
-    a = yield from dl.getActivation()
-    param = yield from dl.getParameter()
-    cfg = yield from dl.getRnnConfig()
-    w_out = jnp.reshape(param.w_out, (cfg.n_out, cfg.n_h + 1))
-    return pure(PREDICTION(w_out @ jnp.concat((a, jnp.array([1.0])))))
+    a = yield from dl.getActivation().fmap(toVector)
+    param = yield from dl.getParameter().fmap(toParam)
+    return pure(PREDICTION(param.w_out @ jnp.concat((a, jnp.array([1.0])))))
 
 
 class _L[D, T](HasLabel[D, T], Protocol): ...
@@ -125,27 +120,61 @@ def doLoss[Dl: _L[D, T], D, E, P, T](lossFn: LossFn[T, P]) -> DoLossFn[Dl, D, E,
     return loss_
 
 
+type Identity[A] = Callable[[A], A]
+
+type FnFmap[Inp, A, B] = Callable[[Callable[[Inp], A]], Callable[[Inp], B]]
+
+
 @do()
-def doGradient[
-    Dl, D, E, Pr: Module, T
+def fold_fmap[
+    Dl, D, E, Inp, A, B
 ](
-    lossM: Fold[Dl, D, E, T],
-    read_wrt: Fold[Dl, D, E, Pr],
-    write_wrt: Callable[[Pr], Fold[Dl, D, E, Unit]],
-) -> G[Fold[Dl, D, E, Gradient[Pr]]]:
+    action: Fold[Dl, D, E, A],
+    read_wrt: Fold[Dl, D, E, Inp],
+    write_wrt: Callable[[Inp], Fold[Dl, D, E, Unit]],
+    fn_fmap: FnFmap[Inp, tuple[A, E], tuple[B, E]],
+) -> G[Fold[Dl, D, E, B]]:
 
     dl = yield from ProxyDl[Dl].askDl()
     d = yield from ProxyR[D].ask()
     e = yield from ProxyS[E].get()
-    pr = yield from read_wrt
+    inp = yield from read_wrt
 
-    def parametrized(p: Pr) -> tuple[T, E]:
-        return write_wrt(p).then(lossM).func(dl, d, e)
+    def parametrized(i: Inp) -> tuple[A, E]:
+        return write_wrt(i).then(action).func(dl, d, e)
 
-    gr: Pr
-    env: E
-    gr, env = eqx.filter_jacrev(parametrized, has_aux=True)(pr)
-    _ = yield from put(env)
+    b, e = fn_fmap(parametrized)(inp)
+    _ = yield from put(e)
+    return pure(b)
+
+
+type St[S, A] = Callable[[A], tuple[A, S]]
+
+
+def vectorize[T, E](fn: St[E, IsVector[T]], shape: IsVector[T]) -> St[E, Array]:
+    def next(v: jax.Array):
+        isVector = updateVector(shape, v)
+        new_isVector, e = fn(isVector)
+        return new_isVector.vector, e
+
+    return next
+
+
+@do()
+def doJacobian[
+    Dl, D, E, Pr, T
+](
+    model: Fold[Dl, D, E, IsVector[T]],
+    read_wrt: Fold[Dl, D, E, IsVector[Pr]],
+    write_wrt: Callable[[IsVector[Pr]], Fold[Dl, D, E, Unit]],
+) -> G[Fold[Dl, D, E, Gradient[Pr]]]:
+    shape = yield from read_wrt
+    gr: Array = yield from fold_fmap(
+        model,
+        read_wrt,
+        write_wrt,
+        lambda fn: eqx.filter_jacrev(vectorize(fn, shape), has_aux=True),
+    )
     return pure(Gradient(gr))
 
 
@@ -155,26 +184,21 @@ def doAvgGradient[
 ](
     step: Fold[DL, D, E, Gradient[Pr]],
     weightFn: Callable[[D], float],
-    gr0: Gradient[Pr],
-) -> G[Fold[DL, Traversable[D], E, Gradient[Pr]]]:
-
+) -> G[
+    Fold[DL, Traversable[D], E, Gradient[Pr]]
+]:
     @do()
-    def doWeight(gr_accum: Gradient[Pr]) -> G[Fold[DL, D, E, Gradient[Pr]]]:
+    def doWeight() -> G[Fold[DL, D, E, Gradient[Pr]]]:
         d = yield from ProxyR[D].ask()
         gr_new = yield from step
-        gr_accum_new: GR[Pr]
-        gr_accum_new = jax.tree.map(
-            lambda x, y: x + y * weightFn(d),
-            gr_accum,
-            gr_new,
-        )
-        return pure(gr_accum_new)
+        weighted = gr_new.value * weightFn(d)
+        return pure(Gradient(weighted))
 
-    return foldM(doWeight, gr0)
+    return accumulate(doWeight(), lambda acc, gr: acc + gr, Gradient[Pr](0.0))
 
 
 def endowAverageGradients[
-    Dl: GetParameter[E, Pr], D: Module, E, P, Pr: Module
+    Dl, D: Module, E, P, Pr
 ](
     rnnLibrary: RnnLibrary[Dl, Traversable[D], E, P, Pr], trunc: int, N: int
 ) -> RnnLibrary[Dl, Traversable[D], E, P, Pr]:
@@ -183,16 +207,14 @@ def endowAverageGradients[
         n_complete = (N // trunc) * trunc
         n_leftover = N - n_complete
         dl = yield from ProxyDl[Dl].askDl()
-        pr = yield from dl.getParameter()
         ds = yield from ProxyR[Traversable[D]].ask()
 
         ds_scannable_, ds_leftover = pytree_split(ds, trunc)
         ds_scannable: Traversable[Traversable[D]] = Traversable(ds_scannable_)
         # ORDER MATTERS, need to scan first, then do the leftover, since they are contiguous activations
-        gr_scanned = yield from doAvgGradient(
+        gr_scanned: Gradient[Pr] = yield from doAvgGradient(
             rnnLibrary.rnnWithGradient,
             lambda _: 1.0,
-            Gradient(pytreeSumZero(pr)),
         ).switch_data(ds_scannable)
         e = yield from ProxyS[E].get()
 
