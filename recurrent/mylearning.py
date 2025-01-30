@@ -10,7 +10,7 @@ from equinox import Module
 from operator import add
 
 from recurrent.datarecords import OhoInputOutput
-from recurrent.myfunc import flip
+from recurrent.myfunc import curry, flip
 from recurrent.objectalgebra.typeclasses import *
 
 from recurrent.mytypes import *
@@ -56,12 +56,12 @@ class _SGD[E, Pr](
 
 
 @do()
-def doSgdStep[Dl: _SGD[E, Pr], D, E, Pr](gr: GR[Pr]) -> G[Fold[Dl, D, E, Unit]]:
+def doSgdStep[Dl: _SGD[E, Pr], D, E, Pr: Module](gr: GR[Pr]) -> G[Fold[Dl, D, E, Unit]]:
     dl = yield from ProxyDl[Dl].askDl()
     isParam = yield from dl.getParameter()
     hyperparam = yield from dl.getHyperParameter().fmap(toParam)
-    new_param = isParam.vector - hyperparam.learning_rate * gr.value
-    return dl.putParameter(updateVector(isParam, new_param))
+    new_param = invmap(isParam, lambda x: x - hyperparam.learning_rate * gr.value)
+    return dl.putParameter(new_param)
 
 
 class _R[D, E](
@@ -75,16 +75,18 @@ class _R[D, E](
 
 
 @do()
-def doRnnStep[Dl: _R[D, E], D, E]() -> G[Fold[Dl, D, E, ACTIVATION]]:
+def doRnnStep[Dl: _R[D, E], D, E]() -> G[Fold[Dl, D, E, IsVector[ACTIVATION]]]:
     dl = yield from ProxyDl[Dl].askDl()
     x = yield from dl.getInput()
-    a = yield from dl.getActivation().fmap(toVector)
+    activ_v = yield from dl.getActivation()
+    a = toVector(activ_v)
     param = yield from dl.getParameter().fmap(toParam)
     cfg = yield from dl.getRnnConfig()
     a_rec = param.w_rec @ jnp.concat((a, x, jnp.array([1.0])))
     a_new = ACTIVATION((1 - cfg.alpha) * a + cfg.alpha * cfg.activationFn(a_rec))
-    _ = yield from dl.putActivation(a_new)
-    return pure(a_new)
+    new_activ_v = invmap(activ_v, lambda _: a_new)
+    _ = yield from dl.putActivation(new_activ_v)
+    return pure(new_activ_v)
 
 
 class _Re[E](
@@ -120,8 +122,6 @@ def doLoss[Dl: _L[D, T], D, E, P, T](lossFn: LossFn[T, P]) -> DoLossFn[Dl, D, E,
     return loss_
 
 
-type Identity[A] = Callable[[A], A]
-
 type FnFmap[Inp, A, B] = Callable[[Callable[[Inp], A]], Callable[[Inp], B]]
 
 
@@ -132,7 +132,7 @@ def fold_fmap[
     action: Fold[Dl, D, E, A],
     read_wrt: Fold[Dl, D, E, Inp],
     write_wrt: Callable[[Inp], Fold[Dl, D, E, Unit]],
-    fn_fmap: FnFmap[Inp, tuple[A, E], tuple[B, E]],
+    fn_fmap: FnFmap[Inp, tuple[A, E], B],
 ) -> G[Fold[Dl, D, E, B]]:
 
     dl = yield from ProxyDl[Dl].askDl()
@@ -143,50 +143,58 @@ def fold_fmap[
     def parametrized(i: Inp) -> tuple[A, E]:
         return write_wrt(i).then(action).func(dl, d, e)
 
-    b, e = fn_fmap(parametrized)(inp)
-    _ = yield from put(e)
+    b = fn_fmap(parametrized)(inp)
     return pure(b)
 
 
-type St[S, A] = Callable[[A], tuple[A, S]]
-
-
-def vectorize[T, E](fn: St[E, IsVector[T]], shape: IsVector[T]) -> St[E, Array]:
-    def next(v: jax.Array):
-        isVector = updateVector(shape, v)
-        new_isVector, e = fn(isVector)
-        return new_isVector.vector, e
-
-    return next
-
-
 @do()
+def doDifferentiation[
+    Dl, D, E, Pr: Module, A: Module, T: IsVector[A] | Array
+](
+    model: Fold[Dl, D, E, T],
+    read_wrt: Fold[Dl, D, E, IsVector[Pr]],
+    write_wrt: Callable[[IsVector[Pr]], Fold[Dl, D, E, Unit]],
+    jax_diff: FnFmap[IsVector[Pr], tuple[T, E], tuple[IsVector[Pr], E]],
+) -> G[Fold[Dl, D, E, jax.Array]]:
+    gr, env = yield from fold_fmap(
+        model,
+        read_wrt,
+        write_wrt,
+        jax_diff,
+    )
+    _ = yield from put(env)
+    return pure(toVector(gr))
+
+
+# no auto curry so bulk in code is unavoidable
 def doJacobian[
-    Dl, D, E, Pr, T
+    Dl, D, E, Pr: Module, T
 ](
     model: Fold[Dl, D, E, IsVector[T]],
     read_wrt: Fold[Dl, D, E, IsVector[Pr]],
     write_wrt: Callable[[IsVector[Pr]], Fold[Dl, D, E, Unit]],
-) -> G[Fold[Dl, D, E, Gradient[Pr]]]:
-    shape = yield from read_wrt
-    gr: Array = yield from fold_fmap(
-        model,
-        read_wrt,
-        write_wrt,
-        lambda fn: eqx.filter_jacrev(vectorize(fn, shape), has_aux=True),
+):
+    return doDifferentiation(model, read_wrt, write_wrt, lambda f: eqx.filter_jacrev(f, has_aux=True)).fmap(
+        Jacobian[Pr]
     )
-    return pure(Gradient(gr))
+
+
+def doGradient[
+    Dl, D, E, Pr: Module
+](
+    model: Fold[Dl, D, E, jax.Array],
+    read_wrt: Fold[Dl, D, E, IsVector[Pr]],
+    write_wrt: Callable[[IsVector[Pr]], Fold[Dl, D, E, Unit]],
+):
+    return doDifferentiation(model, read_wrt, write_wrt, lambda f: eqx.filter_jacrev(f, has_aux=True)).fmap(
+        Gradient[Pr]
+    )
 
 
 @do()
 def doAvgGradient[
     DL, D, E, Pr: Module
-](
-    step: Fold[DL, D, E, Gradient[Pr]],
-    weightFn: Callable[[D], float],
-) -> G[
-    Fold[DL, Traversable[D], E, Gradient[Pr]]
-]:
+](step: Fold[DL, D, E, Gradient[Pr]], weightFn: Callable[[D], float],) -> G[Fold[DL, Traversable[D], E, Gradient[Pr]]]:
     @do()
     def doWeight() -> G[Fold[DL, D, E, Gradient[Pr]]]:
         d = yield from ProxyR[D].ask()
@@ -194,14 +202,12 @@ def doAvgGradient[
         weighted = gr_new.value * weightFn(d)
         return pure(Gradient(weighted))
 
-    return accumulate(doWeight(), lambda acc, gr: acc + gr, Gradient[Pr](0.0))
+    return accumulate(doWeight(), add, Gradient[Pr](0.0))
 
 
 def endowAverageGradients[
-    Dl, D: Module, E, P, Pr
-](
-    rnnLibrary: RnnLibrary[Dl, Traversable[D], E, P, Pr], trunc: int, N: int
-) -> RnnLibrary[Dl, Traversable[D], E, P, Pr]:
+    Dl, D: Module, E, P, Pr: Module
+](rnnLibrary: RnnLibrary[Dl, Traversable[D], E, P, Pr], trunc: int, N: int) -> RnnLibrary[Dl, Traversable[D], E, P, Pr]:
     @do()
     def avgGradient() -> G[Fold[Dl, Traversable[D], E, Gradient[Pr]]]:
         n_complete = (N // trunc) * trunc
@@ -243,6 +249,7 @@ def endowAverageGradients[
     )
 
 
+# todo, recheck later
 @do()
 def doBatchGradients[
     Dl, D: Module | Array, E, Pr: Module
@@ -263,105 +270,81 @@ def doLog[Dl: PutLog[E, Logs], D, E](loss: LOSS) -> G[Fold[Dl, D, E, LOSS]]:
     return pure(loss)
 
 
-class _OfL[D, E, A, Pr, X, Y, Z](
-    GetActivation[E, A],
-    PutActivation[E, A],
-    PutParameter[E, Pr],
-    GetParameter[E, Pr],
-    HasInput[D, X],
-    HasLabel[D, Z],
+class _OfL[D, E, Pr, Label](
+    PutParameter[E, IsVector[Pr]],
+    GetParameter[E, IsVector[Pr]],
+    HasLabel[D, Label],
     PutLog[E, Logs],
     Protocol,
 ): ...
 
 
 def offlineLearning[
-    Dl: _OfL[D, E, A, Pr, X, Y, Z], D, E, A, Pr, X, Y, Z, P
+    Dl: _OfL[D, E, Pr, Label], D, E, A, Pr: Module, Label, Pred
 ](
     activationStep: Fold[Dl, D, E, A],
-    predictionStep: Fold[Dl, D, E, P],
-    computeLoss: LossFn[Z, P],
-) -> RnnLibrary[Dl, Traversable[D], E, Traversable[P], Pr]:
+    predictionStep: Fold[Dl, D, E, Pred],
+    computeLoss: LossFn[Label, Pred],
+) -> RnnLibrary[Dl, Traversable[D], E, Traversable[Pred], Pr]:
 
     rnnStep = activationStep.then(predictionStep)
-
     rnn = traverse(rnnStep)
-
-    @do()
-    def rnnWithLoss():
-        @do()
-        def accumFn(accum: LOSS) -> G[Fold[Dl, D, E, LOSS]]:
-            loss = yield from rnnStep.flat_map(doLoss(computeLoss))
-            return pure(LOSS(accum + loss))
-
-        return foldM(accumFn, LOSS(jnp.array(0.0))).flat_map(doLog)
+    rnnWithLoss = accumulate(rnnStep.flat_map(doLoss(computeLoss)), add, LOSS(0.0))
 
     @do()
     def rnnWithGradient():
         dl = yield from ProxyDl[Dl].askDl()
-        return doGradient(rnnWithLoss(), dl.getParameter(), dl.putParameter)
+        return doGradient(rnnWithLoss, dl.getParameter(), dl.putParameter)
 
-    return RnnLibrary[Dl, Traversable[D], E, Traversable[P], Pr](
+    return RnnLibrary(
         rnn=rnn,
-        rnnWithLoss=rnnWithLoss(),
+        rnnWithLoss=rnnWithLoss,
         rnnWithGradient=rnnWithGradient(),
     )
 
 
-def foldRnnLearner[
-    Dl, D, E, P, Pr: Module
-](rnnLearner: RnnLibrary[Dl, D, E, P, Pr], pr: Pr):
-    initGr = pytreeSumZero(pr)
+def foldRnnLearner[Dl, D, E, P, Pr: Module](rnnLearner: RnnLibrary[Dl, D, E, P, Pr]):
     return RnnLibrary[Dl, Traversable[D], E, Traversable[P], Pr](
         rnn=traverse(rnnLearner.rnn),
         rnnWithLoss=accumulate(rnnLearner.rnnWithLoss, add, LOSS(jnp.array(0.0))),
-        rnnWithGradient=accumulate(
-            rnnLearner.rnnWithGradient, eqx.apply_updates, Gradient(initGr)
-        ),
+        rnnWithGradient=accumulate(rnnLearner.rnnWithGradient, add, Gradient[Pr](0.0)),
     )
 
 
-class _PfL[D, E, A, Pr, Z](
-    GetActivation[E, A],
-    PutActivation[E, A],
-    PutParameter[E, Pr],
-    GetParameter[E, Pr],
-    HasLabel[D, Z],
+class _PfL[D, E, A, Pr, Label](
+    GetActivation[E, IsVector[A]],
+    PutActivation[E, IsVector[A]],
+    PutParameter[E, IsVector[Pr]],
+    GetParameter[E, IsVector[Pr]],
+    HasLabel[D, Label],
     PutLog[E, Logs],
     Protocol,
 ): ...
 
 
-class PastFacingLearn[Alg: _PfL[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](ABC):
+class PastFacingLearn[Alg: _PfL[D, E, A, Pr, Lbl], D, E, A: Module, Pr: Module, Lbl, P](ABC):
 
     type F[Dl, T] = Fold[Dl, D, E, T]
 
     @abstractmethod
-    def creditAndUpdateState[
-        Dl
-    ](self, e_signal: F[Dl, Gradient[A]], activationStep: F[Dl, A]) -> F[
-        Dl, Gradient[Pr]
-    ]: ...
-
-    class __reparam__(PutActivation[E, A], PutParameter[E, Pr], Protocol):
+    def recGrad[Dl](s, sig: F[Dl, GR[A]], actv: F[Dl, IsVector[A]]) -> F[Dl, GR[Pr]]:
         pass
 
-    def reparameterize[Dl: __reparam__](self, activationStep: F[Dl, A]):
+    class __reparam__(PutActivation[E, A], PutParameter[E, Pr], Protocol): ...
+
+    @staticmethod
+    def reparameterize[Dl: __reparam__](activationStep: F[Dl, IsVector[A]]):
+
         @do()
         def next():
             dl = yield from ProxyDl[Dl].askDl()
             d = yield from ProxyR[D].ask()
             e = yield from ProxyS[E].get()
 
-            def parametrized(a: A, pr: Pr) -> tuple[A, E]:
-                return (
-                    dl.putActivation(a)
-                    .then(dl.putParameter(pr))
-                    .then(activationStep)
-                    .func(dl, d, e)
-                )
+            def parametrized(a: IsVector[A], pr: IsVector[Pr]):
+                return dl.putActivation(a).then(dl.putParameter(pr)).then(activationStep).func(dl, d, e)
 
-            m: Fold[Dl, D, E, Callable[[A, Pr], tuple[A, E]]]
+            m: Fold[Dl, D, E, Callable[[IsVector[A], IsVector[Pr]], tuple[IsVector[A], E]]]
             m = pure(parametrized)
             return m
 
@@ -369,9 +352,9 @@ class PastFacingLearn[Alg: _PfL[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](ABC)
 
     def onlineLearning(
         self,
-        activationStep: F[Alg, A],
-        predictionStep: F[Alg, P],
-        computeLoss: LossFn[Z, P],
+        activationStep: F[Alg, IsVector[A]],
+        predictionStep: F[Alg, IsVector[Pr]],
+        computeLoss: LossFn[Lbl, P],
     ):
 
         immedL = predictionStep.flat_map(doLoss(computeLoss)).flat_map(doLog)
@@ -379,16 +362,12 @@ class PastFacingLearn[Alg: _PfL[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](ABC)
         @do()
         def total_grad() -> G[Fold[Alg, D, E, Gradient[Pr]]]:
             dl = yield from ProxyDl[Alg].askDl()
-
             e_signal = doGradient(immedL, dl.getActivation(), dl.putActivation)
 
-            grad_rec = yield from self.creditAndUpdateState(e_signal, activationStep)
-            # order matters, need to update readout AFTER updating activation
+            # order matters, need to update readout (grad_o) AFTER updating activation (grad_rec updates it)
+            grad_rec = yield from self.recGrad(e_signal, activationStep)
             grad_o = yield from doGradient(immedL, dl.getParameter(), dl.putParameter)
-
-            gradient: Gradient[Pr]
-            gradient = jax.tree.map(lambda x, y: x + y, grad_o, grad_rec)
-            return pure(gradient)
+            return pure(grad_rec + grad_o)
 
         return RnnLibrary[Alg, D, E, P, Pr](
             rnn=activationStep.then(predictionStep),
@@ -397,35 +376,34 @@ class PastFacingLearn[Alg: _PfL[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](ABC)
         )
 
 
-class _Infl[D, E, A, Pr, Z](
-    GetInfluenceTensor[E, Gradient[Pr]],
-    PutInfluenceTensor[E, Gradient[Pr]],
-    _PfL[D, E, A, Pr, Z],
+class _Infl[D, E, A, Pr, Label](
+    GetInfluenceTensor[E, Jacobian[Pr]],
+    PutInfluenceTensor[E, Jacobian[Pr]],
+    _PfL[D, E, A, Pr, Label],
     Protocol,
 ): ...
 
 
-class InfluenceTensorLearner[Alg: _Infl[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](
-    PastFacingLearn[Alg, D, E, A, Pr, Z, P], ABC
+class InfluenceTensorLearner[Alg: _Infl[D, E, A, Pr, Lbl], D, E, A: Module, Pr: Module, Lbl, P](
+    PastFacingLearn[Alg, D, E, A, Pr, Lbl, P], ABC
 ):
 
     type F[Dl, T] = Fold[Dl, D, E, T]
-    type Grad_Pr = Gradient[Pr]
 
     class __infl__[E, A, Pr](
-        GetInfluenceTensor[E, Gradient[Pr]],
-        GetActivation[E, A],
-        PutActivation[E, A],
-        GetParameter[E, Pr],
-        PutParameter[E, Pr],
+        GetInfluenceTensor[E, Jacobian[Pr]],
+        GetActivation[E, IsVector[A]],
+        PutActivation[E, IsVector[A]],
+        GetParameter[E, IsVector[Pr]],
+        PutParameter[E, IsVector[Pr]],
         Protocol,
     ):
         pass
 
     @abstractmethod
-    def influence_tensor[Dl](self, actvStep: F[Dl, A]) -> F[Dl, Grad_Pr]: ...
+    def influence_tensor[Dl](self, actv: F[Dl, IsVector[A]]) -> F[Dl, Jacobian[Pr]]: ...
 
-    def creditAndUpdateState(self, e_signal: F[Alg, Gradient[A]], actvStep: F[Alg, A]):
+    def recGrad(self, e_signal: F[Alg, Gradient[A]], actvStep: F[Alg, IsVector[A]]):
         @do()
         def next():
             dl = yield from ProxyDl[Alg].askDl()
@@ -433,19 +411,16 @@ class InfluenceTensorLearner[Alg: _Infl[D, E, A, Pr, Z], D, E, A, Pr: Module, Z,
             _ = yield from dl.putInfluenceTensor(infl)
 
             signal = yield from e_signal
-
-            ca: Gradient[Pr]
-            ca = jax.tree.map(lambda x: signal.value @ x, infl)
             m: Fold[Alg, D, E, Gradient[Pr]]
-            m = pure(ca)
-
+            m = pure(Gradient(signal.value @ infl.value))
             return m
 
         return next()
 
 
-class RTRL[Alg: _Infl[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](
-    InfluenceTensorLearner[Alg, D, E, A, Pr, Z, P]
+# lambda f: lambda pair: jax.jacrev(lambda a: f(a, pair[1]))(pair[0]),
+class RTRL[Alg: _Infl[D, E, A, Pr, Lbl], D, E, A: Module, Pr: Module, Lbl, P](
+    InfluenceTensorLearner[Alg, D, E, A, Pr, Lbl, P]
 ):
 
     type F[Dl, T] = Fold[Dl, D, E, T]
@@ -453,57 +428,40 @@ class RTRL[Alg: _Infl[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](
     type constraint = InfluenceTensorLearner.__infl__[E, A, Pr]
 
     @do()
-    def influence_tensor[Dl: constraint](self, actvStep: F[Dl, A]):
+    def influence_tensor[Dl: constraint](self, actvStep: F[Dl, IsVector[A]]):
         dl = yield from ProxyDl[Dl].askDl()
         influenceTensor = yield from dl.getInfluenceTensor()
+        parametrized = self.reparameterize(actvStep)
+
         a0 = yield from dl.getActivation()
         p0 = yield from dl.getParameter()
-        parametrized = yield from self.reparameterize(actvStep)
 
         # I take the jvp instead of j @ v, bc I'd like to 1) do a hvp 2) forward over reverse is efficient: https://jax.readthedocs.io/en/latest/notebooks/autodiff_cookbook.html
-        print(influenceTensor)
-        print(a0)
-        print(p0)
-
-        immedJacInflProduct: Gradient[Pr]
-        immedJacInflProduct = jax.tree.map(
-            lambda x, y: jacobian_matrix_product(
-                lambda a: parametrized(a, p0)[0], x, y
-            ),
-            a0,
-            influenceTensor,
+        immedJacInflProduct: Array = jacobian_matrix_product(
+            lambda a: toVector(parametrized(a, p0)[0]), a0, invmap(a0, lambda _: influenceTensor.value)
         )
 
-        # performance below really depends on the problem. For RTRL, I should use jacrev. For OHO, jacfwd. Will make this configurable later.
-        immedInfl: Pr
+        immedInfl: IsVector[Pr]
         env: E
-        immedInfl, env = eqx.filter_jacfwd(lambda p: parametrized(a0, p), has_aux=True)(
-            p0
-        )
+        immedInfl, env = eqx.filter_jacfwd(lambda p: parametrized(a0, p), has_aux=True)(p0)
 
-        infl: Pr
-        infl = jax.tree.map(lambda x, y: x + y, immedInfl, immedJacInflProduct.value)
         _ = yield from put(env)
-        m: Fold[Dl, D, E, Gradient[Pr]]
-        m = pure(Gradient(infl))
+        m: Fold[Dl, D, E, Jacobian[Pr]]
+        m = pure(Jacobian(immedJacInflProduct + toVector(immedInfl)))
         return m
 
 
 class _RfL[D, E, A, Pr, Z](_Infl[D, E, A, Pr, Z], GetRfloConfig[E], Protocol): ...
 
 
-class RFLO[Alg: _RfL[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](
-    InfluenceTensorLearner[Alg, D, E, A, Pr, Z, P]
-):
+class RFLO[Alg: _RfL[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](InfluenceTensorLearner[Alg, D, E, A, Pr, Z, P]):
     type F[Dl, T] = Fold[Dl, D, E, T]
     type Grad_Pr = Gradient[Pr]
 
-    class __rflo__(
-        GetRfloConfig[E], InfluenceTensorLearner.__infl__[E, A, Pr], Protocol
-    ): ...
+    class __rflo__(GetRfloConfig[E], InfluenceTensorLearner.__infl__[E, A, Pr], Protocol): ...
 
     @do()
-    def influence_tensor[Dl: __rflo__](self, actvStep: F[Dl, A]):
+    def influence_tensor[Dl: __rflo__](self, actvStep: F[Dl, IsVector[A]]):
         dl = yield from ProxyDl[Dl].askDl()
         alpha = yield from dl.getRfloConfig().fmap(lambda x: x.rflo_alpha)
         influenceTensor = yield from dl.getInfluenceTensor()
@@ -511,108 +469,88 @@ class RFLO[Alg: _RfL[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](
         p0 = yield from dl.getParameter()
         parametrized = yield from self.reparameterize(actvStep)
 
-        immedInfl: Pr
+        immedInfl: IsVector[Pr]
         env: E
-        immedInfl, env = eqx.filter_jacrev(lambda p: parametrized(a0, p), has_aux=True)(
-            p0
-        )
-
-        infl: Pr
-        infl = jax.tree.map(
-            lambda x, y: (1 - alpha) * x + alpha * y, influenceTensor.value, immedInfl
-        )
+        immedInfl, env = eqx.filter_jacrev(lambda p: parametrized(a0, p), has_aux=True)(p0)
         _ = yield from put(env)
-        m: Fold[Dl, D, E, Gradient[Pr]]
-        m = pure(Gradient(infl))
+
+        infl = (1 - alpha) * influenceTensor.value + alpha * toVector(immedInfl)
+        m: Fold[Dl, D, E, Jacobian[Pr]]
+        m = pure(Jacobian(infl))
         return m
 
 
 class _UO[D, E, A, Pr, Z](
     _PfL[D, E, A, Pr, Z],
-    GetUORO[E, Pr],
-    PutUORO[E, Pr],
+    GetUORO[E],
+    PutUORO[E],
     GetRnnConfig[E],
     HasPRNG[E, jax.Array],
     Protocol,
 ): ...
 
 
-class UORO[Alg: _UO[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](
-    PastFacingLearn[Alg, D, E, A, Pr, Z, P]
-):
+class UORO[Alg: _UO[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](PastFacingLearn[Alg, D, E, A, Pr, Z, P]):
     type F[Dl, T] = Fold[Dl, D, E, T]
 
     def __init__(self, distribution: Callable[[Array, tuple], Array]):
         super().__init__()
         self.distribution = distribution
 
-    def gradientFlow(self, v: Array, actvStep: F[Alg, A]):
+    def gradientFlow(self, v: Array, actvStep: F[Alg, IsVector[A]]):
         @do()
         def next():
             dl = yield from ProxyDl[Alg].askDl()
             uoro = yield from dl.getUORO()
 
             a0 = yield from dl.getActivation()
+            _ = yield from dl.putActivation(a0)
             p0 = yield from dl.getParameter()
             parametrized = yield from self.reparameterize(actvStep)
             A_prev = uoro.A  # I don't distinguish between column and row tensor.
 
             # 1 calculate the actv_jacobian vector product with A
             immedJac_A_product: Array
-            immedJac_A_product = jvp(lambda a: parametrized(a, p0)[0], a0, A_prev)
+            immedJac_A_product = jvp(lambda a: toVector(parametrized(a, p0)[0]), a0, invmap(a0, lambda _: A_prev))
 
             # doing the vjp saves BIG on memory. Only use O(n^2) as we want
-            fn: Callable[[Pr], tuple[A, E]] = lambda p: parametrized(a0, p)
+            fn: Callable[[IsVector[Pr]], tuple[IsVector[A], E]] = lambda p: parametrized(a0, p)
             _, vjp_func, env = eqx.filter_vjp(fn, p0, has_aux=True)
             _ = yield from put(env)
 
-            immedJacInfl_randomProj: Pr
-            (immedJacInfl_randomProj,) = vjp_func(v)
+            (immedJacInfl_randomProj_,) = vjp_func(invmap(a0, lambda _: v))
+            immedJacInfl_randomProj = toVector(immedJacInfl_randomProj_)
 
-            immed_grads: Fold[Alg, D, E, tuple[Array, Pr]]
+            immed_grads: Fold[Alg, D, E, tuple[Array, Array]]
             immed_grads = pure((immedJac_A_product, immedJacInfl_randomProj))
             return immed_grads
 
         return next()
 
-    def creditAssign(self, A_: Array, B_: Gradient[Pr], e_signal: F[Alg, Gradient[A]]):
+    def creditAssign(self, A_: Array, B_: Array, e_signal: F[Alg, Gradient[A]]):
         def next(signal: Gradient[A]) -> Gradient[Pr]:
             q = signal.value @ A_
-            return jax.tree.map(lambda x: x * q, B_)
+            return Gradient(q * B_)
 
         return e_signal.fmap(next)
 
-    def creditAndUpdateState(self, e_signal: F[Alg, Gradient[A]], actvStep: F[Alg, A]):
+    def recGrad(self, e_signal: F[Alg, Gradient[A]], actvStep: F[Alg, IsVector[A]]):
         @do()
         def next():
             dl = yield from ProxyDl[Alg].askDl()
             uoro = yield from dl.getUORO()
             rnnConfig = yield from dl.getRnnConfig()
-            #!!! WARNING, IMPURITY IN PROGRESS, will address later. Just don't run this function more than once, if autodiffing through it
             key = yield from dl.updatePRNG()
             v = self.distribution(key, (rnnConfig.n_h,))
             B_prev = uoro.B
 
-            immedJac_A_product, immedJacInfl_randomProj = yield from self.gradientFlow(
-                v, actvStep
-            )
+            immedJac_A_product, immedJacInfl_randomProj = yield from self.gradientFlow(v, actvStep)
 
-            rho0: Array = jnp.sqrt(
-                pytree_norm(B_prev) / jnp.linalg.norm(immedJac_A_product)
-            )
-            rho1: Array = jnp.sqrt(
-                pytree_norm(immedJacInfl_randomProj) / jnp.linalg.norm(v)
-            )
+            rho0: Array = jnp.sqrt(jnp.linalg.norm(B_prev) / jnp.linalg.norm(immedJac_A_product))
+            rho1: Array = jnp.sqrt(jnp.linalg.norm(immedJacInfl_randomProj) / jnp.linalg.norm(v))
 
             A_new = rho0 * immedJac_A_product + rho1 * v
-            B_new: Gradient[Pr] = Gradient(
-                jax.tree.map(
-                    lambda x, y: x / rho0 + y / rho1,
-                    B_prev.value,
-                    immedJacInfl_randomProj,
-                )
-            )
-
+            B_new = rho0 * B_prev + rho1 * immedJacInfl_randomProj
             _ = yield from dl.putUORO(replace(uoro, A=A_new, B=B_new))
 
             return self.creditAssign(A_new, B_new, e_signal)
@@ -623,12 +561,7 @@ class UORO[Alg: _UO[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](
 @eqx.filter_jit
 def trainStep[
     Dl, D, E
-](
-    learner: Fold[Dl, D, E, Unit],
-    dialect: Dl,
-    t_series: Traversable[D],
-    initEnv: E,
-) -> E:
+](learner: Fold[Dl, D, E, Unit], dialect: Dl, t_series: Traversable[D], initEnv: E,) -> E:
     model = learner.func
     _, final_env = model(dialect, t_series, initEnv)
     return final_env

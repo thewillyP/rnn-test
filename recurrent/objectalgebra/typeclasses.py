@@ -62,12 +62,12 @@ class HasLabel[D, T](Protocol):
     def getLabel[E](self) -> Fold[Self, D, E, T]: ...
 
 
-class GetUORO[E, Pr](Protocol):
-    def getUORO[D](self) -> Fold[Self, D, E, UORO_Param[Pr]]: ...
+class GetUORO[E](Protocol):
+    def getUORO[D](self) -> Fold[Self, D, E, UORO_Param]: ...
 
 
-class PutUORO[E, Pr](Protocol):
-    def putUORO[D](self, s: UORO_Param[Pr]) -> Fold[Self, D, E, Unit]: ...
+class PutUORO[E](Protocol):
+    def putUORO[D](self, s: UORO_Param) -> Fold[Self, D, E, Unit]: ...
 
 
 class HasPRNG[E, T](Protocol):

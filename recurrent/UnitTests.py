@@ -6,7 +6,7 @@ from recurrent.datarecords import InputOutput
 from recurrent.mylearning import UORO, doRnnReadout, doRnnStep
 from recurrent.myrecords import RnnGodState
 from recurrent.objectalgebra.interpreter import BaseRnnInterpreter
-from recurrent.parameters import Logs, RnnConfig, RnnParameter, UORO_Param
+from recurrent.parameters import IsVector, Logs, RnnConfig, RnnParameter, UORO_Param
 from recurrent.mytypes import *
 from recurrent.util import *
 from recurrent.monad import pure
@@ -34,44 +34,42 @@ class Test_UORO(unittest.TestCase):
         _b_out = jnp.zeros((n_out, 1))
         w_out = jnp.concat((_w_out, _b_out), axis=1)
 
-        w_rec = jnp.ravel(w_rec)
-        w_out = jnp.ravel(w_out)
-
         a_init = jnp.ones(n_h)
 
         parameter = RnnParameter(
-            w_rec=PARAMETER(w_rec),
-            w_out=PARAMETER(w_out),
+            w_rec=w_rec,
+            w_out=w_out,
         )
-        rnnConfig = RnnConfig(
-            n_h=n_h, n_in=n_in, n_out=n_out, alpha=alpha, activationFn=lambda x: x
-        )
+        rnnConfig = RnnConfig(n_h=n_h, n_in=n_in, n_out=n_out, alpha=alpha, activationFn=lambda x: x)
 
         cls.key = PRNG(jax.random.key(42))
 
         cls.initEnv = RnnGodState[RnnParameter, None, None](
             # activation=ACTIVATION(torch.randn(batch_size, n_h)),
-            activation=ACTIVATION(a_init),
+            activation=IsVector[jax.Array](vector=a_init, toParam=lambda x: x),
             influenceTensor=jnp.empty(0),
             ohoInfluenceTensor=jnp.empty(0),
-            parameter=parameter,
+            parameter=endowVector(parameter),
             hyperparameter=jnp.empty(0),
             metaHyperparameter=jnp.empty(0),
             rnnConfig=rnnConfig,
             rnnConfig_bilevel=jnp.empty(0),
             rfloConfig=jnp.empty(0),
             rfloConfig_bilevel=jnp.empty(0),
-            uoro=UORO_Param[RnnParameter](
+            uoro=UORO_Param(
                 A=jnp.ones(n_h),
-                B=Gradient[RnnParameter](
-                    RnnParameter(
-                        w_rec=PARAMETER(jnp.ones_like(parameter.w_rec)),
-                        w_out=PARAMETER(jnp.zeros_like(parameter.w_out)),
+                B=toVector(
+                    endowVector(
+                        RnnParameter(
+                            w_rec=jnp.ones_like(parameter.w_rec),
+                            w_out=jnp.zeros_like(parameter.w_out),
+                        )
                     )
                 ),
             ),
             prng=cls.key,
             logs=Logs(loss=jnp.empty(0, dtype=jnp.float32)),
+            oho_logs=Logs(loss=jnp.empty(0, dtype=jnp.float32)),
         )
 
         x = 2 * jnp.ones(n_in)
@@ -102,34 +100,29 @@ class Test_UORO(unittest.TestCase):
         )
 
     def test_update_learning_vars(self):
-        v = jax.random.uniform(
-            self.key, (self.initEnv.rnnConfig.n_h,), minval=-1, maxval=1
-        )
+        v = jax.random.uniform(self.key, (self.initEnv.rnnConfig.n_h,), minval=-1, maxval=1)
 
         model = eqx.filter_jit(self.uoro.gradientFlow(v, doRnnStep()).func)
         safe_model = model.lower(self.dialect, self.x_input, self.initEnv).compile()
         (a_j, p_papw), env = safe_model(self.dialect, self.x_input, self.initEnv)
 
-        flats_, _ = jax.tree.flatten(p_papw)
-        p_papw_pred = jnp.concat(flats_)
-
         correct_a_J_ = jnp.eye(2)
-        correct_a_J = correct_a_J_ @ self.initEnv.activation
+        correct_a_J = correct_a_J_ @ toVector(self.initEnv.activation)
         correct_papw_ = v @ jnp.array(
             [[1, 1, 2, 2, 1, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 1, 1, 2, 2, 1]],
             dtype=jnp.float32,
         )
-        correct_papw = Gradient[RnnParameter](
-            RnnParameter(
-                w_rec=PARAMETER(jnp.ravel(correct_papw_)),
-                w_out=PARAMETER(jnp.zeros_like(self.initEnv.parameter.w_out)),
+        correct_papw = toVector(
+            endowVector(
+                RnnParameter(
+                    w_rec=jnp.ravel(correct_papw_),
+                    w_out=jnp.zeros_like(toParam(self.initEnv.parameter).w_out),
+                )
             )
         )
-        flats, _ = jax.tree.flatten(correct_papw)
-        correct_papw = jnp.concat(flats)
 
         jnp.allclose(a_j, correct_a_J)
-        jnp.allclose(p_papw_pred, correct_papw)
+        jnp.allclose(p_papw, correct_papw)
 
     def test_get_influence_estimate(self):
 
@@ -138,22 +131,20 @@ class Test_UORO(unittest.TestCase):
         _, env = safe_model(self.dialect, self.x_input, self.initEnv)
         A_pred = env.uoro.A
         B_pred = env.uoro.B
-        flats_, _ = jax.tree.flatten(B_pred)
-        B_pred = jnp.concat(flats_)
 
         p0 = jnp.sqrt(jnp.sqrt(jnp.array(5.0)))
         p1 = jnp.sqrt(jnp.sqrt(jnp.array(11.0)))
         M_proj = jnp.array([[1, 1, 2, 2, 1], [-1, -1, -2, -2, -1]])
         A_correct = p0 * jnp.array([1, 1]) + p1 * jnp.array([1, -1])
         B_correct = (1 / p0) * jnp.ones((2, 5)) + (1 / p1) * M_proj
-        B_correct = Gradient[RnnParameter](
-            RnnParameter(
-                w_rec=PARAMETER(jnp.ravel(B_correct)),
-                w_out=PARAMETER(jnp.zeros_like(self.initEnv.parameter.w_out)),
+        B_correct = toVector(
+            endowVector(
+                RnnParameter(
+                    w_rec=jnp.ravel(B_correct),
+                    w_out=jnp.zeros_like(toParam(self.initEnv.parameter).w_out),
+                )
             )
         )
-        flats_, _ = jax.tree.flatten(B_correct)
-        B_correct = jnp.concat(flats_)
 
         jnp.allclose(A_pred, A_correct)
         jnp.allclose(B_pred, B_correct)
@@ -165,17 +156,15 @@ class Test_UORO(unittest.TestCase):
         model = eqx.filter_jit(self.uoro.creditAssign(A, B, error).func)
         safe_model = model.lower(self.dialect, self.x_input, self.initEnv).compile()
         rec_grads, _ = safe_model(self.dialect, self.x_input, self.initEnv)
-        flats_, _ = jax.tree.flatten(rec_grads)
-        rec_grads = jnp.concat(flats_)
 
         correct_rec_grads = jnp.ones((2, 5))
-        correct_rec_grads = Gradient[RnnParameter](
-            RnnParameter(
-                w_rec=PARAMETER(jnp.ravel(correct_rec_grads)),
-                w_out=PARAMETER(jnp.zeros_like(self.initEnv.parameter.w_out)),
+        correct_rec_grads = toVector(
+            endowVector(
+                RnnParameter(
+                    w_rec=jnp.ravel(correct_rec_grads),
+                    w_out=jnp.zeros_like(toParam(self.initEnv.parameter).w_out),
+                )
             )
         )
-        flats_, _ = jax.tree.flatten(correct_rec_grads)
-        correct_rec_grads = jnp.concat(flats_)
 
-        jnp.allclose(rec_grads, correct_rec_grads)
+        jnp.allclose(rec_grads.value, correct_rec_grads)

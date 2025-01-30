@@ -20,45 +20,45 @@ type GOD[A, B, C] = RnnGodState[A, B, C]
 
 
 class BaseRnnGodInterpreter[A, B, C](
-    GetActivation[GOD[A, B, C], ACTIVATION],
-    PutActivation[GOD[A, B, C], ACTIVATION],
-    GetParameter[GOD[A, B, C], A],
-    PutParameter[GOD[A, B, C], A],
-    GetHyperParameter[GOD[A, B, C], B],
-    PutHyperParameter[GOD[A, B, C], B],
-    GetInfluenceTensor[GOD[A, B, C], Gradient[A]],
-    PutInfluenceTensor[GOD[A, B, C], Gradient[A]],
+    GetActivation[GOD[A, B, C], IsVector[ACTIVATION]],
+    PutActivation[GOD[A, B, C], IsVector[ACTIVATION]],
+    GetParameter[GOD[A, B, C], IsVector[A]],
+    PutParameter[GOD[A, B, C], IsVector[A]],
+    GetHyperParameter[GOD[A, B, C], IsVector[B]],
+    PutHyperParameter[GOD[A, B, C], IsVector[B]],
+    GetInfluenceTensor[GOD[A, B, C], Jacobian[A]],
+    PutInfluenceTensor[GOD[A, B, C], Jacobian[A]],
     GetRfloConfig[GOD[A, B, C]],
     GetRnnConfig[GOD[A, B, C]],
-    GetUORO[GOD[A, B, C], A],
-    PutUORO[GOD[A, B, C], A],
+    GetUORO[GOD[A, B, C]],
+    PutUORO[GOD[A, B, C]],
     PutLog[GOD[A, B, C], Logs],
 ):
 
     type God = GOD[A, B, C]
 
-    def getActivation[D](self) -> Fold[Self, D, God, ACTIVATION]:
+    def getActivation[D](self) -> Fold[Self, D, God, IsVector[ACTIVATION]]:
         return gets(lambda e: e.activation)
 
-    def putActivation[D](self, s: ACTIVATION) -> Fold[Self, D, God, Unit]:
+    def putActivation[D](self, s: IsVector[ACTIVATION]) -> Fold[Self, D, God, Unit]:
         return modifies(lambda e: eqx.tree_at(lambda t: t.activation, e, s))
 
-    def getParameter[D](self) -> Fold[Self, D, God, A]:
+    def getParameter[D](self) -> Fold[Self, D, God, IsVector[A]]:
         return gets(lambda e: e.parameter)
 
-    def putParameter[D](self, s: A) -> Fold[Self, D, God, Unit]:
+    def putParameter[D](self, s: IsVector[A]) -> Fold[Self, D, God, Unit]:
         return modifies(lambda e: eqx.tree_at(lambda t: t.parameter, e, s))
 
-    def getHyperParameter[D](self) -> Fold[Self, D, God, B]:
+    def getHyperParameter[D](self) -> Fold[Self, D, God, IsVector[B]]:
         return gets(lambda e: e.hyperparameter)
 
-    def putHyperParameter[D](self, s: B) -> Fold[Self, D, God, Unit]:
+    def putHyperParameter[D](self, s: IsVector[B]) -> Fold[Self, D, God, Unit]:
         return modifies(lambda e: eqx.tree_at(lambda t: t.hyperparameter, e, s))
 
-    def getInfluenceTensor[D](self) -> Fold[Self, D, God, Gradient[A]]:
+    def getInfluenceTensor[D](self) -> Fold[Self, D, God, Jacobian[A]]:
         return gets(lambda e: e.influenceTensor)
 
-    def putInfluenceTensor[D](self, s: Gradient[A]) -> Fold[Self, D, God, Unit]:
+    def putInfluenceTensor[D](self, s: Jacobian[A]) -> Fold[Self, D, God, Unit]:
         return modifies(lambda e: eqx.tree_at(lambda t: t.influenceTensor, e, s))
 
     def getRfloConfig[D](self) -> Fold[Self, D, God, RfloConfig]:
@@ -67,16 +67,14 @@ class BaseRnnGodInterpreter[A, B, C](
     def getRnnConfig[D](self) -> Fold[Self, D, God, RnnConfig]:
         return gets(lambda e: e.rnnConfig)
 
-    def getUORO[D](self) -> Fold[Self, D, God, UORO_Param[A]]:
+    def getUORO[D](self) -> Fold[Self, D, God, UORO_Param]:
         return gets(lambda e: e.uoro)
 
-    def putUORO[D](self, s: UORO_Param[A]) -> Fold[Self, D, God, Unit]:
+    def putUORO[D](self, s: UORO_Param) -> Fold[Self, D, God, Unit]:
         return modifies(lambda e: eqx.tree_at(lambda t: t.uoro, e, s))
 
     def putLog[D](self, s: Logs) -> Fold[Self, D, God, Unit]:
-        return modifies(
-            lambda e: eqx.tree_at(lambda t: t.logs, e, eqx.combine(s, e.logs))
-        )
+        return modifies(lambda e: eqx.tree_at(lambda t: t.logs, e, eqx.combine(s, e.logs)))
 
 
 class DataInterpreter(
@@ -126,9 +124,7 @@ class RNGInterpreter[A, B, C](HasPRNG[GOD[A, B, C], PRNG]):
 
 
 # use this as my default interpreter
-class BaseRnnInterpreter[A, B, C](
-    BaseRnnGodInterpreter[A, B, C], DataInterpreter, RNGInterpreter[A, B, C]
-): ...
+class BaseRnnInterpreter[A, B, C](BaseRnnGodInterpreter[A, B, C], DataInterpreter, RNGInterpreter[A, B, C]): ...
 
 
 class OhoRnnTrainInterpreter[A, B, C](
@@ -202,11 +198,7 @@ class BilevelRnnGodInterpreter[A, B, C](
         return gets(lambda e: e.rnnConfig_bilevel)
 
     def putLog[D](self, s: Logs) -> Fold[Self, D, G, Unit]:
-        return modifies(
-            lambda e: eqx.tree_at(lambda t: t.oho_logs, e, eqx.combine(s, e.oho_logs))
-        )
+        return modifies(lambda e: eqx.tree_at(lambda t: t.oho_logs, e, eqx.combine(s, e.oho_logs)))
 
 
-class OhoInterpreter[A, B, C](
-    BilevelRnnGodInterpreter[A, B, C], RNGInterpreter[A, B, C]
-): ...
+class OhoInterpreter[A, B, C](BilevelRnnGodInterpreter[A, B, C], RNGInterpreter[A, B, C]): ...

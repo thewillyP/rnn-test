@@ -22,17 +22,17 @@ Will refactor later, but global god state is fine for now.
 
 
 class RnnGodState[A: eqx.Module, B: eqx.Module, C: eqx.Module](eqx.Module):
-    activation: ACTIVATION
+    activation: IsVector[ACTIVATION]
     influenceTensor: Gradient[A]
     ohoInfluenceTensor: Gradient[B]
-    parameter: A
-    hyperparameter: B
-    metaHyperparameter: C
+    parameter: IsVector[A]
+    hyperparameter: IsVector[B]
+    metaHyperparameter: IsVector[C]
     rnnConfig: RnnConfig = eqx.field(static=True)
     rnnConfig_bilevel: RnnConfig = eqx.field(static=True)
     rfloConfig: RfloConfig = eqx.field(static=True)
     rfloConfig_bilevel: RfloConfig = eqx.field(static=True)
-    uoro: UORO_Param[A]
+    uoro: UORO_Param
     prng: PRNG
     logs: Logs
     oho_logs: Logs
@@ -57,9 +57,7 @@ def batch_rtrl[A: eqx.Module, B: eqx.Module, C: eqx.Module]() -> RnnGodState[A, 
     )
 
 
-def batch_vanilla[
-    A: eqx.Module, B: eqx.Module, C: eqx.Module
-]() -> RnnGodState[A, B, C]:
+def batch_vanilla[A: eqx.Module, B: eqx.Module, C: eqx.Module]() -> RnnGodState[A, B, C]:
     return RnnGodState(
         activation=0,
         influenceTensor=None,

@@ -28,6 +28,10 @@ def flip[A, B, C](f: Callable[[A, B], C]) -> Callable[[B, A], C]:
     return flip_
 
 
+def curry[A, B, C](f: Callable[[A, B], C]) -> Callable[[A, B], C]:
+    return lambda a, b: f((a, b))
+
+
 # def sequenceF2(
 #     fs: Iterable[Callable[[A, B], C]]
 # ) -> Callable[[A], Iterator[Callable[[B], C]]]:
