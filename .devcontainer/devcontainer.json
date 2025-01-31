@@ -12,10 +12,10 @@
 				"mhutchie.git-graph",
 				"ms-toolsai.jupyter",
 				"GitHub.copilot",
-				// "ms-python.autopep8",
 				"njqdev.vscode-python-typehint",
 				"ms-python.mypy-type-checker",
-				"ms-python.black-formatter"
+				// "ms-python.black-formatter",
+				"charliermarsh.ruff"
 			],
 			"settings": {
 				"editor.formatOnSave": true,

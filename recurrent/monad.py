@@ -15,8 +15,13 @@ from recurrent.mytypes import Traversable, G
 class Unit(NamedTuple): ...
 
 
-class Fold[D, E, S, A](NamedTuple):
+class PX[T](NamedTuple): ...
 
+
+class PX3[A, B, C](NamedTuple): ...
+
+
+class Fold[D, E, S, A](NamedTuple):
     func: Callable[[D, E, S], tuple[A, S]]
 
     def __iter__(self) -> Generator[None, None, A]: ...  # type: ignore
@@ -51,32 +56,20 @@ class Fold[D, E, S, A](NamedTuple):
         return Fold(next)  # type: ignore
 
 
-def pure[D, E, S, A](value: A) -> Fold[D, E, S, A]:
+def pure[D, E, S, A](value: A, _: PX3[D, E, S]) -> Fold[D, E, S, A]:
     return Fold(lambda _d, _e, state: (value, state))
 
 
-def get[D, E, S]() -> Fold[D, E, S, S]:
+def get[D, E, S](_: PX[S]) -> Fold[D, E, S, S]:
     return Fold(lambda _d, _e, state: (state, state))
-
-
-class ProxyS[S]:
-    @staticmethod
-    def get[D, E]() -> Fold[D, E, S, S]:
-        return Fold(lambda _d, _e, state: (state, state))
 
 
 def put[D, E, S](new_state: S) -> Fold[D, E, S, Unit]:
     return Fold(lambda _d, _e, _s: (Unit(), new_state))
 
 
-def ask[D, E, S]() -> Fold[D, E, S, E]:
+def ask[D, E, S](_: PX[E]) -> Fold[D, E, S, E]:
     return Fold(lambda _d, env, state: (env, state))
-
-
-class ProxyR[E]:
-    @staticmethod
-    def ask[D, S]() -> Fold[D, E, S, E]:
-        return Fold(lambda _d, env, state: (env, state))
 
 
 def asks[D, E, S, A](func: Callable[[E], A]) -> Fold[D, E, S, A]:
@@ -95,17 +88,11 @@ def modifies[D, E, S](func: Callable[[S], S]) -> Fold[D, E, S, Unit]:
 def modifies_[D, E, S, A](func: Callable[[S], tuple[A, S]]) -> G[Fold[D, E, S, A]]:
     a, s = yield from gets(func)
     _ = yield from put(s)
-    return pure(a)
+    return pure(a, PX[D, E, S]())
 
 
-def askDl[D, E, S]() -> Fold[D, E, S, D]:
+def askForInterpreter[D, E, S](_: PX[D]) -> Fold[D, E, S, D]:
     return Fold(lambda d, _e, state: (d, state))
-
-
-class ProxyDl[D]:
-    @staticmethod
-    def askDl[E, S]() -> Fold[D, E, S, D]:
-        return Fold(lambda d, _e, state: (d, state))
 
 
 def stateToFold[D, E, S, T](func: Callable[[S], tuple[T, S]]) -> Fold[D, E, S, T]:
@@ -114,18 +101,6 @@ def stateToFold[D, E, S, T](func: Callable[[S], tuple[T, S]]) -> Fold[D, E, S, T
 
 def toFold[D, E, S, T](func: Callable[[E, S], tuple[T, S]]):
     return Fold[D, E, S, T](lambda _d, env, state: func(env, state))  # type: ignore
-
-
-# these guys need to be strict
-# def foldM[Dl, D, E, B](func: Callable[[B], "Fold[Dl, D, E, B]"], init: B):
-#     def wrapper(dl: Dl, ds: Iterable[D], state: E) -> tuple[B, E]:
-#         def fold(d: D, pair: tuple[B, E]) -> tuple[B, E]:
-#             acc, state = pair
-#             return func(acc).func(dl, d, state)
-
-#         return foldr(fold)(ds, (init, state))
-
-#     return Fold(wrapper)
 
 
 def repeatM[Dl, D, E, A](m: Fold[Dl, D, E, A]):
@@ -141,7 +116,6 @@ def repeatM[Dl, D, E, A](m: Fold[Dl, D, E, A]):
 
 
 def traverse[Dl, D, E, B](m: "Fold[Dl, D, E, B]"):
-
     def wrapper(dl: Dl, ds: Traversable[D], state: E) -> tuple[Traversable[B], E]:
         def traverse_(s_prev: E, d: D):
             b, s = m.func(dl, d, s_prev)

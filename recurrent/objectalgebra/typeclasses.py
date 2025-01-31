@@ -76,10 +76,10 @@ class HasPRNG[E, T](Protocol):
     def putPRNG[D](self, s: T) -> Fold[Self, D, E, Unit]: ...
 
     @do()
-    def updatePRNG[D](self) -> G[Fold[Self, D, E, T]]:
+    def updatePRNG[D, E](self) -> G[Fold[Self, D, E, T]]:
         prng, new_prng = yield from self.generatePRNG()
         _ = yield from self.putPRNG(new_prng)
-        return pure(prng)
+        return pure(prng, PX3[Self, D, E]())
 
 
 class PutLog[E, T](Protocol):

@@ -3,20 +3,19 @@ from unittest.mock import MagicMock
 
 
 from recurrent.datarecords import InputOutput
-from recurrent.mylearning import UORO, doRnnReadout, doRnnStep
+from recurrent.mylearning import UORO, RnnLibrary, doRnnReadout, doRnnStep
 from recurrent.myrecords import RnnGodState
 from recurrent.objectalgebra.interpreter import BaseRnnInterpreter
 from recurrent.parameters import IsVector, Logs, RnnConfig, RnnParameter, UORO_Param
 from recurrent.mytypes import *
 from recurrent.util import *
-from recurrent.monad import pure
+from recurrent.monad import PX, pure
 import jax.numpy as jnp
 import jax
 import optax
 
 
 class Test_UORO(unittest.TestCase):
-
     @classmethod
     def setUpClass(cls):
         alpha = 1.0
@@ -46,7 +45,7 @@ class Test_UORO(unittest.TestCase):
 
         cls.initEnv = RnnGodState[RnnParameter, None, None](
             # activation=ACTIVATION(torch.randn(batch_size, n_h)),
-            activation=IsVector[jax.Array](vector=a_init, toParam=lambda x: x),
+            activation=IsVector[ACTIVATION](vector=ACTIVATION(a_init), toParam=lambda x: x),
             influenceTensor=jnp.empty(0),
             ohoInfluenceTensor=jnp.empty(0),
             parameter=endowVector(parameter),
@@ -84,7 +83,6 @@ class Test_UORO(unittest.TestCase):
         distribution.return_value = jnp.array([1.0, -1.0])
 
         cls.uoro = UORO[
-            DL,
             InputOutput,
             ENV,
             ACTIVATION,
@@ -93,7 +91,8 @@ class Test_UORO(unittest.TestCase):
             PREDICTION,
         ](distribution)
 
-        cls.rnnLearner = cls.uoro.onlineLearning(
+        cls.rnnLearner: RnnLibrary[DL, InputOutput, ENV, PREDICTION, RnnParameter]
+        cls.rnnLearner = cls.uoro.createLearner(
             doRnnStep(),
             doRnnReadout(),
             lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b)),
@@ -102,7 +101,7 @@ class Test_UORO(unittest.TestCase):
     def test_update_learning_vars(self):
         v = jax.random.uniform(self.key, (self.initEnv.rnnConfig.n_h,), minval=-1, maxval=1)
 
-        model = eqx.filter_jit(self.uoro.gradientFlow(v, doRnnStep()).func)
+        model = eqx.filter_jit(self.uoro.getProjectedGradients(v, doRnnStep()).func)
         safe_model = model.lower(self.dialect, self.x_input, self.initEnv).compile()
         (a_j, p_papw), env = safe_model(self.dialect, self.x_input, self.initEnv)
 
@@ -125,7 +124,6 @@ class Test_UORO(unittest.TestCase):
         jnp.allclose(p_papw, correct_papw)
 
     def test_get_influence_estimate(self):
-
         model = eqx.filter_jit(self.rnnLearner.rnnWithGradient.func)
         safe_model = model.lower(self.dialect, self.x_input, self.initEnv).compile()
         _, env = safe_model(self.dialect, self.x_input, self.initEnv)
@@ -150,10 +148,9 @@ class Test_UORO(unittest.TestCase):
         jnp.allclose(B_pred, B_correct)
 
     def test_get_rec_grads(self):
-
         A, B = self.initEnv.uoro.A, self.initEnv.uoro.B
-        error = pure(Gradient(jnp.ones(2) * 0.5))
-        model = eqx.filter_jit(self.uoro.creditAssign(A, B, error).func)
+        error = pure(Gradient(jnp.ones(2) * 0.5), PX())
+        model = eqx.filter_jit(self.uoro.propagateRecurrentError(A, B, error).func)
         safe_model = model.lower(self.dialect, self.x_input, self.initEnv).compile()
         rec_grads, _ = safe_model(self.dialect, self.x_input, self.initEnv)
 

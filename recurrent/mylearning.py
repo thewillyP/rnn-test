@@ -30,6 +30,17 @@ class RnnLibrary[DL, D, E, P, Pr](NamedTuple):
     rnnWithGradient: Fold[DL, D, E, Gradient[Pr]]
 
 
+class CreateLearner[Data, Env, Actv, Param, Label, Pred](Protocol):
+    type ST[Interpreter, Computed] = Fold[Interpreter, Data, Env, Computed]
+
+    def createLearner[Interpreter](
+        self,
+        activationStep: ST[Interpreter, IsVector[Actv]],
+        predictionStep: ST[Interpreter, IsVector[Param]],
+        lossFunction: LossFn[Label, Pred],
+    ) -> RnnLibrary[Interpreter, Data, Env, Pred, Param]: ...
+
+
 @eqx.filter_jit
 def pytree_norm(tree):
     squared = jax.tree.map(lambda x: jnp.sum(x**2), tree)
@@ -47,115 +58,111 @@ def jacobian_matrix_product(f, primal, matrix):
     return jax.vmap(wrapper, in_axes=(None, 1), out_axes=1)(primal, matrix)
 
 
-class _SGD[E, Pr](
-    GetParameter[E, IsVector[Pr]],
-    PutParameter[E, IsVector[Pr]],
-    GetHyperParameter[E, IsVector[SgdParameter]],
+class _SGD_Can[Env, Param](
+    GetParameter[Env, IsVector[Param]],
+    PutParameter[Env, IsVector[Param]],
+    GetHyperParameter[Env, IsVector[SgdParameter]],
     Protocol,
 ): ...
 
 
 @do()
-def doSgdStep[Dl: _SGD[E, Pr], D, E, Pr: Module](gr: GR[Pr]) -> G[Fold[Dl, D, E, Unit]]:
-    dl = yield from ProxyDl[Dl].askDl()
-    isParam = yield from dl.getParameter()
-    hyperparam = yield from dl.getHyperParameter().fmap(toParam)
+def doSgdStep[Interpreter: _SGD_Can[Env, Param], Data, Env, Param: Module](
+    gr: Gradient[Param],
+) -> G[Fold[Interpreter, Data, Env, Unit]]:
+    interpreter = yield from askForInterpreter(PX[Interpreter]())
+    isParam = yield from interpreter.getParameter()
+    hyperparam = yield from interpreter.getHyperParameter().fmap(toParam)
     new_param = invmap(isParam, lambda x: x - hyperparam.learning_rate * gr.value)
-    return dl.putParameter(new_param)
+    return interpreter.putParameter(new_param)
 
 
-class _R[D, E](
-    GetActivation[E, IsVector[ACTIVATION]],
-    PutActivation[E, IsVector[ACTIVATION]],
-    GetParameter[E, IsVector[RnnParameter]],
-    HasInput[D, Array],
-    GetRnnConfig[E],
+class _RnnActivation_Can[Data, Env](
+    GetActivation[Env, IsVector[ACTIVATION]],
+    PutActivation[Env, IsVector[ACTIVATION]],
+    GetParameter[Env, IsVector[RnnParameter]],
+    HasInput[Data, Array],
+    GetRnnConfig[Env],
     Protocol,
 ): ...
 
 
 @do()
-def doRnnStep[Dl: _R[D, E], D, E]() -> G[Fold[Dl, D, E, IsVector[ACTIVATION]]]:
-    dl = yield from ProxyDl[Dl].askDl()
-    x = yield from dl.getInput()
-    activ_v = yield from dl.getActivation()
+def doRnnStep[Interpreter: _RnnActivation_Can[Data, Env], Data, Env]():
+    interpreter = yield from askForInterpreter(PX[Interpreter]())
+    x = yield from interpreter.getInput()
+    activ_v = yield from interpreter.getActivation()
     a = toVector(activ_v)
-    param = yield from dl.getParameter().fmap(toParam)
-    cfg = yield from dl.getRnnConfig()
+    param = yield from interpreter.getParameter().fmap(toParam)
+    cfg = yield from interpreter.getRnnConfig()
+
     a_rec = param.w_rec @ jnp.concat((a, x, jnp.array([1.0])))
     a_new = ACTIVATION((1 - cfg.alpha) * a + cfg.alpha * cfg.activationFn(a_rec))
     new_activ_v = invmap(activ_v, lambda _: a_new)
-    _ = yield from dl.putActivation(new_activ_v)
-    return pure(new_activ_v)
+    _ = yield from interpreter.putActivation(new_activ_v)
+    return pure(new_activ_v, PX3[Interpreter, Data, Env]())
 
 
-class _Re[E](
-    GetActivation[E, IsVector[ACTIVATION]],
-    GetParameter[E, IsVector[RnnParameter]],
-    GetRnnConfig[E],
+class _RnnReadout_Can[Env](
+    GetActivation[Env, IsVector[ACTIVATION]],
+    GetParameter[Env, IsVector[RnnParameter]],
+    GetRnnConfig[Env],
     Protocol,
 ): ...
 
 
 @do()
-def doRnnReadout[Dl: _Re[E], D, E]() -> G[Fold[Dl, D, E, PREDICTION]]:
-    dl = yield from ProxyDl[Dl].askDl()
-    a = yield from dl.getActivation().fmap(toVector)
-    param = yield from dl.getParameter().fmap(toParam)
-    return pure(PREDICTION(param.w_out @ jnp.concat((a, jnp.array([1.0])))))
+def doRnnReadout[Interpreter: _RnnReadout_Can[Env], Data, Env]():
+    interpreter = yield from askForInterpreter(PX[Interpreter]())
+    a = yield from interpreter.getActivation().fmap(toVector)
+    param = yield from interpreter.getParameter().fmap(toParam)
+
+    pred = PREDICTION(param.w_out @ jnp.concat((a, jnp.array([1.0]))))
+    return pure(pred, PX3[Interpreter, Data, Env]())
 
 
-class _L[D, T](HasLabel[D, T], Protocol): ...
+def doLoss[Data, Env, Pred, Label](lossFn: LossFn[Label, Pred]):
+    class _Loss_Can(HasLabel[Data, Label], Protocol): ...
 
-
-type DoLossFn[Dl: _L[D, T], D, E, P, T] = Callable[[P], Fold[Dl, D, E, LOSS]]
-
-
-def doLoss[Dl: _L[D, T], D, E, P, T](lossFn: LossFn[T, P]) -> DoLossFn[Dl, D, E, P, T]:
     @do()
-    def loss_(pred: P) -> G[Fold[Dl, D, E, LOSS]]:
-        d = yield from ProxyDl[Dl].askDl()
-        label = yield from d.getLabel()
+    def _lossFn[Interpreter: _Loss_Can](pred: Pred):
+        interpreter = yield from askForInterpreter(PX[Interpreter]())
+        label = yield from interpreter.getLabel()
         loss = lossFn(pred, label)
-        return pure(loss)
+        return pure(loss, PX3[Interpreter, Data, Env]())
 
-    return loss_
+    return _lossFn
 
 
 type FnFmap[Inp, A, B] = Callable[[Callable[[Inp], A]], Callable[[Inp], B]]
 
 
 @do()
-def fold_fmap[
-    Dl, D, E, Inp, A, B
-](
-    action: Fold[Dl, D, E, A],
-    read_wrt: Fold[Dl, D, E, Inp],
-    write_wrt: Callable[[Inp], Fold[Dl, D, E, Unit]],
-    fn_fmap: FnFmap[Inp, tuple[A, E], B],
-) -> G[Fold[Dl, D, E, B]]:
-
-    dl = yield from ProxyDl[Dl].askDl()
-    d = yield from ProxyR[D].ask()
-    e = yield from ProxyS[E].get()
+def fold_fmap[Interpreter, Data, Env, Inp, A, B](
+    action: Fold[Interpreter, Data, Env, A],
+    read_wrt: Fold[Interpreter, Data, Env, Inp],
+    write_wrt: Callable[[Inp], Fold[Interpreter, Data, Env, Unit]],
+    fn_fmap: FnFmap[Inp, tuple[A, Env], B],
+) -> G[Fold[Interpreter, Data, Env, B]]:
+    interpreter = yield from askForInterpreter(PX[Interpreter]())
+    data = yield from ask(PX[Data]())
+    env = yield from get(PX[Env]())
     inp = yield from read_wrt
 
-    def parametrized(i: Inp) -> tuple[A, E]:
-        return write_wrt(i).then(action).func(dl, d, e)
+    def parametrized(i: Inp) -> tuple[A, Env]:
+        return write_wrt(i).then(action).func(interpreter, data, env)
 
     b = fn_fmap(parametrized)(inp)
-    return pure(b)
+    return pure(b, PX3[Interpreter, Data, Env]())
 
 
 @do()
-def doDifferentiation[
-    Dl, D, E, Pr: Module, A: Module, T: IsVector[A] | Array
-](
-    model: Fold[Dl, D, E, T],
-    read_wrt: Fold[Dl, D, E, IsVector[Pr]],
-    write_wrt: Callable[[IsVector[Pr]], Fold[Dl, D, E, Unit]],
-    jax_diff: FnFmap[IsVector[Pr], tuple[T, E], tuple[IsVector[Pr], E]],
-) -> G[Fold[Dl, D, E, jax.Array]]:
+def doDifferentiation[Interpreter, Data, Env, Param: Module, A: Module, T: IsVector[A] | Array](
+    model: Fold[Interpreter, Data, Env, T],
+    read_wrt: Fold[Interpreter, Data, Env, IsVector[Param]],
+    write_wrt: Callable[[IsVector[Param]], Fold[Interpreter, Data, Env, Unit]],
+    jax_diff: FnFmap[IsVector[Param], tuple[T, Env], tuple[IsVector[Param], Env]],
+) -> G[Fold[Interpreter, Data, Env, jax.Array]]:
     gr, env = yield from fold_fmap(
         model,
         read_wrt,
@@ -163,84 +170,67 @@ def doDifferentiation[
         jax_diff,
     )
     _ = yield from put(env)
-    return pure(toVector(gr))
+    return pure(toVector(gr), PX3[Interpreter, Data, Env]())
 
 
 # no auto curry so bulk in code is unavoidable
-def doJacobian[
-    Dl, D, E, Pr: Module, T
-](
-    model: Fold[Dl, D, E, IsVector[T]],
-    read_wrt: Fold[Dl, D, E, IsVector[Pr]],
-    write_wrt: Callable[[IsVector[Pr]], Fold[Dl, D, E, Unit]],
+def doJacobian[Interpreter, Data, Env, Param: Module, T](
+    model: Fold[Interpreter, Data, Env, IsVector[T]],
+    read_wrt: Fold[Interpreter, Data, Env, IsVector[Param]],
+    write_wrt: Callable[[IsVector[Param]], Fold[Interpreter, Data, Env, Unit]],
 ):
     return doDifferentiation(model, read_wrt, write_wrt, lambda f: eqx.filter_jacrev(f, has_aux=True)).fmap(
-        Jacobian[Pr]
+        Jacobian[Param]
     )
 
 
-def doGradient[
-    Dl, D, E, Pr: Module
-](
-    model: Fold[Dl, D, E, jax.Array],
-    read_wrt: Fold[Dl, D, E, IsVector[Pr]],
-    write_wrt: Callable[[IsVector[Pr]], Fold[Dl, D, E, Unit]],
+def doGradient[Interpreter, Data, Env, Param: Module](
+    model: Fold[Interpreter, Data, Env, jax.Array],
+    read_wrt: Fold[Interpreter, Data, Env, IsVector[Param]],
+    write_wrt: Callable[[IsVector[Param]], Fold[Interpreter, Data, Env, Unit]],
 ):
     return doDifferentiation(model, read_wrt, write_wrt, lambda f: eqx.filter_jacrev(f, has_aux=True)).fmap(
-        Gradient[Pr]
+        Gradient[Param]
     )
 
 
-@do()
-def doAvgGradient[
-    DL, D, E, Pr: Module
-](step: Fold[DL, D, E, Gradient[Pr]], weightFn: Callable[[D], float],) -> G[Fold[DL, Traversable[D], E, Gradient[Pr]]]:
+def endowAveragedGradients[Interpreter, Data: Module, Env, Pred, Param: Module](
+    rnnLibrary: RnnLibrary[Interpreter, Traversable[Data], Env, Pred, Param], trunc: int, N: int
+) -> RnnLibrary[Interpreter, Traversable[Data], Env, Pred, Param]:
+    type ST[Computed] = Fold[Interpreter, Traversable[Data], Env, Computed]
+
     @do()
-    def doWeight() -> G[Fold[DL, D, E, Gradient[Pr]]]:
-        d = yield from ProxyR[D].ask()
-        gr_new = yield from step
-        weighted = gr_new.value * weightFn(d)
-        return pure(Gradient(weighted))
-
-    return accumulate(doWeight(), add, Gradient[Pr](0.0))
-
-
-def endowAverageGradients[
-    Dl, D: Module, E, P, Pr: Module
-](rnnLibrary: RnnLibrary[Dl, Traversable[D], E, P, Pr], trunc: int, N: int) -> RnnLibrary[Dl, Traversable[D], E, P, Pr]:
-    @do()
-    def avgGradient() -> G[Fold[Dl, Traversable[D], E, Gradient[Pr]]]:
+    def avgGradient() -> G[ST[Gradient[Param]]]:
         n_complete = (N // trunc) * trunc
         n_leftover = N - n_complete
-        dl = yield from ProxyDl[Dl].askDl()
-        ds = yield from ProxyR[Traversable[D]].ask()
+        dataset = yield from ask(PX[Traversable[Data]]())
 
-        ds_scannable_, ds_leftover = pytree_split(ds, trunc)
-        ds_scannable: Traversable[Traversable[D]] = Traversable(ds_scannable_)
+        # Reshaping the dataset with 'trunc' makes scanning easier IF dataset is evenly shaped,
+        # but JAX doesn’t allow jagged arrays. So, we adjust the data
+        # to be evenly shaped for (scan . scan) and handle the rest separately.
         # ORDER MATTERS, need to scan first, then do the leftover, since they are contiguous activations
-        gr_scanned: Gradient[Pr] = yield from doAvgGradient(
-            rnnLibrary.rnnWithGradient,
-            lambda _: 1.0,
-        ).switch_data(ds_scannable)
-        e = yield from ProxyS[E].get()
+        ds_scannable_, ds_leftover = pytree_split(dataset, trunc)
+        ds_scannable: Traversable[Traversable[Data]] = Traversable(ds_scannable_)
 
-        def ifLeftover(leftover) -> Fold[Dl, Traversable[D], E, Gradient[Pr]]:
-            gr_leftover, e_new = rnnLibrary.rnnWithGradient.func(dl, leftover, e)
-            gr: Gradient[Pr] = jax.tree.map(
-                lambda x, y: (trunc / N) * x + (n_leftover / N) * y,
-                gr_scanned,
-                gr_leftover,
-            )
-            return gr, e_new
+        gr_scanned = yield from accumulate(rnnLibrary.rnnWithGradient, add, Gradient[Param](0.0)).switch_data(
+            ds_scannable
+        )
 
-        gr_new, e_final = jax.lax.cond(
+        interpreter = yield from askForInterpreter(PX[Interpreter]())
+        env_after_scannable = yield from get(PX[Env]())
+
+        def ifLeftoverData(leftover) -> ST[Gradient[Param]]:
+            gr_leftover, e_new = rnnLibrary.rnnWithGradient.func(interpreter, leftover, env_after_scannable)
+            return Gradient((trunc / N) * gr_scanned.value + (n_leftover / N) * gr_leftover.value), e_new
+
+        gradient_final, env_final = jax.lax.cond(
             n_leftover == 0,
-            lambda _: (jax.tree.map(lambda x: (trunc / N) * x, gr_scanned), e),
-            ifLeftover,
+            lambda _: (Gradient((trunc / N) * gr_scanned.value), env_after_scannable),
+            ifLeftoverData,
             ds_leftover,
         )
-        _ = yield from put(e_final)
-        return pure(gr_new)
+        _ = yield from put(env_final)
+        return pure(gradient_final, PX3[Interpreter, Traversable[Data], Env]())
 
     return RnnLibrary(
         rnn=rnnLibrary.rnn,
@@ -250,351 +240,379 @@ def endowAverageGradients[
 
 
 # todo, recheck later
-@do()
-def doBatchGradients[
-    Dl, D: Module | Array, E, Pr: Module
-](step: Fold[Dl, D, E, Gradient[Pr]], e_dim: E) -> G[Fold[Dl, D, E, Gradient[Pr]]]:
-    dl = yield from ProxyDl[Dl].askDl()
-    run: Callable[[D, E], tuple[Gradient[Pr], E]]
-    run = lambda d, e: step.func(dl, d, e)
-    gr = yield from toFold(jax.vmap(run, in_axes=(0, e_dim), out_axes=(0, e_dim)))
-    gr_summed: Pr
-    gr_summed = jax.tree.map(lambda x: jnp.sum(x, axis=0), gr.value)
-    return pure(Gradient(gr_summed))
+# @do()
+# def doBatchGradients[Dl, D: Module | Array, E, Pr: Module](
+#     step: Fold[Dl, D, E, Gradient[Pr]], e_dim: E
+# ) -> G[Fold[Dl, D, E, Gradient[Pr]]]:
+#     dl = yield from ProxyDl[Dl].askDl()
+#     run: Callable[[D, E], tuple[Gradient[Pr], E]]
+#     run = lambda d, e: step.func(dl, d, e)
+#     gr = yield from toFold(jax.vmap(run, in_axes=(0, e_dim), out_axes=(0, e_dim)))
+#     gr_summed: Pr
+#     gr_summed = jax.tree.map(lambda x: jnp.sum(x, axis=0), gr.value)
+#     return pure(Gradient(gr_summed))
 
 
-@do()
-def doLog[Dl: PutLog[E, Logs], D, E](loss: LOSS) -> G[Fold[Dl, D, E, LOSS]]:
-    dl = yield from ProxyDl[Dl].askDl()
-    _ = yield from dl.putLog(Logs(loss=loss))
-    return pure(loss)
+class OfflineLearning[Data, Env, Actv: Module, Param: Module, Label, Pred](ABC):
+    class _OfflineLearner_Can(
+        PutParameter[Env, IsVector[Param]],
+        GetParameter[Env, IsVector[Param]],
+        HasLabel[Data, Label],
+        Protocol,
+    ): ...
+
+    type ST[Interpreter, Computed] = Fold[Interpreter, Data, Env, Computed]
+
+    def createLearner[Interpreter: _OfflineLearner_Can](
+        self,
+        activationStep: ST[Interpreter, IsVector[Actv]],
+        predictionStep: ST[Interpreter, IsVector[Param]],
+        lossFunction: LossFn[Label, Pred],
+    ):
+        rnnStep = activationStep.then(predictionStep)
+        rnn = traverse(rnnStep)
+        rnnWithLoss = accumulate(rnnStep.flat_map(doLoss(lossFunction)), add, LOSS(0.0))
+
+        @do()
+        def rnnWithGradient():
+            interpreter: Interpreter = yield from askForInterpreter(PX[Interpreter]())
+            return doGradient(rnnWithLoss, interpreter.getParameter(), interpreter.putParameter)
+
+        return RnnLibrary[Interpreter, Traversable[Data], Env, Traversable[Pred], Param](
+            rnn=rnn,
+            rnnWithLoss=rnnWithLoss,
+            rnnWithGradient=rnnWithGradient(),
+        )
 
 
-class _OfL[D, E, Pr, Label](
-    PutParameter[E, IsVector[Pr]],
-    GetParameter[E, IsVector[Pr]],
-    HasLabel[D, Label],
-    PutLog[E, Logs],
-    Protocol,
-): ...
+class PastFacingLearn[Data, Env, Actv: Module, Param: Module, Label, Pred](ABC):
+    class _PastFacingLearner_Can(
+        GetActivation[Env, IsVector[Actv]],
+        PutActivation[Env, IsVector[Actv]],
+        PutParameter[Env, IsVector[Param]],
+        GetParameter[Env, IsVector[Param]],
+        HasLabel[Data, Label],
+        Protocol,
+    ): ...
 
-
-def offlineLearning[
-    Dl: _OfL[D, E, Pr, Label], D, E, A, Pr: Module, Label, Pred
-](
-    activationStep: Fold[Dl, D, E, A],
-    predictionStep: Fold[Dl, D, E, Pred],
-    computeLoss: LossFn[Label, Pred],
-) -> RnnLibrary[Dl, Traversable[D], E, Traversable[Pred], Pr]:
-
-    rnnStep = activationStep.then(predictionStep)
-    rnn = traverse(rnnStep)
-    rnnWithLoss = accumulate(rnnStep.flat_map(doLoss(computeLoss)), add, LOSS(0.0))
-
-    @do()
-    def rnnWithGradient():
-        dl = yield from ProxyDl[Dl].askDl()
-        return doGradient(rnnWithLoss, dl.getParameter(), dl.putParameter)
-
-    return RnnLibrary(
-        rnn=rnn,
-        rnnWithLoss=rnnWithLoss,
-        rnnWithGradient=rnnWithGradient(),
-    )
-
-
-def foldRnnLearner[Dl, D, E, P, Pr: Module](rnnLearner: RnnLibrary[Dl, D, E, P, Pr]):
-    return RnnLibrary[Dl, Traversable[D], E, Traversable[P], Pr](
-        rnn=traverse(rnnLearner.rnn),
-        rnnWithLoss=accumulate(rnnLearner.rnnWithLoss, add, LOSS(jnp.array(0.0))),
-        rnnWithGradient=accumulate(rnnLearner.rnnWithGradient, add, Gradient[Pr](0.0)),
-    )
-
-
-class _PfL[D, E, A, Pr, Label](
-    GetActivation[E, IsVector[A]],
-    PutActivation[E, IsVector[A]],
-    PutParameter[E, IsVector[Pr]],
-    GetParameter[E, IsVector[Pr]],
-    HasLabel[D, Label],
-    PutLog[E, Logs],
-    Protocol,
-): ...
-
-
-class PastFacingLearn[Alg: _PfL[D, E, A, Pr, Lbl], D, E, A: Module, Pr: Module, Lbl, P](ABC):
-
-    type F[Dl, T] = Fold[Dl, D, E, T]
+    type ST[Interpreter, Computed] = Fold[Interpreter, Data, Env, Computed]
 
     @abstractmethod
-    def recGrad[Dl](s, sig: F[Dl, GR[A]], actv: F[Dl, IsVector[A]]) -> F[Dl, GR[Pr]]:
-        pass
+    def creditAssignment[Interpreter](
+        self,
+        recurrentError: ST[Interpreter, Gradient[Actv]],
+        activationStep: ST[Interpreter, IsVector[Actv]],
+    ) -> ST[Interpreter, Gradient[Param]]: ...
 
-    class __reparam__(PutActivation[E, A], PutParameter[E, Pr], Protocol): ...
+    class _CreateModel_Can(PutActivation[Env, Actv], PutParameter[Env, Param], Protocol): ...
 
     @staticmethod
-    def reparameterize[Dl: __reparam__](activationStep: F[Dl, IsVector[A]]):
-
-        @do()
-        def next():
-            dl = yield from ProxyDl[Dl].askDl()
-            d = yield from ProxyR[D].ask()
-            e = yield from ProxyS[E].get()
-
-            def parametrized(a: IsVector[A], pr: IsVector[Pr]):
-                return dl.putActivation(a).then(dl.putParameter(pr)).then(activationStep).func(dl, d, e)
-
-            m: Fold[Dl, D, E, Callable[[IsVector[A], IsVector[Pr]], tuple[IsVector[A], E]]]
-            m = pure(parametrized)
-            return m
-
-        return next()
-
-    def onlineLearning(
-        self,
-        activationStep: F[Alg, IsVector[A]],
-        predictionStep: F[Alg, IsVector[Pr]],
-        computeLoss: LossFn[Lbl, P],
+    def createRnnForward[Interpreter: _CreateModel_Can](
+        activationStep: ST[Interpreter, IsVector[Actv]],
     ):
+        @do()
+        def _creatingModel():
+            interpreter = yield from askForInterpreter(PX[Interpreter]())
+            data = yield from ask(PX[Data]())
+            env = yield from get(PX[Env]())
 
-        immedL = predictionStep.flat_map(doLoss(computeLoss)).flat_map(doLog)
+            def parametrized(actv: IsVector[Actv], param: IsVector[Param]):
+                return (
+                    interpreter.putActivation(actv)
+                    .then(interpreter.putParameter(param))
+                    .then(activationStep)
+                    .func(interpreter, data, env)
+                )
+
+            return pure(parametrized, PX3[Interpreter, Data, Env]())
+
+        return _creatingModel()
+
+    def createLearner[Interpreter: _PastFacingLearner_Can](
+        self,
+        activationStep: ST[Interpreter, IsVector[Actv]],
+        predictionStep: ST[Interpreter, IsVector[Param]],
+        lossFunction: LossFn[Label, Pred],
+    ):
+        willGetImmediateLoss = predictionStep.flat_map(doLoss(lossFunction))
 
         @do()
-        def total_grad() -> G[Fold[Alg, D, E, Gradient[Pr]]]:
-            dl = yield from ProxyDl[Alg].askDl()
-            e_signal = doGradient(immedL, dl.getActivation(), dl.putActivation)
+        def rnnGradient() -> G[Fold[Interpreter, Data, Env, Gradient[Param]]]:
+            interpreter = yield from askForInterpreter(PX[Interpreter]())
+            willGetRecurrentError = doGradient(
+                willGetImmediateLoss,
+                interpreter.getActivation(),
+                interpreter.putActivation,
+            )
 
             # order matters, need to update readout (grad_o) AFTER updating activation (grad_rec updates it)
-            grad_rec = yield from self.recGrad(e_signal, activationStep)
-            grad_o = yield from doGradient(immedL, dl.getParameter(), dl.putParameter)
-            return pure(grad_rec + grad_o)
+            grad_rec = yield from self.creditAssignment(willGetRecurrentError, activationStep)
+            grad_readout = yield from doGradient(
+                willGetImmediateLoss,
+                interpreter.getParameter(),
+                interpreter.putParameter,
+            )
+            return pure(grad_rec + grad_readout, PX3[Interpreter, Data, Env]())
 
-        return RnnLibrary[Alg, D, E, P, Pr](
+        return RnnLibrary[Interpreter, Data, Env, Pred, Param](
             rnn=activationStep.then(predictionStep),
-            rnnWithLoss=activationStep.then(immedL),
-            rnnWithGradient=total_grad(),
+            rnnWithLoss=activationStep.then(willGetImmediateLoss),
+            rnnWithGradient=rnnGradient(),
         )
 
 
-class _Infl[D, E, A, Pr, Label](
-    GetInfluenceTensor[E, Jacobian[Pr]],
-    PutInfluenceTensor[E, Jacobian[Pr]],
-    _PfL[D, E, A, Pr, Label],
-    Protocol,
-): ...
-
-
-class InfluenceTensorLearner[Alg: _Infl[D, E, A, Pr, Lbl], D, E, A: Module, Pr: Module, Lbl, P](
-    PastFacingLearn[Alg, D, E, A, Pr, Lbl, P], ABC
+class InfluenceTensorLearner[Data, Env, Actv: Module, Param: Module, Label, Pred](
+    PastFacingLearn[Data, Env, Actv, Param, Label, Pred]
 ):
-
-    type F[Dl, T] = Fold[Dl, D, E, T]
-
-    class __infl__[E, A, Pr](
-        GetInfluenceTensor[E, Jacobian[Pr]],
-        GetActivation[E, IsVector[A]],
-        PutActivation[E, IsVector[A]],
-        GetParameter[E, IsVector[Pr]],
-        PutParameter[E, IsVector[Pr]],
+    class _InfluenceTensorLearner_Can(
+        GetInfluenceTensor[Env, Jacobian[Param]],
+        PutInfluenceTensor[Env, Jacobian[Param]],
+        PastFacingLearn[Data, Env, Actv, Param, Label, Pred]._PastFacingLearner_Can,
         Protocol,
-    ):
-        pass
+    ): ...
+
+    type ST[Interpreter, Computed] = Fold[Interpreter, Data, Env, Computed]
 
     @abstractmethod
-    def influence_tensor[Dl](self, actv: F[Dl, IsVector[A]]) -> F[Dl, Jacobian[Pr]]: ...
+    def getInfluenceTensor[Interpreter](
+        self, activationStep: ST[Interpreter, IsVector[Actv]]
+    ) -> ST[Interpreter, Jacobian[Param]]: ...
 
-    def recGrad(self, e_signal: F[Alg, Gradient[A]], actvStep: F[Alg, IsVector[A]]):
+    def creditAssignment[Interpreter: _InfluenceTensorLearner_Can](
+        self, recurrentError: ST[Interpreter, Gradient[Actv]], activationStep: ST[Interpreter, IsVector[Actv]]
+    ):
         @do()
-        def next():
-            dl = yield from ProxyDl[Alg].askDl()
-            infl = yield from self.influence_tensor(actvStep)
-            _ = yield from dl.putInfluenceTensor(infl)
+        def _creditAssignment():
+            interpreter = yield from askForInterpreter(PX[Interpreter]())
+            influenceTensor = yield from self.getInfluenceTensor(activationStep)
+            signal = yield from recurrentError
+            recurrentGradient = Gradient[Param](signal.value @ influenceTensor.value)
+            _ = yield from interpreter.putInfluenceTensor(influenceTensor)
+            return pure(recurrentGradient, PX3[Interpreter, Data, Env]())
 
-            signal = yield from e_signal
-            m: Fold[Alg, D, E, Gradient[Pr]]
-            m = pure(Gradient(signal.value @ infl.value))
-            return m
-
-        return next()
+        return _creditAssignment()
 
 
-# lambda f: lambda pair: jax.jacrev(lambda a: f(a, pair[1]))(pair[0]),
-class RTRL[Alg: _Infl[D, E, A, Pr, Lbl], D, E, A: Module, Pr: Module, Lbl, P](
-    InfluenceTensorLearner[Alg, D, E, A, Pr, Lbl, P]
+class RTRL[Data, Env, Actv: Module, Param: Module, Label, Pred](
+    InfluenceTensorLearner[Data, Env, Actv, Param, Label, Pred]
 ):
+    type ST[Interpreter, Computed] = Fold[Interpreter, Data, Env, Computed]
 
-    type F[Dl, T] = Fold[Dl, D, E, T]
-    type Grad_Pr = Gradient[Pr]
-    type constraint = InfluenceTensorLearner.__infl__[E, A, Pr]
+    class _UpdateInfluenceOnly_Can(
+        GetInfluenceTensor[Env, Jacobian[Param]],
+        GetActivation[Env, IsVector[Actv]],
+        PutActivation[Env, IsVector[Actv]],
+        GetParameter[Env, IsVector[Param]],
+        PutParameter[Env, IsVector[Param]],
+        Protocol,
+    ): ...
 
     @do()
-    def influence_tensor[Dl: constraint](self, actvStep: F[Dl, IsVector[A]]):
-        dl = yield from ProxyDl[Dl].askDl()
-        influenceTensor = yield from dl.getInfluenceTensor()
-        parametrized = self.reparameterize(actvStep)
+    def getInfluenceTensor[Interpreter: _UpdateInfluenceOnly_Can](
+        self, activationStep: ST[Interpreter, IsVector[Actv]]
+    ):
+        interpreter = yield from askForInterpreter(PX[Interpreter]())
+        rnnForward = yield from self.createRnnForward(activationStep)
 
-        a0 = yield from dl.getActivation()
-        p0 = yield from dl.getParameter()
+        influenceTensor = yield from interpreter.getInfluenceTensor()
+        actv0 = yield from interpreter.getActivation()
+        param0 = yield from interpreter.getParameter()
 
         # I take the jvp instead of j @ v, bc I'd like to 1) do a hvp 2) forward over reverse is efficient: https://jax.readthedocs.io/en/latest/notebooks/autodiff_cookbook.html
-        immedJacInflProduct: Array = jacobian_matrix_product(
-            lambda a: toVector(parametrized(a, p0)[0]), a0, invmap(a0, lambda _: influenceTensor.value)
+        immediateJacobian__InfluenceTensor_product: IsVector[Actv] = jacobian_matrix_product(
+            lambda a: rnnForward(a, param0)[0],
+            actv0,
+            invmap(actv0, lambda _: influenceTensor.value),
+        )
+        immediateInfluence: IsVector[Param]
+        env: Env
+        immediateInfluence, env = eqx.filter_jacfwd(lambda p: rnnForward(actv0, p), has_aux=True)(param0)
+
+        newInfluenceTensor = Jacobian[Param](
+            toVector(immediateJacobian__InfluenceTensor_product) + toVector(immediateInfluence)
         )
 
-        immedInfl: IsVector[Pr]
-        env: E
-        immedInfl, env = eqx.filter_jacfwd(lambda p: parametrized(a0, p), has_aux=True)(p0)
-
         _ = yield from put(env)
-        m: Fold[Dl, D, E, Jacobian[Pr]]
-        m = pure(Jacobian(immedJacInflProduct + toVector(immedInfl)))
-        return m
+        return pure(newInfluenceTensor, PX3[Interpreter, Data, Env]())
 
 
-class _RfL[D, E, A, Pr, Z](_Infl[D, E, A, Pr, Z], GetRfloConfig[E], Protocol): ...
+class RFLO[Data, Env, Actv: Module, Param: Module, Label, Pred](
+    InfluenceTensorLearner[Data, Env, Actv, Param, Label, Pred]
+):
+    type ST[Interpreter, Computed] = Fold[Interpreter, Data, Env, Computed]
 
-
-class RFLO[Alg: _RfL[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](InfluenceTensorLearner[Alg, D, E, A, Pr, Z, P]):
-    type F[Dl, T] = Fold[Dl, D, E, T]
-    type Grad_Pr = Gradient[Pr]
-
-    class __rflo__(GetRfloConfig[E], InfluenceTensorLearner.__infl__[E, A, Pr], Protocol): ...
+    class _UpdateRFLO_Can(
+        GetRfloConfig[Env],
+        GetInfluenceTensor[Env, Jacobian[Param]],
+        GetActivation[Env, IsVector[Actv]],
+        PutActivation[Env, IsVector[Actv]],
+        GetParameter[Env, IsVector[Param]],
+        PutParameter[Env, IsVector[Param]],
+        Protocol,
+    ): ...
 
     @do()
-    def influence_tensor[Dl: __rflo__](self, actvStep: F[Dl, IsVector[A]]):
-        dl = yield from ProxyDl[Dl].askDl()
-        alpha = yield from dl.getRfloConfig().fmap(lambda x: x.rflo_alpha)
-        influenceTensor = yield from dl.getInfluenceTensor()
-        a0 = yield from dl.getActivation()
-        p0 = yield from dl.getParameter()
-        parametrized = yield from self.reparameterize(actvStep)
+    def getInfluenceTensor[Interpreter: _UpdateRFLO_Can](self, activationStep: ST[Interpreter, IsVector[Actv]]):
+        interpreter = yield from askForInterpreter(PX[Interpreter]())
+        rnnForward = yield from self.createRnnForward(activationStep)
 
-        immedInfl: IsVector[Pr]
-        env: E
-        immedInfl, env = eqx.filter_jacrev(lambda p: parametrized(a0, p), has_aux=True)(p0)
+        alpha = yield from interpreter.getRfloConfig().fmap(lambda x: x.rflo_alpha)
+        influenceTensor = yield from interpreter.getInfluenceTensor()
+        actv0 = yield from interpreter.getActivation()
+        param0 = yield from interpreter.getParameter()
+
+        immediateInfluence: IsVector[Param]
+        env: Env
+        immediateInfluence, env = eqx.filter_jacrev(lambda p: rnnForward(actv0, p), has_aux=True)(param0)
+
+        newInfluenceTensor = Jacobian[Param]((1 - alpha) * influenceTensor.value + alpha * toVector(immediateInfluence))
+
         _ = yield from put(env)
-
-        infl = (1 - alpha) * influenceTensor.value + alpha * toVector(immedInfl)
-        m: Fold[Dl, D, E, Jacobian[Pr]]
-        m = pure(Jacobian(infl))
-        return m
+        return pure(newInfluenceTensor, PX3[Interpreter, Data, Env]())
 
 
-class _UO[D, E, A, Pr, Z](
-    _PfL[D, E, A, Pr, Z],
-    GetUORO[E],
-    PutUORO[E],
-    GetRnnConfig[E],
-    HasPRNG[E, jax.Array],
-    Protocol,
-): ...
+class UORO[Data, Env, Actv: Module, Param: Module, Label, Pred](PastFacingLearn[Data, Env, Actv, Param, Label, Pred]):
+    type ST[Interpreter, Computed] = Fold[Interpreter, Data, Env, Computed]
 
+    class _UORO_Can(
+        PastFacingLearn[Data, Env, Actv, Param, Label, Pred]._PastFacingLearner_Can,
+        GetUORO[Env],
+        PutUORO[Env],
+        GetRnnConfig[Env],
+        HasPRNG[Env, jax.Array],
+        Protocol,
+    ): ...
 
-class UORO[Alg: _UO[D, E, A, Pr, Z], D, E, A, Pr: Module, Z, P](PastFacingLearn[Alg, D, E, A, Pr, Z, P]):
-    type F[Dl, T] = Fold[Dl, D, E, T]
-
-    def __init__(self, distribution: Callable[[Array, tuple], Array]):
-        super().__init__()
+    def __init__(self, distribution: Callable[[Array, tuple[int]], Array]):
         self.distribution = distribution
 
-    def gradientFlow(self, v: Array, actvStep: F[Alg, IsVector[A]]):
+    def getProjectedGradients[Interpreter: _UORO_Can](
+        self, randomVector: Array, activationStep: ST[Interpreter, IsVector[Actv]]
+    ):
         @do()
-        def next():
-            dl = yield from ProxyDl[Alg].askDl()
-            uoro = yield from dl.getUORO()
+        def projectGradients():
+            interpreter = yield from askForInterpreter(PX[Interpreter]())
+            rnnForward = yield from self.createRnnForward(activationStep)
 
-            a0 = yield from dl.getActivation()
-            _ = yield from dl.putActivation(a0)
-            p0 = yield from dl.getParameter()
-            parametrized = yield from self.reparameterize(actvStep)
-            A_prev = uoro.A  # I don't distinguish between column and row tensor.
+            uoro = yield from interpreter.getUORO()
+            actv0 = yield from interpreter.getActivation()
+            param0 = yield from interpreter.getParameter()
 
             # 1 calculate the actv_jacobian vector product with A
-            immedJac_A_product: Array
-            immedJac_A_product = jvp(lambda a: toVector(parametrized(a, p0)[0]), a0, invmap(a0, lambda _: A_prev))
+            immediateJacobian__A_projection_: IsVector[Actv]
+            immediateJacobian__A_projection_ = jvp(
+                lambda a: rnnForward(a, param0)[0],
+                actv0,
+                invmap(actv0, lambda _: uoro.A),
+            )
 
-            # doing the vjp saves BIG on memory. Only use O(n^2) as we want
-            fn: Callable[[IsVector[Pr]], tuple[IsVector[A], E]] = lambda p: parametrized(a0, p)
-            _, vjp_func, env = eqx.filter_vjp(fn, p0, has_aux=True)
+            # 2 doing the vjp saves BIG on memory. Only use O(n^2) as we want
+            fn: Callable[[IsVector[Param]], tuple[IsVector[Actv], Env]] = lambda p: rnnForward(actv0, p)
+            _, vjp_func, env = eqx.filter_vjp(fn, param0, has_aux=True)
+            immediateInfluence__Random_projection_: IsVector[Param]
+            (immediateInfluence__Random_projection_,) = vjp_func(invmap(actv0, lambda _: randomVector))
+
+            immediateJacobian__A_projection = toVector(immediateJacobian__A_projection_)
+            immediateInfluence__Random_projection = toVector(immediateInfluence__Random_projection_)
+
             _ = yield from put(env)
+            return pure(
+                (immediateJacobian__A_projection, immediateInfluence__Random_projection), PX3[Interpreter, Data, Env]()
+            )
 
-            (immedJacInfl_randomProj_,) = vjp_func(invmap(a0, lambda _: v))
-            immedJacInfl_randomProj = toVector(immedJacInfl_randomProj_)
+        return projectGradients()
 
-            immed_grads: Fold[Alg, D, E, tuple[Array, Array]]
-            immed_grads = pure((immedJac_A_product, immedJacInfl_randomProj))
-            return immed_grads
-
-        return next()
-
-    def creditAssign(self, A_: Array, B_: Array, e_signal: F[Alg, Gradient[A]]):
-        def next(signal: Gradient[A]) -> Gradient[Pr]:
+    def propagateRecurrentError[Interpreter: _UORO_Can](
+        self, A_: Array, B_: Array, recurrentError: ST[Interpreter, Gradient[Actv]]
+    ):
+        def propagate(signal: Gradient[Actv]) -> Gradient[Param]:
             q = signal.value @ A_
             return Gradient(q * B_)
 
-        return e_signal.fmap(next)
+        return recurrentError.fmap(propagate)
 
-    def recGrad(self, e_signal: F[Alg, Gradient[A]], actvStep: F[Alg, IsVector[A]]):
+    def creditAssignment[Interpreter: _UORO_Can](
+        self, recurrentError: ST[Interpreter, Gradient[Actv]], activationStep: ST[Interpreter, IsVector[Actv]]
+    ):
         @do()
-        def next():
-            dl = yield from ProxyDl[Alg].askDl()
-            uoro = yield from dl.getUORO()
-            rnnConfig = yield from dl.getRnnConfig()
-            key = yield from dl.updatePRNG()
-            v = self.distribution(key, (rnnConfig.n_h,))
+        def creditAssignment_():
+            interpreter = yield from askForInterpreter(PX[Interpreter]())
+            uoro = yield from interpreter.getUORO()
+            rnnConfig = yield from interpreter.getRnnConfig()
+            key = yield from interpreter.updatePRNG()
+            randomVector = self.distribution(key, (rnnConfig.n_h,))
             B_prev = uoro.B
 
-            immedJac_A_product, immedJacInfl_randomProj = yield from self.gradientFlow(v, actvStep)
+            (
+                immediateJacobian__A_projection,
+                immediateInfluence__Random_projection,
+            ) = yield from self.getProjectedGradients(randomVector, activationStep)
 
-            rho0: Array = jnp.sqrt(jnp.linalg.norm(B_prev) / jnp.linalg.norm(immedJac_A_product))
-            rho1: Array = jnp.sqrt(jnp.linalg.norm(immedJacInfl_randomProj) / jnp.linalg.norm(v))
+            rho0: Array = jnp.sqrt(jnp.linalg.norm(B_prev) / jnp.linalg.norm(immediateJacobian__A_projection))
+            rho1: Array = jnp.sqrt(
+                jnp.linalg.norm(immediateInfluence__Random_projection) / jnp.linalg.norm(randomVector)
+            )
 
-            A_new = rho0 * immedJac_A_product + rho1 * v
-            B_new = rho0 * B_prev + rho1 * immedJacInfl_randomProj
-            _ = yield from dl.putUORO(replace(uoro, A=A_new, B=B_new))
+            A_new = rho0 * immediateJacobian__A_projection + rho1 * randomVector
+            B_new = rho0 * B_prev + rho1 * immediateInfluence__Random_projection
+            _ = yield from interpreter.putUORO(replace(uoro, A=A_new, B=B_new))
 
-            return self.creditAssign(A_new, B_new, e_signal)
+            return self.propagateRecurrentError(A_new, B_new, recurrentError)
 
-        return next()
+        return creditAssignment_()
+
+
+def foldrRnnLearner[Interpreter, Data, Env, Pred, Param: Module](
+    rnnLearner: RnnLibrary[Interpreter, Data, Env, Pred, Param],
+):
+    return RnnLibrary[Interpreter, Traversable[Data], Env, Traversable[Pred], Param](
+        rnn=traverse(rnnLearner.rnn),
+        rnnWithLoss=accumulate(rnnLearner.rnnWithLoss, add, LOSS(jnp.array(0.0))),
+        rnnWithGradient=accumulate(rnnLearner.rnnWithGradient, add, Gradient[Param](0.0)),
+    )
 
 
 @eqx.filter_jit
-def trainStep[
-    Dl, D, E
-](learner: Fold[Dl, D, E, Unit], dialect: Dl, t_series: Traversable[D], initEnv: E,) -> E:
+def trainStep[Dl, D, E](
+    learner: Fold[Dl, D, E, Unit],
+    dialect: Dl,
+    t_series: Traversable[D],
+    initEnv: E,
+) -> E:
     model = learner.func
     _, final_env = model(dialect, t_series, initEnv)
     return final_env
 
 
-def endowOho[
-    OHO: PastFacingLearn[OHO_Dl, D, E, Pr, OHO_Pr, Z, P],
-    OHO_Dl: _PfL[D, E, Pr, OHO_Pr, Z],
-    OHO_Pr: Module,
-    Dl1: GetParameter[E, Pr],
-    Dl2,
-    D,
-    E,
-    P,
-    Pr,
-    Z,
+def endowBilevelOptimization[
+    OHO_Interpreter,
+    OHO_Param: Module,
+    OHO_Label,
+    TrainInterpreter: GetParameter[Env, Param],
+    ValidationInterpreter,
+    Data,
+    Env,
+    Param,
+    Pred,
 ](
-    rnnLearner: RnnLibrary[Dl1 | Dl2, D, E, P, Pr],
-    paramFn: ParamFn[Dl1 | Dl2, D, E, Pr],
-    dl1: Dl1,
-    dl2: Dl2,
-    oho: OHO,
-    computeLoss: LossFn[Z, P],
+    rnnLearner: RnnLibrary[TrainInterpreter | ValidationInterpreter, Data, Env, Pred, Param],
+    paramFn: Callable[[Gradient[Param]], Fold[TrainInterpreter | ValidationInterpreter, Data, Env, Unit]],
+    trainInterpreter: TrainInterpreter,
+    validationInterpreter: ValidationInterpreter,
+    bilevelOptimizer: CreateLearner[Data, Env, Param, OHO_Param, OHO_Label, Pred],
+    computeLoss: LossFn[OHO_Label, Pred],
 ):
+    type ST[Interpreter, Computed] = Fold[Interpreter, Data, Env, Computed]
+
     @do()
-    def parameter_step() -> G[Fold[Dl1, D, E, Pr]]:
-        dl = yield from ProxyDl[Dl1].askDl()
-        return rnnLearner.rnnWithGradient.flat_map(paramFn).then(dl.getParameter())
+    def updateParameter() -> G[ST[TrainInterpreter, Param]]:
+        interpreter = yield from askForInterpreter(PX[TrainInterpreter]())
+        return rnnLearner.rnnWithGradient.flat_map(paramFn).then(interpreter.getParameter())
 
-    activationStep: Fold[OHO_Dl, D, E, Pr]
-    activationStep = parameter_step().switch_dl(dl1)
+    activationStep: ST[OHO_Interpreter, Param]
+    activationStep = updateParameter().switch_dl(trainInterpreter)
 
-    predictionStep: Fold[OHO_Dl, D, E, P]
-    predictionStep = rnnLearner.rnn.switch_dl(dl2)
+    predictionStep: ST[OHO_Interpreter, Pred]
+    predictionStep = rnnLearner.rnn.switch_dl(validationInterpreter)
 
-    return oho.onlineLearning(activationStep, predictionStep, computeLoss)
+    return bilevelOptimizer.createLearner(activationStep, predictionStep, computeLoss)
