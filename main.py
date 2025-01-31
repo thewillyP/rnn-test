@@ -18,7 +18,6 @@ from recurrent.objectalgebra.interpreter import (
 
 from matplotlib import pyplot as plt
 from recurrent.parameters import (
-    RfloConfig,
     RnnConfig,
     RnnParameter,
     SgdParameter,
@@ -59,67 +58,65 @@ def generate_add_task_dataset(N, t_1, t_2, tau_task, rng_key):
 
 
 def constructRnnEnv(rng_key: Array):
-    # hard code these guys for now
-    n_h = 32
-    n_in = 2
-    n_out = 2
-    # parameters should never be floats or single value
+    """Constructs an RNN environment with predefined configurations."""
+
+    # Define network dimensions
+    n_h, n_in, n_out = 32, 2, 2
+    alpha = 1.0
+
+    # Define learning rates as arrays
     learning_rate = jnp.array([0.0001])
     meta_learning_rate = jnp.array([0.0001])
-    alpha = 1.0
+
+    # Generate random weights
+    def random_matrix(rng_key, shape, scale):
+        rng_key, prng = jax.random.split(rng_key)
+        return rng_key, jax.random.normal(prng, shape) * scale
 
     rng_key, prng = jax.random.split(rng_key)
     w_rec_, _ = jnp.linalg.qr(jax.random.normal(prng, (n_h, n_h)))
-    rng_key, prng = jax.random.split(rng_key)
-    w_in_ = jax.random.normal(prng, (n_h, n_in + 1)) * jnp.sqrt(1.0 / (n_in + 1))
-    w_rec = jnp.concat((w_rec_, w_in_), axis=1)
-    rng_key, prng = jax.random.split(rng_key)
-    w_out = jax.random.normal(prng, (n_out, n_h + 1)) * jnp.sqrt(1.0 / (n_h + 1))
 
-    w_rec = jnp.ravel(w_rec)
-    w_out = jnp.ravel(w_out)
+    rng_key, w_in_ = random_matrix(rng_key, (n_h, n_in + 1), jnp.sqrt(1.0 / (n_in + 1)))
+    w_rec = jnp.concatenate((w_rec_, w_in_), axis=1)
 
-    parameter = RnnParameter(
-        w_rec=PARAMETER(w_rec),
-        w_out=PARAMETER(w_out),
-    )
-    rnnConfig = RnnConfig(
-        n_h=n_h, n_in=n_in, n_out=n_out, alpha=alpha, activationFn=jnp.tanh
-    )
-    sgd = SgdParameter(learning_rate=LEARNING_RATE(learning_rate))
-    sgd_mlr = SgdParameter(learning_rate=LEARNING_RATE(meta_learning_rate))
+    rng_key, w_out = random_matrix(rng_key, (n_out, n_h + 1), jnp.sqrt(1.0 / (n_h + 1)))
 
-    rng_key, prng1 = jax.random.split(rng_key)
-    rng_key, prng2 = jax.random.split(rng_key)
-    rng_key, prng3 = jax.random.split(rng_key)
+    # Initialize parameters
+    parameter = RnnParameter(w_rec=w_rec, w_out=w_out)
+    rnn_config = RnnConfig(n_h=n_h, n_in=n_in, n_out=n_out, alpha=alpha, activationFn=jnp.tanh)
 
-    activation = ACTIVATION(jax.random.normal(prng1, (n_h,)))
+    sgd = SgdParameter(learning_rate=learning_rate)
+    sgd_mlr = SgdParameter(learning_rate=meta_learning_rate)
 
-    initEnv = RnnGodState[RnnParameter, SgdParameter, SgdParameter](
-        # activation=ACTIVATION(torch.randn(batch_size, n_h)),
-        # activation=ACTIVATION(torch.randn(n_h)),
-        activation=activation,
-        influenceTensor=Gradient[RnnParameter](
-            eqx.filter_jacrev(lambda _: activation)(parameter)
+    # Generate random activation state
+    rng_key, activation_rng = jax.random.split(rng_key)
+    activation = ACTIVATION(jax.random.normal(activation_rng, (n_h,)))
+
+    # Split keys for UORO
+    rng_key, prng_A, prng_B, prng_C = jax.random.split(rng_key, num=4)
+
+    parameter_vec = endowVector(parameter)
+    hyperparameter_vec = endowVector(sgd)
+    mlr_vec = endowVector(sgd_mlr)
+
+    # Construct environment state
+    init_env = RnnGodState[RnnParameter, SgdParameter, SgdParameter](
+        activation=IsVector[ACTIVATION](vector=activation, toParam=lambda x: x),
+        influenceTensor=Jacobian[RnnParameter](zeroedInfluenceTensor(n_h, parameter_vec)),
+        ohoInfluenceTensor=Gradient[SgdParameter](zeroedInfluenceTensor(jnp.size(toVector(parameter_vec)), sgd)),
+        parameter=parameter_vec,
+        hyperparameter=hyperparameter_vec,
+        metaHyperparameter=mlr_vec,
+        rnnConfig=rnn_config,
+        rnnConfig_bilevel=rnn_config,
+        uoro=UORO_Param(
+            A=jax.random.normal(prng_A, (n_h,)),
+            B=uoroBInit(prng_B, parameter),
         ),
-        ohoInfluenceTensor=Gradient(eqx.filter_jacrev(lambda _: parameter)(sgd)),
-        parameter=parameter,
-        hyperparameter=sgd,
-        metaHyperparameter=sgd_mlr,
-        rnnConfig=rnnConfig,
-        rnnConfig_bilevel=rnnConfig,
-        rfloConfig=RfloConfig(rflo_alpha=alpha),
-        rfloConfig_bilevel=RfloConfig(rflo_alpha=alpha),
-        uoro=UORO_Param[RnnParameter](
-            A=jax.random.normal(prng2, (n_h,)),
-            B=uoroBInit(parameter, prng3),
-        ),
-        prng=rng_key,
-        logs=Logs(loss=jnp.array(0, dtype=jnp.float32)),
-        oho_logs=Logs(loss=jnp.array(0, dtype=jnp.float32)),
+        prng=prng_C,
     )
 
-    return rng_key, initEnv
+    return rng_key, init_env
 
 
 # @profile
@@ -128,7 +125,6 @@ def mainLoop(
     t_series_length: int,
     trunc_length: int,
 ):
-
     type DL = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]
     type ENV = RnnGodState[RnnParameter, SgdParameter, SgdParameter]
 
@@ -137,9 +133,8 @@ def mainLoop(
     rng_key, initEnv = constructRnnEnv(prng)
 
     rtrl = RTRL[
-        DL,
         InputOutput,
-        RnnGodState[RnnParameter, SgdParameter, SgdParameter],
+        ENV,
         ACTIVATION,
         RnnParameter,
         jax.Array,
@@ -147,17 +142,16 @@ def mainLoop(
     ]()
     # lambda key, shape: jax.random.uniform(key, shape, minval=-1.0, maxval=1.0)
 
-    onlineLearner = rtrl.onlineLearning(
+    onlineLearner: RnnLibrary[DL, InputOutput, ENV, PREDICTION, RnnParameter]
+    onlineLearner = rtrl.createLearner(
         doRnnStep(),
         doRnnReadout(),
         lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b)),
     )
 
-    onlineLearner_folded = foldRnnLearner(onlineLearner, initEnv.parameter)
+    onlineLearner_folded = foldrRnnLearner(onlineLearner)
 
-    rnnLearner = endowAverageGradients(
-        onlineLearner_folded, trunc_length, t_series_length
-    )
+    rnnLearner = endowAveragedGradients(onlineLearner_folded, trunc_length, t_series_length)
     learner = rnnLearner.rnnWithGradient.flat_map(doSgdStep)
     # for online, do foldM(rnnLearner.rnnWithGradient.flat_map(doSgdStep)) and have dataloader load entire on first
 
@@ -180,11 +174,8 @@ def ohoLoop(
     t_series_length: int,
     trunc_length: int,
 ):
-
     type Train_Dl = OhoRnnTrainInterpreter[RnnParameter, SgdParameter, SgdParameter]
-    type Valid_Dl = OhoRnnValidationInterpreter[
-        RnnParameter, SgdParameter, SgdParameter
-    ]
+    type Valid_Dl = OhoRnnValidationInterpreter[RnnParameter, SgdParameter, SgdParameter]
     type OHO = OhoInterpreter[RnnParameter, SgdParameter, SgdParameter]
     type ENV = RnnGodState[RnnParameter, SgdParameter, SgdParameter]
 
@@ -193,7 +184,6 @@ def ohoLoop(
     rng_key, initEnv = constructRnnEnv(prng)
 
     rtrl = RFLO[
-        Train_Dl | Valid_Dl,
         OhoInputOutput,
         ENV,
         ACTIVATION,
@@ -203,26 +193,22 @@ def ohoLoop(
     ]()
     # lambda key, shape: jax.random.uniform(key, shape, minval=-1.0, maxval=1.0)
 
-    onlineLearner = rtrl.onlineLearning(
+    onlineLearner: RnnLibrary[Train_Dl | Valid_Dl, OhoInputOutput, ENV, PREDICTION, RnnParameter]
+    onlineLearner = rtrl.createLearner(
         doRnnStep(),
         doRnnReadout(),
         lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b)),
     )
 
-    onlineLearner_folded = foldRnnLearner(onlineLearner, initEnv.parameter)
+    onlineLearner_folded = foldrRnnLearner(onlineLearner, initEnv.parameter)
 
-    rnnLearner = endowAverageGradients(
-        onlineLearner_folded, trunc_length, t_series_length
-    )
+    rnnLearner = endowAveragedGradients(onlineLearner_folded, trunc_length, t_series_length)
 
     trainDialect = OhoRnnTrainInterpreter[RnnParameter, SgdParameter, SgdParameter]()
-    validationDialect = OhoRnnValidationInterpreter[
-        RnnParameter, SgdParameter, SgdParameter
-    ]()
+    validationDialect = OhoRnnValidationInterpreter[RnnParameter, SgdParameter, SgdParameter]()
     dialect = OhoInterpreter[RnnParameter, SgdParameter, SgdParameter](trainDialect)
 
     oho_rtrl = RTRL[
-        OHO,
         OhoInputOutput,
         ENV,
         RnnParameter,
@@ -234,12 +220,8 @@ def ohoLoop(
     def compute_loss(label: jax.Array, prediction: Traversable[PREDICTION]):
         return LOSS(optax.safe_softmax_cross_entropy(label, prediction.value))
 
-    oho: RnnLibrary[
-        OHO, Traversable[OhoInputOutput], ENV, Traversable[PREDICTION], SgdParameter
-    ]
-    oho = endowOho(
-        rnnLearner, doSgdStep, trainDialect, validationDialect, oho_rtrl, compute_loss
-    )
+    oho: RnnLibrary[OHO, Traversable[OhoInputOutput], ENV, Traversable[PREDICTION], SgdParameter]
+    oho = endowBilevelOptimization(rnnLearner, doSgdStep, trainDialect, validationDialect, oho_rtrl, compute_loss)
 
     learner = oho.rnnWithGradient.flat_map(doSgdStep)
 
@@ -258,7 +240,6 @@ def onlineLearnerLoop(
     dataloader: Traversable[InputOutput],
     t_series_length: int,
 ):
-
     type DL = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]
     type ENV = RnnGodState[RnnParameter, SgdParameter, SgdParameter]
 
@@ -267,7 +248,6 @@ def onlineLearnerLoop(
     rng_key, initEnv = constructRnnEnv(prng)
 
     rtrl = UORO[
-        DL,
         InputOutput,
         RnnGodState[RnnParameter, SgdParameter, SgdParameter],
         ACTIVATION,
@@ -277,7 +257,8 @@ def onlineLearnerLoop(
     ](lambda key, shape: jax.random.uniform(key, shape, minval=-1.0, maxval=1.0))
     # lambda key, shape: jax.random.uniform(key, shape, minval=-1.0, maxval=1.0)
 
-    onlineLearner = rtrl.onlineLearning(
+    onlineLearner: RnnLibrary[DL, InputOutput, ENV, PREDICTION, RnnParameter]
+    onlineLearner = rtrl.createLearner(
         doRnnStep(),
         doRnnReadout(),
         lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b)),
@@ -285,36 +266,34 @@ def onlineLearnerLoop(
 
     learner = onlineLearner.rnnWithGradient.flat_map(doSgdStep)
 
-    losses = []
-
-    def appendLoss(loss):
-        losses.append(loss / t_series_length)
-        # print(loss / t_series_length)
-
     @do()
     def next():
         print("recompiled")
-        e = yield from ProxyS[ENV].get()
-        dl = yield from ProxyDl[DL].askDl()
-        loss, _ = accumulate(onlineLearner.rnnWithLoss, add, 0).func(dl, dataloader, e)
-        jax.experimental.io_callback(appendLoss, None, loss)
-
+        env = yield from get(PX[ENV]())
+        interpreter = yield from askForInterpreter(PX[DL])
+        # loss, _ = accumulate(onlineLearner.rnnWithLoss, add, 0).func(interpreter, dataloader, env)
         return onlineLearner.rnnWithGradient.flat_map(doSgdStep)
 
     dialect = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]()
 
-    # lossFn = eqx.filter_jit(accumulate(onlineLearner.rnnWithLoss, add, 0).func)
-
-    # .lower((dialect, dataloader, initEnv))
-    # .compile()
-    start = time.time()
     model = (
-        eqx.filter_jit(repeatM(next()).func)
+        eqx.filter_jit(repeatM(onlineLearner.rnnWithGradient.flat_map(doSgdStep)).func)
         .lower(dialect, dataloader, initEnv)
         .compile()
     )
-    jax.block_until_ready(model(dialect, dataloader, initEnv))
+    lossFn = (
+        eqx.filter_jit(accumulate(onlineLearner.rnnWithLoss, add, 0).func).lower(dialect, dataloader, initEnv).compile()
+    )
+
+    model2 = eqx.filter_jit(repeatM(onlineLearner.rnn).func).lower(dialect, dataloader, initEnv).compile()
+
+    start = time.time()
+    _, trained_env = model2(dialect, dataloader, initEnv)
+    jax.block_until_ready(trained_env)
     print(f"Train Time: {time.time() - start}")
+
+    loss, _ = lossFn(dialect, dataloader, trained_env)
+    print(loss / t_series_length)
 
     # for time_series in map(
     #     lambda x: InputOutput(x[0], x[1]), zip(dataloader.value.x, dataloader.value.y)
@@ -326,23 +305,23 @@ def onlineLearnerLoop(
     #     final_env = trainStep(learner, dialect, time_series, initEnv)
     #     initEnv = final_env
 
-    plt.figure(figsize=(10, 6))
-    plt.plot(losses, linestyle="-", color="b", label="Loss")
-    plt.title("Training Loss")
-    plt.xlabel("Epoch")
-    plt.ylabel("Loss")
-    plt.grid(True, linestyle="--", alpha=0.6)
-    plt.legend()
-    plt.tight_layout()
+    # plt.figure(figsize=(10, 6))
+    # plt.plot(losses, linestyle="-", color="b", label="Loss")
+    # plt.title("Training Loss")
+    # plt.xlabel("Epoch")
+    # plt.ylabel("Loss")
+    # plt.grid(True, linestyle="--", alpha=0.6)
+    # plt.legend()
+    # plt.tight_layout()
 
-    # Save the plot to disk
-    output_path = "test2.png"
-    plt.savefig(output_path)
-    print(f"Plot saved to {output_path}")
+    # # Save the plot to disk
+    # output_path = "test2.png"
+    # plt.savefig(output_path)
+    # print(f"Plot saved to {output_path}")
 
 
 def main2():
-    N = 10_000
+    N = 1_000_000
     rng_key = jax.random.key(0)
     rng_key, prng1, prng2 = jax.random.split(rng_key, 3)
     X, Y = generate_add_task_dataset(N, 5, 9, 1, prng1)
@@ -353,8 +332,7 @@ def main2():
 
 
 def main():
-
-    N = 100_000
+    N = 10_000
     N_val = 10_000
     t_series_length = 100  # how much time series goines into ONE param update
     trunc_length = 1  # controls how much avging done in one t_series
@@ -461,6 +439,6 @@ def main():
     # # %%
 
 
-main()
+main2()
 
 # %%

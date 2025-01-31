@@ -6,7 +6,7 @@ from recurrent.datarecords import InputOutput, OhoInputOutput
 from recurrent.myfunc import flipTuple
 from recurrent.myrecords import RnnGodState
 from recurrent.mytypes import *
-from recurrent.parameters import Logs, RfloConfig
+from recurrent.parameters import Logs
 from recurrent.objectalgebra.typeclasses import *
 from recurrent.monad import *
 import jax
@@ -28,13 +28,11 @@ class BaseRnnGodInterpreter[A, B, C](
     PutHyperParameter[GOD[A, B, C], IsVector[B]],
     GetInfluenceTensor[GOD[A, B, C], Jacobian[A]],
     PutInfluenceTensor[GOD[A, B, C], Jacobian[A]],
-    GetRfloConfig[GOD[A, B, C]],
     GetRnnConfig[GOD[A, B, C]],
     GetUORO[GOD[A, B, C]],
     PutUORO[GOD[A, B, C]],
     PutLog[GOD[A, B, C], Logs],
 ):
-
     type God = GOD[A, B, C]
 
     def getActivation[D](self) -> Fold[Self, D, God, IsVector[ACTIVATION]]:
@@ -61,9 +59,6 @@ class BaseRnnGodInterpreter[A, B, C](
     def putInfluenceTensor[D](self, s: Jacobian[A]) -> Fold[Self, D, God, Unit]:
         return modifies(lambda e: eqx.tree_at(lambda t: t.influenceTensor, e, s))
 
-    def getRfloConfig[D](self) -> Fold[Self, D, God, RfloConfig]:
-        return gets(lambda e: e.rfloConfig)
-
     def getRnnConfig[D](self) -> Fold[Self, D, God, RnnConfig]:
         return gets(lambda e: e.rnnConfig)
 
@@ -81,7 +76,6 @@ class DataInterpreter(
     HasInput[InputOutput, jax.Array],
     HasLabel[InputOutput, jax.Array],
 ):
-
     def getInput[E](self) -> Fold[Self, InputOutput, E, jax.Array]:
         return asks(lambda e: e.x)
 
@@ -93,7 +87,6 @@ class BilevelTrainInterpreter(
     HasInput[OhoInputOutput, jax.Array],
     HasLabel[OhoInputOutput, jax.Array],
 ):
-
     def getInput[E](self) -> Fold[Self, OhoInputOutput, E, jax.Array]:
         return asks(lambda e: e.train.x)
 
@@ -105,7 +98,6 @@ class BilevelValidationInterpreter(
     HasInput[OhoInputOutput, jax.Array],
     HasLabel[OhoInputOutput, jax.Array],
 ):
-
     def getInput[E](self) -> Fold[Self, OhoInputOutput, E, jax.Array]:
         return asks(lambda e: e.val.x)
 
@@ -158,7 +150,6 @@ class BilevelRnnGodInterpreter[A, B, C](
     PutHyperParameter[GOD[A, B, C], C],
     GetInfluenceTensor[GOD[A, B, C], Gradient[B]],
     PutInfluenceTensor[GOD[A, B, C], Gradient[B]],
-    GetRfloConfig[GOD[A, B, C]],
     PutLog[GOD[A, B, C], Logs],
 ):
     type G = GOD[A, B, C]
@@ -190,9 +181,6 @@ class BilevelRnnGodInterpreter[A, B, C](
 
     def putInfluenceTensor[D](self, s: Gradient[B]) -> Fold[Self, D, G, Unit]:
         return modifies(lambda e: eqx.tree_at(lambda t: t.ohoInfluenceTensor, e, s))
-
-    def getRfloConfig[D](self) -> Fold[Self, D, G, RfloConfig]:
-        return gets(lambda e: e.rfloConfig_bilevel)
 
     def getRnnConfig[D](self) -> Fold[Self, D, G, RnnConfig]:
         return gets(lambda e: e.rnnConfig_bilevel)

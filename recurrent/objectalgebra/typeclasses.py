@@ -1,7 +1,6 @@
 from typing import Generic, Self
 from recurrent.mytypes import *
 from recurrent.parameters import (
-    RfloConfig,
     RnnConfig,
     UORO_Param,
 )
@@ -40,10 +39,6 @@ class GetInfluenceTensor[E, T](Protocol):
 
 class PutInfluenceTensor[E, T](Protocol):
     def putInfluenceTensor[D](self, s: T) -> Fold[Self, D, E, Unit]: ...
-
-
-class GetRfloConfig[E](Protocol):
-    def getRfloConfig[D](self) -> Fold[Self, D, E, RfloConfig]: ...
 
 
 class GetRnnConfig[E](Protocol):

@@ -53,8 +53,6 @@ class Test_UORO(unittest.TestCase):
             metaHyperparameter=jnp.empty(0),
             rnnConfig=rnnConfig,
             rnnConfig_bilevel=jnp.empty(0),
-            rfloConfig=jnp.empty(0),
-            rfloConfig_bilevel=jnp.empty(0),
             uoro=UORO_Param(
                 A=jnp.ones(n_h),
                 B=toVector(
@@ -67,8 +65,6 @@ class Test_UORO(unittest.TestCase):
                 ),
             ),
             prng=cls.key,
-            logs=Logs(loss=jnp.empty(0, dtype=jnp.float32)),
-            oho_logs=Logs(loss=jnp.empty(0, dtype=jnp.float32)),
         )
 
         x = 2 * jnp.ones(n_in)

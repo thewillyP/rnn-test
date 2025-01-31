@@ -1,5 +1,5 @@
 from recurrent.mytypes import *
-from recurrent.parameters import Logs, RfloConfig, RnnConfig, UORO_Param
+from recurrent.parameters import Logs, RnnConfig, UORO_Param
 
 """
 Expression problem is very hard to solve in python, without there being some resistance.
@@ -30,12 +30,8 @@ class RnnGodState[A: eqx.Module, B: eqx.Module, C: eqx.Module](eqx.Module):
     metaHyperparameter: IsVector[C]
     rnnConfig: RnnConfig = eqx.field(static=True)
     rnnConfig_bilevel: RnnConfig = eqx.field(static=True)
-    rfloConfig: RfloConfig = eqx.field(static=True)
-    rfloConfig_bilevel: RfloConfig = eqx.field(static=True)
     uoro: UORO_Param
     prng: PRNG
-    logs: Logs
-    oho_logs: Logs
 
 
 def batch_rtrl[A: eqx.Module, B: eqx.Module, C: eqx.Module]() -> RnnGodState[A, B, C]:
@@ -48,12 +44,8 @@ def batch_rtrl[A: eqx.Module, B: eqx.Module, C: eqx.Module]() -> RnnGodState[A, 
         metaHyperparameter=None,
         rnnConfig=None,
         rnnConfig_bilevel=None,
-        rfloConfig=None,
-        rfloConfig_bilevel=None,
         uoro=None,
         prng=None,
-        logs=0,
-        oho_logs=0,
     )
 
 
@@ -67,12 +59,8 @@ def batch_vanilla[A: eqx.Module, B: eqx.Module, C: eqx.Module]() -> RnnGodState[
         metaHyperparameter=None,
         rnnConfig=None,
         rnnConfig_bilevel=None,
-        rfloConfig=None,
-        rfloConfig_bilevel=None,
         uoro=None,
         prng=None,
-        logs=0,
-        oho_logs=0,
     )
 
 

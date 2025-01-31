@@ -15,10 +15,6 @@ class SgdParameter(eqx.Module):
     learning_rate: jax.Array
 
 
-class RfloConfig(eqx.Module):
-    rflo_alpha: float
-
-
 class RnnConfig(eqx.Module):
     n_h: int
     n_in: int

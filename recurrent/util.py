@@ -12,22 +12,26 @@ def prng_split(key: PRNG) -> tuple[PRNG, PRNG]:
     return PRNG(prng), PRNG(new_key)
 
 
-def zeroedInfluenceTensor(out: int, param: eqx.Module):
-    def update(x: jax.Array):
-        n = jnp.size(x)
-        return jnp.zeros((out, n))
+# def zeroedInfluenceTensor(out: int, param: eqx.Module):
+#     def update(x: jax.Array):
+#         n = jnp.size(x)
+#         return jnp.zeros((out, n))
 
-    return jax.tree.map(update, param)
+#     return jax.tree.map(update, param)
 
 
-def uoroBInit(param: RnnParameter, key: jax.Array):
+def zeroedInfluenceTensor(out: int, param: IsVector):
+    vec = toVector(param)
+    n = jnp.size(vec)
+    return jnp.zeros((out, n))
 
-    return Gradient[RnnParameter](
-        RnnParameter(
-            w_rec=PARAMETER(jax.random.normal(key, param.w_rec.shape)),
-            w_out=PARAMETER(jnp.zeros_like(param.w_out)),
-        )
+
+def uoroBInit(key: jax.Array, param: RnnParameter):
+    init = RnnParameter(
+        w_rec=jax.random.normal(key, param.w_rec.shape),
+        w_out=jnp.zeros_like(param.w_out),
     )
+    return toVector(endowVector(init))
 
 
 def pytreeNumel(tree: eqx.Module):

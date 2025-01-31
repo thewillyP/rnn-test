@@ -116,7 +116,6 @@ def doRnnReadout[Interpreter: _RnnReadout_Can[Env], Data, Env]():
     interpreter = yield from askForInterpreter(PX[Interpreter]())
     a = yield from interpreter.getActivation().fmap(toVector)
     param = yield from interpreter.getParameter().fmap(toParam)
-
     pred = PREDICTION(param.w_out @ jnp.concat((a, jnp.array([1.0]))))
     return pure(pred, PX3[Interpreter, Data, Env]())
 
@@ -442,7 +441,7 @@ class RFLO[Data, Env, Actv: Module, Param: Module, Label, Pred](
     type ST[Interpreter, Computed] = Fold[Interpreter, Data, Env, Computed]
 
     class _UpdateRFLO_Can(
-        GetRfloConfig[Env],
+        GetRnnConfig[Env],
         GetInfluenceTensor[Env, Jacobian[Param]],
         GetActivation[Env, IsVector[Actv]],
         PutActivation[Env, IsVector[Actv]],
@@ -456,7 +455,7 @@ class RFLO[Data, Env, Actv: Module, Param: Module, Label, Pred](
         interpreter = yield from askForInterpreter(PX[Interpreter]())
         rnnForward = yield from self.createRnnForward(activationStep)
 
-        alpha = yield from interpreter.getRfloConfig().fmap(lambda x: x.rflo_alpha)
+        alpha = yield from interpreter.getRnnConfig().fmap(lambda x: x.alpha)
         influenceTensor = yield from interpreter.getInfluenceTensor()
         actv0 = yield from interpreter.getActivation()
         param0 = yield from interpreter.getParameter()
@@ -554,7 +553,7 @@ class UORO[Data, Env, Actv: Module, Param: Module, Label, Pred](PastFacingLearn[
             )
 
             A_new = rho0 * immediateJacobian__A_projection + rho1 * randomVector
-            B_new = rho0 * B_prev + rho1 * immediateInfluence__Random_projection
+            B_new = B_prev / rho0 + immediateInfluence__Random_projection / rho1
             _ = yield from interpreter.putUORO(replace(uoro, A=A_new, B=B_new))
 
             return self.propagateRecurrentError(A_new, B_new, recurrentError)
