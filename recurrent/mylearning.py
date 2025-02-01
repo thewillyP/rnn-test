@@ -94,7 +94,7 @@ def doRnnStep[Interpreter: _RnnActivation_Can[Data, Env], Data, Env]():
     param = yield from interpreter.getParameter()
     cfg = yield from interpreter.getRnnConfig()
 
-    a_rec = param.w_rec @ jnp.concat((a, x, jnp.array([1.0])))
+    a_rec = param.w_rec @ jnp.concat((a, x, jnp.asarray([1.0])))
     a_new = ACTIVATION((1 - cfg.alpha) * a + cfg.alpha * cfg.activationFn(a_rec))
     _ = yield from interpreter.putActivation(a_new)
     return pure(a_new, PX3[Interpreter, Data, Env]())
@@ -114,7 +114,7 @@ def doRnnReadout[Interpreter: _RnnReadout_Can[Env], Data, Env]():
     interpreter = yield from askForInterpreter(PX[Interpreter]())
     a = yield from interpreter.getActivation()
     param = yield from interpreter.getParameter()
-    pred = PREDICTION(param.w_out @ jnp.concat((a, jnp.array([1.0]))))
+    pred = PREDICTION(param.w_out @ jnp.concat((a, jnp.asarray([1.0]))))
     return pure(pred, PX3[Interpreter, Data, Env]())
 
 
@@ -549,7 +549,7 @@ def foldrRnnLearner[Interpreter, Data, Env, Pred, Param: Module](
 ):
     return RnnLibrary[Interpreter, Traversable[Data], Env, Traversable[Pred], Param](
         rnn=traverse(rnnLearner.rnn),
-        rnnWithLoss=accumulate(rnnLearner.rnnWithLoss, add, LOSS(jnp.array(0.0))),
+        rnnWithLoss=accumulate(rnnLearner.rnnWithLoss, add, LOSS(jnp.asarray(0.0))),
         rnnWithGradient=accumulate(rnnLearner.rnnWithGradient, add, Gradient[Param](0.0)),
     )
 

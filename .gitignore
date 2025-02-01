@@ -13,6 +13,7 @@ wandb/*
 *.err
 *.threads
 *.prof
+jax-trace/*
 
 # Distribution / packaging
 .Python

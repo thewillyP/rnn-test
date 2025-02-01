@@ -47,8 +47,8 @@ def generate_add_task_dataset(N, t_1, t_2, tau_task, rng_key):
 
     y = 0.5 + 0.5 * jnp.roll(x, t_1) - 0.25 * jnp.roll(x, t_2)
 
-    X = jnp.array([x, 1 - x]).T
-    Y = jnp.array([y, 1 - y]).T
+    X = jnp.asarray([x, 1 - x]).T
+    Y = jnp.asarray([y, 1 - y]).T
 
     # Temporally stretch according to the desire timescale of change.
     X = jnp.tile(X, tau_task).reshape((tau_task * N, 2))
@@ -65,8 +65,8 @@ def constructRnnEnv(rng_key: Array):
     alpha = 1.0
 
     # Define learning rates as arrays
-    learning_rate = jnp.array([0.0001])
-    meta_learning_rate = jnp.array([0.0001])
+    learning_rate = jnp.asarray([0.0001])
+    meta_learning_rate = jnp.asarray([0.0001])
 
     # Generate random weights
     def random_matrix(rng_key, shape, scale):
@@ -181,14 +181,14 @@ def ohoLoop(
     rng_key, prng = jax.random.split(rng_key)
     rng_key, initEnv = constructRnnEnv(prng)
 
-    rtrl = RFLO[
+    rtrl = UORO[
         OhoInputOutput,
         ENV,
         ACTIVATION,
         RnnParameter,
         jax.Array,
         PREDICTION,
-    ]()
+    ](lambda key, shape: jax.random.uniform(key, shape, minval=-1.0, maxval=1.0))
     # lambda key, shape: jax.random.uniform(key, shape, minval=-1.0, maxval=1.0)
 
     onlineLearner: RnnLibrary[Train_Dl | Valid_Dl, OhoInputOutput, ENV, PREDICTION, RnnParameter]
@@ -275,23 +275,25 @@ def onlineLearnerLoop(
     dialect = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]()
 
     model = (
-        eqx.filter_jit(repeatM(onlineLearner.rnnWithGradient.flat_map(doSgdStep)).func)
+        eqx.filter_jit(repeatM(onlineLearner.rnnWithGradient.flat_map(doSgdStep)).func, donate="all")
         .lower(dialect, dataloader, initEnv)
         .compile()
     )
-    lossFn = (
-        eqx.filter_jit(accumulate(onlineLearner.rnnWithLoss, add, 0).func).lower(dialect, dataloader, initEnv).compile()
-    )
 
-    model2 = eqx.filter_jit(repeatM(onlineLearner.rnn).func).lower(dialect, dataloader, initEnv).compile()
+    # model2 = eqx.filter_jit(repeatM(onlineLearner.rnn).func).lower(dialect, dataloader, initEnv).compile()
 
     start = time.time()
     _, trained_env = model(dialect, dataloader, initEnv)
     jax.block_until_ready(trained_env)
     print(f"Train Time: {time.time() - start}")
 
-    loss, _ = lossFn(dialect, dataloader, trained_env)
-    print(loss / t_series_length)
+    # lossFn = (
+    #     eqx.filter_jit(accumulate(onlineLearner.rnnWithLoss, add, 0).func)
+    #     .lower(dialect, dataloader, trained_env)
+    #     .compile()
+    # )
+    # loss, _ = lossFn(dialect, dataloader, trained_env)
+    # print(loss / t_series_length)
 
     # for time_series in map(
     #     lambda x: InputOutput(x[0], x[1]), zip(dataloader.value.x, dataloader.value.y)
@@ -319,7 +321,7 @@ def onlineLearnerLoop(
 
 
 def main2():
-    N = 1_000
+    N = 10_000
     rng_key = jax.random.key(0)
     rng_key, prng1, prng2 = jax.random.split(rng_key, 3)
     X, Y = generate_add_task_dataset(N, 5, 9, 1, prng1)
