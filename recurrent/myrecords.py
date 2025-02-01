@@ -22,12 +22,12 @@ Will refactor later, but global god state is fine for now.
 
 
 class RnnGodState[A: eqx.Module, B: eqx.Module, C: eqx.Module](eqx.Module):
-    activation: IsVector[ACTIVATION]
+    activation: ACTIVATION
     influenceTensor: Gradient[A]
     ohoInfluenceTensor: Gradient[B]
-    parameter: IsVector[A]
-    hyperparameter: IsVector[B]
-    metaHyperparameter: IsVector[C]
+    parameter: A
+    hyperparameter: B
+    metaHyperparameter: C
     rnnConfig: RnnConfig = eqx.field(static=True)
     rnnConfig_bilevel: RnnConfig = eqx.field(static=True)
     uoro: UORO_Param

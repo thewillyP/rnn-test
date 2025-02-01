@@ -95,18 +95,16 @@ def constructRnnEnv(rng_key: Array):
     # Split keys for UORO
     rng_key, prng_A, prng_B, prng_C = jax.random.split(rng_key, num=4)
 
-    parameter_vec = endowVector(parameter)
-    hyperparameter_vec = endowVector(sgd)
-    mlr_vec = endowVector(sgd_mlr)
-
     # Construct environment state
     init_env = RnnGodState[RnnParameter, SgdParameter, SgdParameter](
-        activation=IsVector[ACTIVATION](vector=activation, toParam=lambda x: x),
-        influenceTensor=Jacobian[RnnParameter](zeroedInfluenceTensor(n_h, parameter_vec)),
-        ohoInfluenceTensor=Gradient[SgdParameter](zeroedInfluenceTensor(jnp.size(toVector(parameter_vec)), sgd)),
-        parameter=parameter_vec,
-        hyperparameter=hyperparameter_vec,
-        metaHyperparameter=mlr_vec,
+        activation=activation,
+        influenceTensor=Jacobian[RnnParameter](zeroedInfluenceTensor(n_h, parameter)),
+        ohoInfluenceTensor=Gradient[SgdParameter](
+            zeroedInfluenceTensor(jnp.size(compose2(endowVector, toVector)(parameter)), sgd)
+        ),
+        parameter=parameter,
+        hyperparameter=sgd,
+        metaHyperparameter=sgd_mlr,
         rnnConfig=rnn_config,
         rnnConfig_bilevel=rnn_config,
         uoro=UORO_Param(
@@ -276,11 +274,11 @@ def onlineLearnerLoop(
 
     dialect = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]()
 
-    model = (
-        eqx.filter_jit(repeatM(onlineLearner.rnnWithGradient.flat_map(doSgdStep)).func)
-        .lower(dialect, dataloader, initEnv)
-        .compile()
-    )
+    # model = (
+    #     eqx.filter_jit(repeatM(onlineLearner.rnnWithGradient.flat_map(doSgdStep)).func)
+    #     .lower(dialect, dataloader, initEnv)
+    #     .compile()
+    # )
     lossFn = (
         eqx.filter_jit(accumulate(onlineLearner.rnnWithLoss, add, 0).func).lower(dialect, dataloader, initEnv).compile()
     )

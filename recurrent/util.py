@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import jax
+from recurrent.myfunc import compose2
 from recurrent.mytypes import *
 import equinox as eqx
 import jax.numpy as jnp
@@ -20,9 +21,8 @@ def prng_split(key: PRNG) -> tuple[PRNG, PRNG]:
 #     return jax.tree.map(update, param)
 
 
-def zeroedInfluenceTensor(out: int, param: IsVector):
-    vec = toVector(param)
-    n = jnp.size(vec)
+def zeroedInfluenceTensor[T: CanDiff](out: int, param: T):
+    n = jnp.size(compose2(endowVector, toVector)(param))
     return jnp.zeros((out, n))
 
 

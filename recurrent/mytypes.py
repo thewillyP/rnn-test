@@ -4,10 +4,11 @@ import equinox as eqx
 from equinox import Module
 
 type G[T] = Generator[None, None, T]
+type CanDiff = jax.Array | Module
 
 
 # bc grad over param pytree returns a param pytree, and need a way to distinguish between gr vs param, but still recognize they're same type
-class Gradient[T: Module | jax.Array](Module):
+class Gradient[T: CanDiff](Module):
     value: jax.Array
 
     def __add__(self, other):
@@ -16,7 +17,7 @@ class Gradient[T: Module | jax.Array](Module):
         raise TypeError("Unsupported operand type(s) for +: 'Gradient' and '{}'".format(type(other).__name__))
 
 
-class Jacobian[T: Module | jax.Array](Module):
+class Jacobian[T: CanDiff](Module):
     value: jax.Array
 
     def __add__(self, other):
@@ -36,42 +37,25 @@ class Traversable[T: Module](Module):
     value: T | jax.Array
 
 
-# class VLeaf[T](eqx.Module):
-#     vector: jax.Array
-#     toParam: Callable[[jax.Array], T] = eqx.field(static=True)
-
-
-# class VNode[T](eqx.Module):
-#     vector: T
-
-
-# type IsVector[T] = VLeaf[T] | VNode[IsVector[T]]
-
-
 class IsVector[T](Module):
     vector: jax.Array
     toParam: Callable[[jax.Array], T] = eqx.field(static=True)
 
 
-def invmap[T](isVector: IsVector[T], f: Callable[[jax.Array], jax.Array]) -> IsVector[T]:
-    vs, _ = jax.tree.flatten(isVector)
-    return eqx.tree_at(lambda t: t.vector, isVector, f(vs[0]))
+def invmap[T: CanDiff](canVec: T, f: Callable[[jax.Array], jax.Array]):
+    vectorized = endowVector(canVec)
+    new_vector = f(vectorized.vector)
+    return vectorized.toParam(new_vector)
 
 
-def endowVector[T: Module](tree: T) -> IsVector[T]:
+def endowVector[T: CanDiff](tree: T) -> IsVector[T]:
     vector, toParam = jax.flatten_util.ravel_pytree(tree)
     return IsVector(vector=vector, toParam=toParam)
 
 
-def toVector[T: Module](isVector: IsVector[T]) -> jax.Array:
-    vs, _ = jax.tree.flatten(isVector)
-    return vs[0]
+def toVector[T: CanDiff](isVector: IsVector[T]) -> jax.Array:
+    return isVector.vector
 
 
-def toParam[T: Module](isVector: IsVector[T]) -> T:
-    vs, _ = jax.tree.flatten(isVector)
-    return isVector.toParam(vs[0])
-
-
-def identityVector(vector: jax.Array) -> IsVector[jax.Array]:
-    return IsVector(vector=vector, toParam=lambda x: x)
+def toParam[T: CanDiff](isVector: IsVector[T]) -> T:
+    return isVector.toParam(isVector.vector)

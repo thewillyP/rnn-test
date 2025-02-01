@@ -45,10 +45,10 @@ class Test_UORO(unittest.TestCase):
 
         cls.initEnv = RnnGodState[RnnParameter, None, None](
             # activation=ACTIVATION(torch.randn(batch_size, n_h)),
-            activation=IsVector[ACTIVATION](vector=ACTIVATION(a_init), toParam=lambda x: x),
+            activation=ACTIVATION(a_init),
             influenceTensor=jnp.empty(0),
             ohoInfluenceTensor=jnp.empty(0),
-            parameter=endowVector(parameter),
+            parameter=parameter,
             hyperparameter=jnp.empty(0),
             metaHyperparameter=jnp.empty(0),
             rnnConfig=rnnConfig,
@@ -102,7 +102,7 @@ class Test_UORO(unittest.TestCase):
         (a_j, p_papw), env = safe_model(self.dialect, self.x_input, self.initEnv)
 
         correct_a_J_ = jnp.eye(2)
-        correct_a_J = correct_a_J_ @ toVector(self.initEnv.activation)
+        correct_a_J = correct_a_J_ @ self.initEnv.activation
         correct_papw_ = v @ jnp.array(
             [[1, 1, 2, 2, 1, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 1, 1, 2, 2, 1]],
             dtype=jnp.float32,
@@ -111,7 +111,7 @@ class Test_UORO(unittest.TestCase):
             endowVector(
                 RnnParameter(
                     w_rec=jnp.ravel(correct_papw_),
-                    w_out=jnp.zeros_like(toParam(self.initEnv.parameter).w_out),
+                    w_out=jnp.zeros_like(self.initEnv.parameter.w_out),
                 )
             )
         )
@@ -135,7 +135,7 @@ class Test_UORO(unittest.TestCase):
             endowVector(
                 RnnParameter(
                     w_rec=jnp.ravel(B_correct),
-                    w_out=jnp.zeros_like(toParam(self.initEnv.parameter).w_out),
+                    w_out=jnp.zeros_like(self.initEnv.parameter.w_out),
                 )
             )
         )
@@ -155,7 +155,7 @@ class Test_UORO(unittest.TestCase):
             endowVector(
                 RnnParameter(
                     w_rec=jnp.ravel(correct_rec_grads),
-                    w_out=jnp.zeros_like(toParam(self.initEnv.parameter).w_out),
+                    w_out=jnp.zeros_like(self.initEnv.parameter.w_out),
                 )
             )
         )

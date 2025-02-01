@@ -32,6 +32,13 @@ def curry[A, B, C](f: Callable[[A, B], C]) -> Callable[[A, B], C]:
     return lambda a, b: f((a, b))
 
 
+def compose2[A, B, C](f: Callable[[A], B], g: Callable[[B], C]) -> Callable[[A], C]:
+    def compose2_(a: A) -> C:
+        return g(f(a))
+
+    return compose2_
+
+
 # def sequenceF2(
 #     fs: Iterable[Callable[[A, B], C]]
 # ) -> Callable[[A], Iterator[Callable[[B], C]]]:

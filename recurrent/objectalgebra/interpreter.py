@@ -20,12 +20,12 @@ type GOD[A, B, C] = RnnGodState[A, B, C]
 
 
 class BaseRnnGodInterpreter[A, B, C](
-    GetActivation[GOD[A, B, C], IsVector[ACTIVATION]],
-    PutActivation[GOD[A, B, C], IsVector[ACTIVATION]],
-    GetParameter[GOD[A, B, C], IsVector[A]],
-    PutParameter[GOD[A, B, C], IsVector[A]],
-    GetHyperParameter[GOD[A, B, C], IsVector[B]],
-    PutHyperParameter[GOD[A, B, C], IsVector[B]],
+    GetActivation[GOD[A, B, C], ACTIVATION],
+    PutActivation[GOD[A, B, C], ACTIVATION],
+    GetParameter[GOD[A, B, C], A],
+    PutParameter[GOD[A, B, C], A],
+    GetHyperParameter[GOD[A, B, C], B],
+    PutHyperParameter[GOD[A, B, C], B],
     GetInfluenceTensor[GOD[A, B, C], Jacobian[A]],
     PutInfluenceTensor[GOD[A, B, C], Jacobian[A]],
     GetRnnConfig[GOD[A, B, C]],
@@ -35,22 +35,22 @@ class BaseRnnGodInterpreter[A, B, C](
 ):
     type God = GOD[A, B, C]
 
-    def getActivation[D](self) -> Fold[Self, D, God, IsVector[ACTIVATION]]:
+    def getActivation[D](self) -> Fold[Self, D, God, ACTIVATION]:
         return gets(lambda e: e.activation)
 
-    def putActivation[D](self, s: IsVector[ACTIVATION]) -> Fold[Self, D, God, Unit]:
+    def putActivation[D](self, s: ACTIVATION) -> Fold[Self, D, God, Unit]:
         return modifies(lambda e: eqx.tree_at(lambda t: t.activation, e, s))
 
-    def getParameter[D](self) -> Fold[Self, D, God, IsVector[A]]:
+    def getParameter[D](self) -> Fold[Self, D, God, A]:
         return gets(lambda e: e.parameter)
 
-    def putParameter[D](self, s: IsVector[A]) -> Fold[Self, D, God, Unit]:
+    def putParameter[D](self, s: A) -> Fold[Self, D, God, Unit]:
         return modifies(lambda e: eqx.tree_at(lambda t: t.parameter, e, s))
 
-    def getHyperParameter[D](self) -> Fold[Self, D, God, IsVector[B]]:
+    def getHyperParameter[D](self) -> Fold[Self, D, God, B]:
         return gets(lambda e: e.hyperparameter)
 
-    def putHyperParameter[D](self, s: IsVector[B]) -> Fold[Self, D, God, Unit]:
+    def putHyperParameter[D](self, s: B) -> Fold[Self, D, God, Unit]:
         return modifies(lambda e: eqx.tree_at(lambda t: t.hyperparameter, e, s))
 
     def getInfluenceTensor[D](self) -> Fold[Self, D, God, Jacobian[A]]:
