@@ -3,7 +3,7 @@ import time
 
 import jax.experimental
 import optax
-from recurrent.datarecords import InputOutput
+from recurrent.datarecords import InputOutput, OhoInputOutput
 from recurrent.monad import foldM
 from recurrent.mylearning import *
 from recurrent.myrecords import RnnGodState
