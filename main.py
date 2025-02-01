@@ -245,14 +245,14 @@ def onlineLearnerLoop(
     rng_key, prng = jax.random.split(rng_key)
     rng_key, initEnv = constructRnnEnv(prng)
 
-    rtrl = UORO[
+    rtrl = RTRL[
         InputOutput,
         RnnGodState[RnnParameter, SgdParameter, SgdParameter],
         ACTIVATION,
         RnnParameter,
         jax.Array,
         PREDICTION,
-    ](lambda key, shape: jax.random.uniform(key, shape, minval=-1.0, maxval=1.0))
+    ]()
     # lambda key, shape: jax.random.uniform(key, shape, minval=-1.0, maxval=1.0)
 
     onlineLearner: RnnLibrary[DL, InputOutput, ENV, PREDICTION, RnnParameter]
@@ -274,11 +274,11 @@ def onlineLearnerLoop(
 
     dialect = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]()
 
-    # model = (
-    #     eqx.filter_jit(repeatM(onlineLearner.rnnWithGradient.flat_map(doSgdStep)).func)
-    #     .lower(dialect, dataloader, initEnv)
-    #     .compile()
-    # )
+    model = (
+        eqx.filter_jit(repeatM(onlineLearner.rnnWithGradient.flat_map(doSgdStep)).func)
+        .lower(dialect, dataloader, initEnv)
+        .compile()
+    )
     lossFn = (
         eqx.filter_jit(accumulate(onlineLearner.rnnWithLoss, add, 0).func).lower(dialect, dataloader, initEnv).compile()
     )
@@ -286,7 +286,7 @@ def onlineLearnerLoop(
     model2 = eqx.filter_jit(repeatM(onlineLearner.rnn).func).lower(dialect, dataloader, initEnv).compile()
 
     start = time.time()
-    _, trained_env = model2(dialect, dataloader, initEnv)
+    _, trained_env = model(dialect, dataloader, initEnv)
     jax.block_until_ready(trained_env)
     print(f"Train Time: {time.time() - start}")
 
@@ -319,7 +319,7 @@ def onlineLearnerLoop(
 
 
 def main2():
-    N = 1_000_000
+    N = 1_000
     rng_key = jax.random.key(0)
     rng_key, prng1, prng2 = jax.random.split(rng_key, 3)
     X, Y = generate_add_task_dataset(N, 5, 9, 1, prng1)

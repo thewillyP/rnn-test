@@ -72,7 +72,7 @@ def doSgdStep[Interpreter: _SGD_Can[Env, Param], Data, Env, Param: CanDiff](
     interpreter = yield from askForInterpreter(PX[Interpreter]())
     isParam = yield from interpreter.getParameter()
     hyperparam = yield from interpreter.getHyperParameter()
-    new_param = invmap(isParam, lambda x: x - hyperparam.learning_rate * gr.value)
+    new_param = invmap(isParam, lambda x: jnp.ravel(x - hyperparam.learning_rate * gr.value))
     return interpreter.putParameter(new_param)
 
 
@@ -388,7 +388,7 @@ class RTRL[Data, Env, Actv: CanDiff, Param: CanDiff, Label, Pred](
 ):
     type ST[Interpreter, Computed] = Fold[Interpreter, Data, Env, Computed]
 
-    class _UpdateInfluenceOnly_Can(
+    class _UpdateInfluence_Can(
         GetInfluenceTensor[Env, Jacobian[Param]],
         GetActivation[Env, Actv],
         PutActivation[Env, Actv],
@@ -398,7 +398,7 @@ class RTRL[Data, Env, Actv: CanDiff, Param: CanDiff, Label, Pred](
     ): ...
 
     @do()
-    def getInfluenceTensor[Interpreter: _UpdateInfluenceOnly_Can](self, activationStep: ST[Interpreter, Actv]):
+    def getInfluenceTensor[Interpreter: _UpdateInfluence_Can, Data, Env](self, activationStep: ST[Interpreter, Actv]):
         interpreter = yield from askForInterpreter(PX[Interpreter]())
         rnnForward = yield from self.createRnnForward(activationStep)
 
@@ -416,7 +416,7 @@ class RTRL[Data, Env, Actv: CanDiff, Param: CanDiff, Label, Pred](
         env: Env
         immediateInfluence, env = eqx.filter_jacfwd(lambda p: rnnForward(actv0, p), has_aux=True)(param0)
 
-        newInfluenceTensor = Jacobian[Param](immediateJacobian__InfluenceTensor_product + immediateInfluence)
+        newInfluenceTensor: Jacobian[Param] = Jacobian(immediateJacobian__InfluenceTensor_product + immediateInfluence)
 
         _ = yield from put(env)
         return pure(newInfluenceTensor, PX3[Interpreter, Data, Env]())
@@ -438,7 +438,7 @@ class RFLO[Data, Env, Actv: CanDiff, Param: CanDiff, Label, Pred](
     ): ...
 
     @do()
-    def getInfluenceTensor[Interpreter: _UpdateRFLO_Can](self, activationStep: ST[Interpreter, Actv]):
+    def getInfluenceTensor[Interpreter: _UpdateRFLO_Can, Data, Env](self, activationStep: ST[Interpreter, Actv]):
         interpreter = yield from askForInterpreter(PX[Interpreter]())
         rnnForward = yield from self.createRnnForward(activationStep)
 
@@ -451,7 +451,7 @@ class RFLO[Data, Env, Actv: CanDiff, Param: CanDiff, Label, Pred](
         env: Env
         immediateInfluence, env = eqx.filter_jacrev(lambda p: rnnForward(actv0, p), has_aux=True)(param0)
 
-        newInfluenceTensor = Jacobian[Param]((1 - alpha) * influenceTensor.value + alpha * immediateInfluence)
+        newInfluenceTensor: Jacobian[Param] = Jacobian((1 - alpha) * influenceTensor.value + alpha * immediateInfluence)
 
         _ = yield from put(env)
         return pure(newInfluenceTensor, PX3[Interpreter, Data, Env]())
