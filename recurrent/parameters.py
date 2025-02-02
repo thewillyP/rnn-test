@@ -29,4 +29,8 @@ class UORO_Param(eqx.Module):
 
 
 class Logs(eqx.Module):
-    loss: Optional[LOSS] = eqx.field(default=None)
+    train_loss: Optional[LOSS] = eqx.field(default=None)
+    validation_loss: Optional[LOSS] = eqx.field(default=None)
+    test_loss: Optional[LOSS] = eqx.field(default=None)
+    learning_rate: Optional[jax.Array] = eqx.field(default=None)
+    effective_learning_rate: Optional[jax.Array] = eqx.field(default=None)

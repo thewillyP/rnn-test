@@ -84,6 +84,17 @@ def doSgdStep[Interpreter: _SGD_Can[Env, Param], Data, Env, Param: CanDiff](
     return interpreter.putParameter(new_param)
 
 
+@do()
+def doSgdStep_Softplus[Interpreter: _SGD_Can[Env, Param], Data, Env, Param: CanDiff](
+    gr: Gradient[Param],
+) -> G[Fold[Interpreter, Data, Env, Unit]]:
+    interpreter = yield from askForInterpreter(PX[Interpreter]())
+    isParam = yield from interpreter.getParameter()
+    hyperparam = yield from interpreter.getHyperParameter()
+    new_param = invmap(isParam, lambda x: jnp.ravel(x - jax.nn.softplus(hyperparam.learning_rate) * gr.value))
+    return interpreter.putParameter(new_param)
+
+
 class _RnnActivation_Can[Data, Env](
     GetActivation[Env, ACTIVATION],
     PutActivation[Env, ACTIVATION],
