@@ -9,5 +9,6 @@ class InputOutput(eqx.Module):
 
 
 class OhoInputOutput(eqx.Module):
-    train: InputOutput
-    val: InputOutput
+    train: Traversable[InputOutput]
+    validation: Traversable[InputOutput]
+    labels: Traversable[jax.Array]

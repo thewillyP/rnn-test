@@ -15,7 +15,7 @@ from recurrent.objectalgebra.typeclasses import *
 from recurrent.mytypes import *
 from recurrent.monad import *
 from recurrent.parameters import *
-from recurrent.util import pytree_split
+from recurrent.util import pytree_split, pytreeNumel
 
 
 type LossFn[A, B] = Callable[[A, B], LOSS]
@@ -55,6 +55,14 @@ def jvp(f, primal, tangent):
 def jacobian_matrix_product(f, primal, matrix):
     wrapper = lambda p, t: jvp(f, p, t)
     return jax.vmap(wrapper, in_axes=(None, 1), out_axes=1)(primal, matrix)
+
+
+@do()
+def resetRnnActivation[Interpreter: PutActivation[Env, Actv], Data, Env, Actv](
+    resetActv: Actv,
+) -> G[Fold[Interpreter, Data, Env, Unit]]:
+    interpreter = yield from askForInterpreter(PX[Interpreter]())
+    return interpreter.putActivation(resetActv)
 
 
 class _SGD_Can[Env, Param](
@@ -110,7 +118,6 @@ class _RnnReadout_Can[Env](
 
 @do()
 def doRnnReadout[Interpreter: _RnnReadout_Can[Env], Data, Env]():
-    print("recompiled")
     interpreter = yield from askForInterpreter(PX[Interpreter]())
     a = yield from interpreter.getActivation()
     param = yield from interpreter.getParameter()
@@ -141,6 +148,7 @@ def doDifferentiation[Interpreter, Data, Env, Param: CanDiff, T: CanDiff](
     write_wrt: Callable[[Param], Fold[Interpreter, Data, Env, Unit]],
     jax_diff: FnFmap[Array, tuple[Array, Env], tuple[Array, Env]],
 ) -> G[Fold[Interpreter, Data, Env, jax.Array]]:
+    print("recompiled")
     interpreter = yield from askForInterpreter(PX[Interpreter]())
     data = yield from ask(PX[Data]())
     env = yield from get(PX[Env]())
@@ -152,6 +160,8 @@ def doDifferentiation[Interpreter, Data, Env, Param: CanDiff, T: CanDiff](
         return write_wrt(p_).then(model).fmap(lambda t: toVector(endowVector(t))).func(interpreter, data, env)
 
     grad, new_env = jax_diff(parametrized)(param_vector)
+    # grad will always be atleast2d since toVector always returns atleast1d, even for loss
+
     _ = yield from put(new_env)
     return pure(grad, PX3[Interpreter, Data, Env]())
 
@@ -173,12 +183,12 @@ def doGradient[Interpreter, Data, Env, Param: CanDiff](
     write_wrt: Callable[[Param], Fold[Interpreter, Data, Env, Unit]],
 ):
     return doDifferentiation(model, read_wrt, write_wrt, lambda f: eqx.filter_jacrev(f, has_aux=True)).fmap(
-        Gradient[Param]
+        lambda x: Gradient[Param](jnp.ravel(x))  # enforce invariant, since doDiff always returns atleast2d
     )
 
 
 def endowAveragedGradients[Interpreter, Data: Module, Env, Pred, Param: CanDiff](
-    rnnLibrary: RnnLibrary[Interpreter, Traversable[Data], Env, Pred, Param], trunc: int, N: int
+    rnnLibrary: RnnLibrary[Interpreter, Traversable[Data], Env, Pred, Param], trunc: int, N: int, param_shape: Param
 ) -> RnnLibrary[Interpreter, Traversable[Data], Env, Pred, Param]:
     type ST[Computed] = Fold[Interpreter, Traversable[Data], Env, Computed]
 
@@ -195,9 +205,9 @@ def endowAveragedGradients[Interpreter, Data: Module, Env, Pred, Param: CanDiff]
         ds_scannable_, ds_leftover = pytree_split(dataset, trunc)
         ds_scannable: Traversable[Traversable[Data]] = Traversable(ds_scannable_)
 
-        gr_scanned = yield from accumulate(rnnLibrary.rnnWithGradient, add, Gradient[Param](0.0)).switch_data(
-            ds_scannable
-        )
+        gr_scanned = yield from accumulate(
+            rnnLibrary.rnnWithGradient, add, Gradient[Param](jnp.zeros(pytreeNumel(param_shape)))
+        ).switch_data(ds_scannable)
 
         interpreter = yield from askForInterpreter(PX[Interpreter]())
         env_after_scannable = yield from get(PX[Env]())
@@ -254,7 +264,7 @@ class OfflineLearning[Data, Env, Actv: CanDiff, Param: CanDiff, Label, Pred](ABC
     ):
         rnnStep = activationStep.then(predictionStep)
         rnn = traverse(rnnStep)
-        rnnWithLoss = accumulate(rnnStep.flat_map(doLoss(lossFunction)), add, LOSS(0.0))
+        rnnWithLoss = accumulate(rnnStep.flat_map(doLoss(lossFunction)), add, LOSS(jnp.Array(0.0)))
 
         @do()
         def rnnWithGradient():
@@ -342,6 +352,7 @@ class PastFacingLearn[Data, Env, Actv: CanDiff, Param: CanDiff, Label, Pred](ABC
                 interpreter.getParameter(),
                 interpreter.putParameter,
             )
+
             return pure(grad_rec + grad_readout, PX3[Interpreter, Data, Env]())
 
         return RnnLibrary[Interpreter, Data, Env, Pred, Param](
@@ -545,12 +556,14 @@ class UORO[Data, Env, Actv: Module, Param: Module, Label, Pred](PastFacingLearn[
 
 
 def foldrRnnLearner[Interpreter, Data, Env, Pred, Param: Module](
-    rnnLearner: RnnLibrary[Interpreter, Data, Env, Pred, Param],
+    rnnLearner: RnnLibrary[Interpreter, Data, Env, Pred, Param], param_shape: Param
 ):
     return RnnLibrary[Interpreter, Traversable[Data], Env, Traversable[Pred], Param](
         rnn=traverse(rnnLearner.rnn),
-        rnnWithLoss=accumulate(rnnLearner.rnnWithLoss, add, LOSS(jnp.asarray(0.0))),
-        rnnWithGradient=accumulate(rnnLearner.rnnWithGradient, add, Gradient[Param](0.0)),
+        rnnWithLoss=accumulate(rnnLearner.rnnWithLoss, add, LOSS(jnp.array(0.0))),
+        rnnWithGradient=accumulate(
+            rnnLearner.rnnWithGradient, add, Gradient[Param](jnp.zeros(pytreeNumel(param_shape)))
+        ),
     )
 
 
@@ -568,33 +581,56 @@ def trainStep[Dl, D, E](
 
 def endowBilevelOptimization[
     OHO_Interpreter,
-    OHO_Param: Module,
+    OHO_Param: CanDiff,
     OHO_Label,
+    OHO_DATA,
     TrainInterpreter: GetParameter[Env, Param],
-    ValidationInterpreter,
     Data,
     Env,
-    Param,
+    Param: CanDiff,
     Pred,
 ](
-    rnnLearner: RnnLibrary[TrainInterpreter | ValidationInterpreter, Data, Env, Pred, Param],
-    paramFn: Callable[[Gradient[Param]], Fold[TrainInterpreter | ValidationInterpreter, Data, Env, Unit]],
+    rnnLearner: RnnLibrary[TrainInterpreter, Data, Env, Pred, Param],
+    paramFn: Callable[[Gradient[Param]], Fold[TrainInterpreter, Data, Env, Unit]],
     trainInterpreter: TrainInterpreter,
-    validationInterpreter: ValidationInterpreter,
-    bilevelOptimizer: CreateLearner[Data, Env, Param, OHO_Param, OHO_Label, Pred],
+    bilevelOptimizer: CreateLearner[OHO_DATA, Env, Param, OHO_Param, OHO_Label, Pred],
     computeLoss: LossFn[OHO_Label, Pred],
-):
+    resetEnvForValidation: Fold[TrainInterpreter, Data, Env, Unit],
+) -> RnnLibrary[OHO_Interpreter, OHO_DATA, Env, Pred, OHO_Param]:
     type ST[Interpreter, Computed] = Fold[Interpreter, Data, Env, Computed]
 
+    class _EndowBilevel_Can(HasInput[OHO_DATA, Data], HasPredictionInput[OHO_DATA, Data], Protocol): ...
+
     @do()
-    def updateParameter() -> G[ST[TrainInterpreter, Param]]:
-        interpreter = yield from askForInterpreter(PX[TrainInterpreter]())
-        return rnnLearner.rnnWithGradient.flat_map(paramFn).then(interpreter.getParameter())
+    def newActivationStep[OHO_Interpreter: _EndowBilevel_Can]():
+        @do()
+        def updateParameter() -> G[ST[TrainInterpreter, Param]]:
+            interpreter = yield from askForInterpreter(PX[TrainInterpreter]())
+            return rnnLearner.rnnWithGradient.flat_map(paramFn).then(interpreter.getParameter())
 
-    activationStep: ST[OHO_Interpreter, Param]
-    activationStep = updateParameter().switch_dl(trainInterpreter)
+        interpreter = yield from askForInterpreter(PX[OHO_Interpreter]())
+        x = yield from interpreter.getInput()
 
-    predictionStep: ST[OHO_Interpreter, Pred]
-    predictionStep = rnnLearner.rnn.switch_dl(validationInterpreter)
+        activationStep: Fold[OHO_Interpreter, OHO_DATA, Env, Param]
+        activationStep = updateParameter().switch_dl(trainInterpreter).switch_data(x)
+        return activationStep
 
-    return bilevelOptimizer.createLearner(activationStep, predictionStep, computeLoss)
+    @do()
+    def newPredictionStep[OHO_Interpreter: _EndowBilevel_Can]():
+        interpreter = yield from askForInterpreter(PX[OHO_Interpreter]())
+        x = yield from interpreter.getPredictionInput()
+        env = yield from get(PX[Env]())
+        predictions, _ = resetEnvForValidation.then(rnnLearner.rnn).func(trainInterpreter, x, env)
+        return pure(predictions, PX3[OHO_Interpreter, OHO_DATA, Env]())
+
+    return bilevelOptimizer.createLearner(newActivationStep(), newPredictionStep(), computeLoss)
+
+
+"""
+1. have oho get a HasLabel of Traversable[Label] so that it can match with Traversable[Pred]
+2. oho data getinput will get a traversable[data]
+3. oho data getpredictioninput will get a traversable[data], but can be of different length
+then oho data is provably stackable. given a pytree, there exists a stacking algorithm that just appends +1 to front of every array. 
+then unfolding this will make each elemenbt -1 dim, which gets me back to the original pytree
+
+"""

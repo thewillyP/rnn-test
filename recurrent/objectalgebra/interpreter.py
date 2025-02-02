@@ -83,28 +83,6 @@ class DataInterpreter(
         return asks(lambda e: e.y)
 
 
-class BilevelTrainInterpreter(
-    HasInput[OhoInputOutput, jax.Array],
-    HasLabel[OhoInputOutput, jax.Array],
-):
-    def getInput[E](self) -> Fold[Self, OhoInputOutput, E, jax.Array]:
-        return asks(lambda e: e.train.x)
-
-    def getLabel[E](self) -> Fold[Self, OhoInputOutput, E, jax.Array]:
-        return asks(lambda e: e.train.y)
-
-
-class BilevelValidationInterpreter(
-    HasInput[OhoInputOutput, jax.Array],
-    HasLabel[OhoInputOutput, jax.Array],
-):
-    def getInput[E](self) -> Fold[Self, OhoInputOutput, E, jax.Array]:
-        return asks(lambda e: e.val.x)
-
-    def getLabel[E](self) -> Fold[Self, OhoInputOutput, E, jax.Array]:
-        return asks(lambda e: e.val.y)
-
-
 class RNGInterpreter[A, B, C](HasPRNG[GOD[A, B, C], PRNG]):
     type God = GOD[A, B, C]
 
@@ -117,18 +95,6 @@ class RNGInterpreter[A, B, C](HasPRNG[GOD[A, B, C], PRNG]):
 
 # use this as my default interpreter
 class BaseRnnInterpreter[A, B, C](BaseRnnGodInterpreter[A, B, C], DataInterpreter, RNGInterpreter[A, B, C]): ...
-
-
-class OhoRnnTrainInterpreter[A, B, C](
-    BaseRnnGodInterpreter[A, B, C], BilevelTrainInterpreter, RNGInterpreter[A, B, C]
-): ...
-
-
-class OhoRnnValidationInterpreter[A, B, C](
-    BaseRnnGodInterpreter[A, B, C],
-    BilevelValidationInterpreter,
-    RNGInterpreter[A, B, C],
-): ...
 
 
 class _Dialect[E, A, B](
@@ -189,4 +155,20 @@ class BilevelRnnGodInterpreter[A, B, C](
         return modifies(lambda e: eqx.tree_at(lambda t: t.oho_logs, e, eqx.combine(s, e.oho_logs)))
 
 
-class OhoInterpreter[A, B, C](BilevelRnnGodInterpreter[A, B, C], RNGInterpreter[A, B, C]): ...
+# will end up duping labels w/o using since data oriented for supervised stream
+class OhoDataInterpreter(
+    HasInput[OhoInputOutput, Traversable[InputOutput]],
+    HasPredictionInput[OhoInputOutput, Traversable[InputOutput]],
+    HasLabel[OhoInputOutput, Traversable[jax.Array]],
+):
+    def getInput[E](self) -> Fold[Self, OhoInputOutput, E, Traversable[InputOutput]]:
+        return asks(lambda e: e.train)
+
+    def getLabel[E](self) -> Fold[Self, OhoInputOutput, E, Traversable[Array]]:
+        return asks(lambda e: e.labels)
+
+    def getPredictionInput[E](self) -> Fold[Self, OhoInputOutput, E, Traversable[InputOutput]]:
+        return asks(lambda e: e.validation)
+
+
+class OhoInterpreter[A, B, C](BilevelRnnGodInterpreter[A, B, C], RNGInterpreter[A, B, C], OhoDataInterpreter): ...
