@@ -658,12 +658,14 @@ def endowBilevelOptimization[
     @do()
     def newRecurrentErrorStep[OHO_Interpreter: _EndowBilevel_Can]():
         interpreter = yield from askForInterpreter(PX[OHO_Interpreter]())
-        x: Data = yield from interpreter.getPredictionInput()
+        x = yield from interpreter.getPredictionInput()
         env = yield from get(PX[Env]())
         recurrentGradient, _ = resetEnvForValidation.then(rnnLearner.rnnWithGradient).func(trainInterpreter, x, env)
         return pure(recurrentGradient, PX3[OHO_Interpreter, OHO_DATA, Env]())
 
-    return bilevelOptimizer.createLearner(newActivationStep(), newPredictionStep(), computeLoss, newRecurrentErrorStep)
+    return bilevelOptimizer.createLearner(
+        newActivationStep(), newPredictionStep(), computeLoss, newRecurrentErrorStep()
+    )
 
 
 """

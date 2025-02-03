@@ -63,7 +63,7 @@ def constructRnnEnv(rng_key: Array):
     alpha = 1.0
 
     # Define learning rates as arrays
-    learning_rate = jnp.asarray([0.1])
+    learning_rate = jnp.asarray([0.01])
     meta_learning_rate = jnp.asarray([0.001])
 
     # Generate random weights
@@ -138,14 +138,12 @@ def mainLoop(
     ]()
     # lambda key, shape: jax.random.uniform(key, shape, minval=-1.0, maxval=1.0)
 
-    lossFn = lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b))
-
     onlineLearner: RnnLibrary[DL, InputOutput, ENV, PREDICTION, RnnParameter]
     onlineLearner = rtrl.createLearner(
         doRnnStep(),
         doRnnReadout(),
-        lossFn,
-        readoutRecurrentError(doRnnReadout(), lossFn),
+        lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b)),
+        readoutRecurrentError(doRnnReadout(), lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b))),
     )
 
     onlineLearner_folded = foldrRnnLearner(onlineLearner, initEnv.parameter)
@@ -520,6 +518,6 @@ def main():
     # # %%
 
 
-main2()
+main()
 
 # %%
