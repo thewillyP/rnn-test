@@ -49,6 +49,13 @@ class SplitResult:
     leftover: jax.Array
 
 
+# since this is python, there is no way to gaurantee the index assumptions hold, so whatever
+def get_leading_dim_size(tree) -> int:
+    leaves = jax.tree.leaves(tree)
+    leading_dim_size = leaves[0].shape[0]
+    return leading_dim_size
+
+
 def split_and_reshape(arr: jax.Array, T: int):
     n_complete = (len(arr) // T) * T
     main_part = arr[:n_complete].reshape((-1, T) + arr.shape[1:])

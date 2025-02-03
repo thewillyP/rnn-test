@@ -63,8 +63,8 @@ def constructRnnEnv(rng_key: Array):
     alpha = 1.0
 
     # Define learning rates as arrays
-    learning_rate = jnp.asarray([0.01])
-    meta_learning_rate = jnp.asarray([0.000001])
+    learning_rate = jnp.asarray([0.1])
+    meta_learning_rate = jnp.asarray([0.001])
 
     # Generate random weights
     def random_matrix(rng_key, shape, scale):
@@ -138,16 +138,19 @@ def mainLoop(
     ]()
     # lambda key, shape: jax.random.uniform(key, shape, minval=-1.0, maxval=1.0)
 
+    lossFn = lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b))
+
     onlineLearner: RnnLibrary[DL, InputOutput, ENV, PREDICTION, RnnParameter]
     onlineLearner = rtrl.createLearner(
         doRnnStep(),
         doRnnReadout(),
-        lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b)),
+        lossFn,
+        readoutRecurrentError(doRnnReadout(), lossFn),
     )
 
     onlineLearner_folded = foldrRnnLearner(onlineLearner, initEnv.parameter)
 
-    rnnLearner = endowAveragedGradients(onlineLearner_folded, trunc_length, t_series_length, initEnv.parameter)
+    rnnLearner = endowAveragedGradients(onlineLearner_folded, trunc_length, initEnv.parameter)
     learner = rnnLearner.rnnWithGradient.flat_map(doSgdStep)
     # for online, do foldM(rnnLearner.rnnWithGradient.flat_map(doSgdStep)) and have dataloader load entire on first
 
@@ -196,11 +199,12 @@ def ohoLoop(
         doRnnStep(),
         doRnnReadout(),
         lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b)),
+        readoutRecurrentError(doRnnReadout(), lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b))),
     )
 
     onlineLearner_folded = foldrRnnLearner(onlineLearner, initEnv.parameter)
 
-    rnnLearner = endowAveragedGradients(onlineLearner_folded, trunc_length, t_series_length, initEnv.parameter)
+    rnnLearner = endowAveragedGradients(onlineLearner_folded, trunc_length, initEnv.parameter)
 
     trainDialect = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]()
     dialect = OhoInterpreter[RnnParameter, SgdParameter, SgdParameter](trainDialect)
@@ -240,7 +244,7 @@ def ohoLoop(
             validation_loss=validation_loss,
             test_loss=test_loss / total_test_steps,
             learning_rate=learning_rate,
-            effective_learning_rate=jax.nn.softplus(learning_rate),
+            effective_learning_rate=jnp.maximum(0, learning_rate),
         )
         return pure(log, PX3[OHO, OhoInputOutput, ENV]())
 
@@ -259,7 +263,8 @@ def ohoLoop(
     logs = logs.value
 
     eqx.tree_serialise_leaves("some_filename.eqx", logs)
-    print(logs.effective_learning_rate)
+    print(logs.learning_rate)
+    # print(logs.learning_rate)
     print(logs.test_loss)
 
     # loss, _ = lossFn(trainDialect, Traversable(dataloader.value.train), trained_env)
@@ -308,6 +313,7 @@ def onlineLearnerLoop(
         doRnnStep(),
         doRnnReadout(),
         lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b)),
+        readoutRecurrentError(doRnnReadout(), lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b))),
     )
 
     @do()
@@ -369,7 +375,7 @@ def onlineLearnerLoop(
 
 
 def main2():
-    N = 1_000
+    N = 10_000
     rng_key = jax.random.key(0)
     rng_key, prng1, prng2 = jax.random.split(rng_key, 3)
     X, Y = generate_add_task_dataset(N, 5, 9, 1, prng1)
@@ -514,6 +520,6 @@ def main():
     # # %%
 
 
-main()
+main2()
 
 # %%

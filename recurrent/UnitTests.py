@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 
 from recurrent.datarecords import InputOutput
-from recurrent.mylearning import UORO, RnnLibrary, doRnnReadout, doRnnStep
+from recurrent.mylearning import UORO, RnnLibrary, doRnnReadout, doRnnStep, readoutRecurrentError
 from recurrent.myrecords import RnnGodState
 from recurrent.objectalgebra.interpreter import BaseRnnInterpreter
 from recurrent.parameters import IsVector, Logs, RnnConfig, RnnParameter, UORO_Param
@@ -92,6 +92,7 @@ class Test_UORO(unittest.TestCase):
             doRnnStep(),
             doRnnReadout(),
             lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b)),
+            readoutRecurrentError(doRnnReadout(), lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b))),
         )
 
     def test_update_learning_vars(self):

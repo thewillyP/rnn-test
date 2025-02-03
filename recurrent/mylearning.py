@@ -15,7 +15,7 @@ from recurrent.objectalgebra.typeclasses import *
 from recurrent.mytypes import *
 from recurrent.monad import *
 from recurrent.parameters import *
-from recurrent.util import pytree_split, pytreeNumel
+from recurrent.util import get_leading_dim_size, pytree_split, pytreeNumel
 
 
 type LossFn[A, B] = Callable[[A, B], LOSS]
@@ -37,6 +37,7 @@ class CreateLearner[Data, Env, Actv: CanDiff, Param: CanDiff, Label, Pred](Proto
         activationStep: ST[Interpreter, Actv],
         predictionStep: ST[Interpreter, Param],
         lossFunction: LossFn[Label, Pred],
+        willGetRecurrentError: ST[Interpreter, Gradient[Actv]],
     ) -> RnnLibrary[Interpreter, Data, Env, Pred, Param]: ...
 
 
@@ -91,7 +92,7 @@ def doSgdStep_Softplus[Interpreter: _SGD_Can[Env, Param], Data, Env, Param: CanD
     interpreter = yield from askForInterpreter(PX[Interpreter]())
     isParam = yield from interpreter.getParameter()
     hyperparam = yield from interpreter.getHyperParameter()
-    new_param = invmap(isParam, lambda x: jnp.ravel(x - jax.nn.softplus(hyperparam.learning_rate) * gr.value))
+    new_param = invmap(isParam, lambda x: jnp.ravel(x - jnp.maximum(0, hyperparam.learning_rate) * gr.value))
     return interpreter.putParameter(new_param)
 
 
@@ -199,15 +200,16 @@ def doGradient[Interpreter, Data, Env, Param: CanDiff](
 
 
 def endowAveragedGradients[Interpreter, Data: Module, Env, Pred, Param: CanDiff](
-    rnnLibrary: RnnLibrary[Interpreter, Traversable[Data], Env, Pred, Param], trunc: int, N: int, param_shape: Param
+    rnnLibrary: RnnLibrary[Interpreter, Traversable[Data], Env, Pred, Param], trunc: int, param_shape: Param
 ) -> RnnLibrary[Interpreter, Traversable[Data], Env, Pred, Param]:
     type ST[Computed] = Fold[Interpreter, Traversable[Data], Env, Computed]
 
     @do()
     def avgGradient() -> G[ST[Gradient[Param]]]:
+        dataset = yield from ask(PX[Traversable[Data]]())
+        N = get_leading_dim_size(dataset)
         n_complete = (N // trunc) * trunc
         n_leftover = N - n_complete
-        dataset = yield from ask(PX[Traversable[Data]]())
 
         # Reshaping the dataset with 'trunc' makes scanning easier IF dataset is evenly shaped,
         # but JAX doesn’t allow jagged arrays. So, we adjust the data
@@ -243,6 +245,28 @@ def endowAveragedGradients[Interpreter, Data: Module, Env, Pred, Param: CanDiff]
     )
 
 
+class _ReadoutRecurrentError_Can[Env, Actv](
+    GetActivation[Env, Actv],
+    PutActivation[Env, Actv],
+    Protocol,
+): ...
+
+
+# Interpreter: _ReadoutRecurrentError_Can[Env, Actv],
+@do()
+def readoutRecurrentError[Interpreter: _ReadoutRecurrentError_Can[Env, Actv], Env, Data, Actv: CanDiff, Pred, Label](
+    predictionStep: Fold[Interpreter, Data, Env, Pred], lossFunction: LossFn[Label, Pred]
+):
+    interpreter = yield from askForInterpreter(PX[Interpreter]())
+    willGetImmediateLoss = predictionStep.flat_map(doLoss(lossFunction))
+    willGetRecurrentError = doGradient(
+        willGetImmediateLoss,
+        interpreter.getActivation(),
+        interpreter.putActivation,
+    )
+    return willGetRecurrentError
+
+
 # todo, recheck later
 # @do()
 # def doBatchGradients[Dl, D: Module | Array, E, Pr: Module](
@@ -270,8 +294,9 @@ class OfflineLearning[Data, Env, Actv: CanDiff, Param: CanDiff, Label, Pred](ABC
     def createLearner[Interpreter: _OfflineLearner_Can](
         self,
         activationStep: ST[Interpreter, Actv],
-        predictionStep: ST[Interpreter, Param],
+        predictionStep: ST[Interpreter, Pred],
         lossFunction: LossFn[Label, Pred],
+        _: ST[Interpreter, Gradient[Actv]],  # will be used when I make an future face learner
     ):
         rnnStep = activationStep.then(predictionStep)
         rnn = traverse(rnnStep)
@@ -342,19 +367,15 @@ class PastFacingLearn[Data, Env, Actv: CanDiff, Param: CanDiff, Label, Pred](ABC
     def createLearner[Interpreter: _PastFacingLearner_Can](
         self,
         activationStep: ST[Interpreter, Actv],
-        predictionStep: ST[Interpreter, Param],
+        predictionStep: ST[Interpreter, Pred],
         lossFunction: LossFn[Label, Pred],
+        willGetRecurrentError: ST[Interpreter, Gradient[Actv]],
     ):
         willGetImmediateLoss = predictionStep.flat_map(doLoss(lossFunction))
 
         @do()
         def rnnGradient() -> G[Fold[Interpreter, Data, Env, Gradient[Param]]]:
             interpreter = yield from askForInterpreter(PX[Interpreter]())
-            willGetRecurrentError = doGradient(
-                willGetImmediateLoss,
-                interpreter.getActivation(),
-                interpreter.putActivation,
-            )
 
             # order matters, need to update readout (grad_o) AFTER updating activation (grad_rec updates it)
             grad_rec = yield from self.creditAssignment(willGetRecurrentError, activationStep)
@@ -634,7 +655,15 @@ def endowBilevelOptimization[
         predictions, _ = resetEnvForValidation.then(rnnLearner.rnn).func(trainInterpreter, x, env)
         return pure(predictions, PX3[OHO_Interpreter, OHO_DATA, Env]())
 
-    return bilevelOptimizer.createLearner(newActivationStep(), newPredictionStep(), computeLoss)
+    @do()
+    def newRecurrentErrorStep[OHO_Interpreter: _EndowBilevel_Can]():
+        interpreter = yield from askForInterpreter(PX[OHO_Interpreter]())
+        x: Data = yield from interpreter.getPredictionInput()
+        env = yield from get(PX[Env]())
+        recurrentGradient, _ = resetEnvForValidation.then(rnnLearner.rnnWithGradient).func(trainInterpreter, x, env)
+        return pure(recurrentGradient, PX3[OHO_Interpreter, OHO_DATA, Env]())
+
+    return bilevelOptimizer.createLearner(newActivationStep(), newPredictionStep(), computeLoss, newRecurrentErrorStep)
 
 
 """
