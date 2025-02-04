@@ -29,7 +29,7 @@ import jax.numpy as jnp
 import equinox as eqx
 import jax
 
-jax.config.update("jax_enable_x64", True)
+# jax.config.update("jax_enable_x64", True)
 
 """
 Todo
@@ -253,13 +253,13 @@ def ohoLoop(
             .then(rnnLearner.rnnWithLoss)
             .func(trainDialect, oho_data.validation, env)
         )
-        test_loss, _ = (
-            resetRnnActivation(initEnv.activation).then(rnnLearner.rnnWithLoss).func(trainDialect, test_set, env)
-        )
+        # test_loss, _ = (
+        #     resetRnnActivation(initEnv.activation).then(rnnLearner.rnnWithLoss).func(trainDialect, test_set, env)
+        # )
         log = Logs(
             train_loss=train_loss,
             validation_loss=validation_loss,
-            test_loss=test_loss / total_test_steps,
+            test_loss=None,
             learning_rate=learning_rate,
         )
         _ = yield from oho.rnnWithGradient.flat_map(doSgdStep_Clipped)
@@ -281,25 +281,6 @@ def ohoLoop(
     # print(logs.learning_rate)
     print(logs.test_loss)
 
-    # loss, _ = lossFn(trainDialect, Traversable(dataloader.value.train), trained_env)
-    # print(loss / total_steps)
-    # print(trained_env.hyperparameter.learning_rate)
-
-    # test_loss, _ = lossFn(trainDialect, test_set, trained_env)
-    # print(test_loss / total_test_steps)
-
-    # learner = oho.rnnWithGradient.flat_map(doSgdStep)
-
-    # lossFn = eqx.filter_jit(rnnLearner.rnnWithLoss.func)
-
-    # for time_series in dataloader:
-    #     # start = time.time()
-    #     final_env = trainStep(learner, dialect, time_series, initEnv)
-    #     initEnv = final_env
-    #     loss, _ = lossFn(dialect, time_series, final_env)
-    #     print(loss / t_series_length)
-    #     # print(time.time() - start)
-
 
 def onlineLearnerLoop(
     dataloader: Traversable[InputOutput],
@@ -314,14 +295,14 @@ def onlineLearnerLoop(
     rng_key, prng = jax.random.split(rng_key)
     rng_key, initEnv = constructRnnEnv(prng)
 
-    rtrl = RTRL[
+    rtrl = UORO[
         InputOutput,
         RnnGodState[RnnParameter, SgdParameter, SgdParameter],
         ACTIVATION,
         RnnParameter,
         jax.Array,
         PREDICTION,
-    ]()
+    ](lambda key, shape: jax.random.uniform(key, shape, minval=-1.0, maxval=1.0))
     # lambda key, shape: jax.random.uniform(key, shape, minval=-1.0, maxval=1.0)
 
     onlineLearner: RnnLibrary[DL, InputOutput, ENV, PREDICTION, RnnParameter]
@@ -340,12 +321,12 @@ def onlineLearnerLoop(
 
     @do()
     def updateStep():
-        # env = yield from get(PX[ENV]())
-        # data = yield from ask(PX[InputOutput]())
-        # train_loss, _ = onlineLearner.rnnWithLoss.func(dialect, data, env)
+        env = yield from get(PX[ENV]())
+        data = yield from ask(PX[InputOutput]())
+        train_loss, _ = onlineLearner.rnnWithLoss.func(dialect, data, env)
         # test_loss, _ = lossFn(dialect, test_set, env)
         log = Logs(
-            train_loss=None,
+            train_loss=train_loss,
             validation_loss=None,
             test_loss=None,
             learning_rate=None,
@@ -354,7 +335,7 @@ def onlineLearnerLoop(
 
         return pure(log, PX3[DL, InputOutput, ENV]())
 
-    model = eqx.filter_jit(traverse(updateStep()).func).lower(dialect, dataloader, initEnv).compile()
+    model = eqx.filter_jit(traverse(updateStep()).func)
 
     start = time.time()
     logs, trained_env = model(dialect, dataloader, initEnv)
@@ -368,28 +349,64 @@ def onlineLearnerLoop(
     print(loss / t_series_length)
     test_loss, _ = lossFn(dialect, test_set, trained_env)
     print(test_loss / test_steps)
-    test_loss_init, _ = lossFn(dialect, test_set, initEnv)
-    print(test_loss_init / test_steps)
+    test_loss = test_loss / test_steps
+    # test_loss_init, _ = lossFn(dialect, test_set, initEnv)
+    # print(test_loss_init / test_steps)
     print(tttt)
+    return logs
 
 
-def main2() -> None:
-    t1 = 14
-    t2 = t1 + 2
+# def main2():
+#     results = []
+
+#     for t1 in range(20):
+#         t2 = t1 + 2
+#         N = 1_000_000
+#         N_test = 10_000
+#         rng_key = jax.random.key(54)
+#         rng_key, prng1, _ = jax.random.split(rng_key, 3)
+
+#         X, Y = generate_add_task_dataset(N, t1, t2, 1, prng1)
+#         X_test, Y_test = generate_add_task_dataset(N_test, t1, t2, 1, rng_key)
+
+#         dataloader = Traversable(InputOutput(x=X, y=Y))
+#         test_set = Traversable(InputOutput(x=X_test, y=Y_test))
+
+#         test_loss = onlineLearnerLoop(dataloader, N, test_set, N_test)
+
+#         results.append(test_loss)  # Collect test losses
+
+#     results_array = jnp.array(results)  # Convert list to JAX array
+
+#     # Save results using JAX's save function
+#     jax.numpy.save("rflo.npy", results_array)
+#     print("Results saved to rflo.npy")
+
+
+def main2():
+    t1 = 5
+    t2 = 9
     N = 1_000_000
     N_test = 10_000
     rng_key = jax.random.key(54)
     rng_key, prng1, _ = jax.random.split(rng_key, 3)
+
     X, Y = generate_add_task_dataset(N, t1, t2, 1, prng1)
     X_test, Y_test = generate_add_task_dataset(N_test, t1, t2, 1, rng_key)
 
     dataloader = Traversable(InputOutput(x=X, y=Y))
     test_set = Traversable(InputOutput(x=X_test, y=Y_test))
 
-    onlineLearnerLoop(dataloader, N, test_set, N_test)
+    logs = onlineLearnerLoop(dataloader, N, test_set, N_test)
+
+    # Save results using JAX's save function
+    jax.numpy.save("uoro_train.npy", logs.value.train_loss)
+    print("Results saved")
 
 
 def main():
+    t1 = 10
+    t2 = t1 + 2
     N = 1_000
     N_val = 1_000
     N_test = 1_000
@@ -398,9 +415,9 @@ def main():
     # if trunc_length = 1, then divide by t_series_length. if trunc_length = t_series_length, then no normalization done
     rng_key = jax.random.key(27)
     rng_key, prng1, prng2 = jax.random.split(rng_key, 3)
-    X, Y = generate_add_task_dataset(N, 16, 18, 1, prng1)
-    X_val, Y_val = generate_add_task_dataset(N_val, 16, 18, 1, prng2)
-    X_test, Y_test = generate_add_task_dataset(N_test, 16, 18, 1, rng_key)
+    X, Y = generate_add_task_dataset(N, t1, t2, 1, prng1)
+    X_val, Y_val = generate_add_task_dataset(N_val, t1, t2, 1, prng2)
+    X_test, Y_test = generate_add_task_dataset(N_test, t1, t2, 1, rng_key)
 
     def transform(arr: Array, _t: int):
         return arr.reshape((_t, -1) + arr.shape[1:])
@@ -412,9 +429,6 @@ def main():
     # for every param update, go through whole validation
     X_val = jnp.repeat(jnp.expand_dims(X_val, axis=0), numUpdates, axis=0)
     Y_val = jnp.repeat(jnp.expand_dims(Y_val, axis=0), numUpdates, axis=0)
-
-    # X_val = transform(X_val, N // t_series_length)
-    # Y_val = transform(Y_val, N // t_series_length)
 
     dataloader = Traversable(
         OhoInputOutput(
@@ -428,83 +442,37 @@ def main():
 
     ohoLoop(dataloader, t_series_length, trunc_length, N, test_set, N_test)
 
-    # dataloader = map(
-    #     lambda data: Traversable[InputOutput](InputOutput(data[0], data[1])), zip(X, Y)
-    # )
 
-    # mainLoop(dataloader, t_series_length, trunc_length)
+main()
 
-    # dataset = map(lambda data: InputOutput(data[0], data[1]), zip(X, Y))
-    # dataset = list(dataset)
+# import matplotlib
 
-    # import cProfile, pstats
-
-    # profiler = cProfile.Profile()
-    # profiler.enable()
-    # start = time.time()
-    # predictions = temp(dataset)
-    # print(time.time() - start)
-    # profiler.disable()
-    # stats = pstats.Stats(profiler).sort_stats("cumtime")
-    # stats.print_stats()
-    # stats.dump_stats("profile_results.prof")
-
-    # predictions = list(predictions)
-    # indices = torch.arange(len(predictions))
-
-    # predictions = [tensor[0].item() for tensor in predictions]
-    # labels = [tensor[0].item() for tensor in Y]
-
-    # # Plot the data
-    # plt.figure(figsize=(8, 5))
-    # plt.plot(indices, predictions, marker="o", label="Prediction")
-    # plt.plot(indices, labels, marker="o", label="Target")
-    # plt.title("Plot of List Data with Indices")
-    # plt.xlabel("Indices")
-    # plt.ylabel("Values")
-    # plt.grid(True)
-    # plt.legend()
-    # plt.show()
-
-    # # Define the simple RNN model
-    # class SimpleRNN(torch.nn.Module):
-    #     def __init__(self, input_size, hidden_size, output_size):
-    #         super(SimpleRNN, self).__init__()
-    #         self.hidden_size = hidden_size
-    #         # Define the RNN layer
-    #         self.rnn = torch.nn.RNN(input_size, hidden_size)
-    #         # Define a fully connected layer to map RNN output to final prediction
-    #         self.fc = torch.nn.Linear(hidden_size, output_size)
-
-    #     def forward(self, x):
-    #         # Initialize hidden state with zeros
-    #         h0 = torch.zeros(1, self.hidden_size)
-    #         # Get RNN output (output, hidden_state)
-    #         out, _ = self.rnn(x, h0)
-    #         # Pass the RNN output through the fully connected layer for each time step
-    #         out = self.fc(out)  # Apply to all time steps
-    #         return out
-
-    # random_data = torch.randn(length, 2)
-
-    # # Initialize the model
-    # input_size = 2  # Corresponding to x1, x2, and y
-    # hidden_size = 30  # Arbitrary size for hidden state
-    # output_size = 1  # We are predicting a single output value
-
-    # model = SimpleRNN(input_size, hidden_size, output_size)
-
-    # # Generate predictions for the entire sequence
-    # with torch.no_grad():  # No need to compute gradients
-    #     start_time_vmap = time.time()
-    #     predictions = model(random_data)
-    #     vmap_time = time.time() - start_time_vmap
-    #     print(f"vmap execution time: {vmap_time:.6f} seconds")
-
-    # print(predictions.shape)
-    # # %%
+# matplotlib.use("Agg")
 
 
-main2()
+# def moving_average(arr, window_size):
+#     """Compute the moving average with a given window size."""
+#     return jnp.convolve(arr, jnp.ones(window_size) / window_size, mode="valid")[::window_size]
 
-# %%
+
+# window_size = 1000
+# y1 = jnp.load("rtrl_train.npy")
+# y1 = moving_average(y1, window_size)
+# y2 = jnp.load("uoro_train.npy")
+# y2 = moving_average(y2, window_size)
+# y3 = jnp.load("rflo_train.npy")
+# y3 = moving_average(y3, window_size)
+
+# # Plot the arrays
+# plt.figure(figsize=(10, 6))
+# plt.plot(y1, label="RTRL", color="blue")
+# plt.plot(y2, label="UORO", color="green")
+# plt.plot(y3, label="RFLO", color="pink")
+# plt.legend()
+# plt.xlabel("Update Steps")
+# plt.ylabel("Train Loss")
+# plt.ylim(0.45, 0.6)
+# # plt.xticks(range(len(y1)))
+
+# plt.savefig("learning_train.png", dpi=300)  # You can change the dpi for quality
+# plt.close()
