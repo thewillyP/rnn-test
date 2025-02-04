@@ -29,6 +29,8 @@ import jax.numpy as jnp
 import equinox as eqx
 import jax
 
+jax.config.update("jax_enable_x64", True)
+
 """
 Todo
 1) implement vanilla rnn training loop 
@@ -67,18 +69,29 @@ def constructRnnEnv(rng_key: Array):
     learning_rate = jnp.asarray([0.0001])
     meta_learning_rate = jnp.asarray([0.0001])
 
-    # Generate random weights
-    def random_matrix(rng_key, shape, scale):
-        rng_key, prng = jax.random.split(rng_key)
-        return rng_key, jax.random.normal(prng, shape) * scale
+    rng_key, subkey1, subkey2, subkey3 = jax.random.split(rng_key, 4)
 
-    rng_key, prng = jax.random.split(rng_key)
-    w_rec_, _ = jnp.linalg.qr(jax.random.normal(prng, (n_h, n_h)))
+    W_in = jax.random.normal(subkey1, (n_h, n_in)) * jnp.sqrt(1 / n_in)
+    W_rec, _ = jnp.linalg.qr(jax.random.normal(subkey2, (n_h, n_h)))  # QR decomposition
+    W_out = jax.random.normal(subkey3, (n_out, n_h)) * jnp.sqrt(1 / n_h)
+    b_rec = jnp.zeros((n_h, 1))
+    b_out = jnp.zeros((n_out, 1))
 
-    rng_key, w_in_ = random_matrix(rng_key, (n_h, n_in + 1), jnp.sqrt(1.0 / (n_in + 1)))
-    w_rec = jnp.concatenate((w_rec_, w_in_), axis=1)
+    w_rec = jnp.hstack([W_rec, W_in, b_rec])
+    w_out = jnp.hstack([W_out, b_out])
 
-    rng_key, w_out = random_matrix(rng_key, (n_out, n_h + 1), jnp.sqrt(1.0 / (n_h + 1)))
+    # # Generate random weights
+    # def random_matrix(rng_key, shape, scale):
+    #     rng_key, prng = jax.random.split(rng_key)
+    #     return rng_key, jax.random.normal(prng, shape) * scale
+
+    # rng_key, prng = jax.random.split(rng_key)
+    # w_rec_, _ = jnp.linalg.qr(jax.random.normal(prng, (n_h, n_h)))
+
+    # rng_key, w_in_ = random_matrix(rng_key, (n_h, n_in + 1), jnp.sqrt(1.0 / (n_in + 1)))
+    # w_rec = jnp.concatenate((w_rec_, w_in_), axis=1)
+
+    # rng_key, w_out = random_matrix(rng_key, (n_out, n_h + 1), jnp.sqrt(1.0 / (n_h + 1)))
 
     # Initialize parameters
     parameter = RnnParameter(w_rec=w_rec, w_out=w_out)
@@ -225,7 +238,7 @@ def ohoLoop(
         rnnLearner, doSgdStep, trainDialect, oho_rtrl, compute_loss, resetRnnActivation(initEnv.activation)
     )
 
-    lossFn = eqx.filter_jit(accumulate(rnnLearner.rnnWithLoss, add, 0).func)
+    lossFn = eqx.filter_jit(accumulate(rnnLearner.rnnWithLoss, add, 0.0).func)
 
     @do()
     def updateStep():
@@ -319,70 +332,56 @@ def onlineLearnerLoop(
         readoutRecurrentError(doRnnReadout(), lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b))),
     )
 
-    @do()
-    def next():
-        print("recompiled")
-        env = yield from get(PX[ENV]())
-        interpreter = yield from askForInterpreter(PX[DL])
-        # loss, _ = accumulate(onlineLearner.rnnWithLoss, add, 0).func(interpreter, dataloader, env)
-        return onlineLearner.rnnWithGradient.flat_map(doSgdStep)
-
     dialect = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]()
 
-    model = (
-        eqx.filter_jit(repeatM(onlineLearner.rnnWithGradient.flat_map(doSgdStep)).func)
-        .lower(dialect, dataloader, initEnv)
-        .compile()
-    )
-
     lossFn = eqx.filter_jit(
-        resetRnnActivation(initEnv.activation).then(accumulate(onlineLearner.rnnWithLoss, add, 0)).func
+        resetRnnActivation(initEnv.activation).then(accumulate(onlineLearner.rnnWithLoss, add, 0.0)).func
     )
 
-    # model2 = eqx.filter_jit(repeatM(onlineLearner.rnn).func).lower(dialect, dataloader, initEnv).compile()
+    @do()
+    def updateStep():
+        # env = yield from get(PX[ENV]())
+        # data = yield from ask(PX[InputOutput]())
+        # train_loss, _ = onlineLearner.rnnWithLoss.func(dialect, data, env)
+        # test_loss, _ = lossFn(dialect, test_set, env)
+        log = Logs(
+            train_loss=None,
+            validation_loss=None,
+            test_loss=None,
+            learning_rate=None,
+        )
+        _ = yield from onlineLearner.rnnWithGradient.flat_map(doSgdStep)
+
+        return pure(log, PX3[DL, InputOutput, ENV]())
+
+    model = eqx.filter_jit(traverse(updateStep()).func).lower(dialect, dataloader, initEnv).compile()
 
     start = time.time()
-    _, trained_env = model(dialect, dataloader, initEnv)
-    jax.block_until_ready(trained_env)
-    print(f"Train Time: {time.time() - start}")
+    logs, trained_env = model(dialect, dataloader, initEnv)
+    tttt = f"Train Time: {time.time() - start}"
+
+    # logs = logs.value
+    # print(logs.train_loss)
+    # print(logs.test_loss)
 
     loss, _ = lossFn(dialect, dataloader, trained_env)
     print(loss / t_series_length)
     test_loss, _ = lossFn(dialect, test_set, trained_env)
     print(test_loss / test_steps)
-
-    # for time_series in map(
-    #     lambda x: InputOutput(x[0], x[1]), zip(dataloader.value.x, dataloader.value.y)
-    # ):
-    #     # start = time.time()
-    #     loss, _ = lossFn(dialect, dataloader, initEnv)
-    #     losses.append(loss / t_series_length)
-    #     print(loss / t_series_length)
-    #     final_env = trainStep(learner, dialect, time_series, initEnv)
-    #     initEnv = final_env
-
-    # plt.figure(figsize=(10, 6))
-    # plt.plot(losses, linestyle="-", color="b", label="Loss")
-    # plt.title("Training Loss")
-    # plt.xlabel("Epoch")
-    # plt.ylabel("Loss")
-    # plt.grid(True, linestyle="--", alpha=0.6)
-    # plt.legend()
-    # plt.tight_layout()
-
-    # # Save the plot to disk
-    # output_path = "test2.png"
-    # plt.savefig(output_path)
-    # print(f"Plot saved to {output_path}")
+    test_loss_init, _ = lossFn(dialect, test_set, initEnv)
+    print(test_loss_init / test_steps)
+    print(tttt)
 
 
 def main2() -> None:
+    t1 = 14
+    t2 = t1 + 2
     N = 1_000_000
-    N_test = 1_000
-    rng_key = jax.random.key(0)
+    N_test = 10_000
+    rng_key = jax.random.key(54)
     rng_key, prng1, _ = jax.random.split(rng_key, 3)
-    X, Y = generate_add_task_dataset(N, 14, 16, 1, prng1)
-    X_test, Y_test = generate_add_task_dataset(N_test, 14, 16, 1, rng_key)
+    X, Y = generate_add_task_dataset(N, t1, t2, 1, prng1)
+    X_test, Y_test = generate_add_task_dataset(N_test, t1, t2, 1, rng_key)
 
     dataloader = Traversable(InputOutput(x=X, y=Y))
     test_set = Traversable(InputOutput(x=X_test, y=Y_test))
