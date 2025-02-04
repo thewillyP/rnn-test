@@ -63,8 +63,9 @@ def constructRnnEnv(rng_key: Array):
     alpha = 1.0
 
     # Define learning rates as arrays
-    learning_rate = jnp.asarray([0.01])
-    meta_learning_rate = jnp.asarray([0.001])
+    # 0.02621876
+    learning_rate = jnp.asarray([0.0001])
+    meta_learning_rate = jnp.asarray([0.0001])
 
     # Generate random weights
     def random_matrix(rng_key, shape, scale):
@@ -221,36 +222,38 @@ def ohoLoop(
 
     oho: RnnLibrary[OHO, OhoInputOutput, ENV, Traversable[PREDICTION], SgdParameter]
     oho = endowBilevelOptimization(
-        rnnLearner, doSgdStep_Softplus, trainDialect, oho_rtrl, compute_loss, resetRnnActivation(initEnv.activation)
+        rnnLearner, doSgdStep, trainDialect, oho_rtrl, compute_loss, resetRnnActivation(initEnv.activation)
     )
 
     lossFn = eqx.filter_jit(accumulate(rnnLearner.rnnWithLoss, add, 0).func)
 
     @do()
-    def log():
+    def updateStep():
         env = yield from get(PX[ENV]())
         interpreter = yield from askForInterpreter(PX[OHO]())
         oho_data = yield from ask(PX[OhoInputOutput]())
         learning_rate = yield from interpreter.getParameter().fmap(lambda x: x.learning_rate)
         train_loss, _ = rnnLearner.rnnWithLoss.func(trainDialect, oho_data.train, env)
         # lag 1 timestep behind bc show prev param validation
-        validation_loss, _ = rnnLearner.rnnWithLoss.func(trainDialect, oho_data.validation, env)
-        test_loss, _ = rnnLearner.rnnWithLoss.func(trainDialect, test_set, env)
-
+        validation_loss, _ = (
+            resetRnnActivation(initEnv.activation)
+            .then(rnnLearner.rnnWithLoss)
+            .func(trainDialect, oho_data.validation, env)
+        )
+        test_loss, _ = (
+            resetRnnActivation(initEnv.activation).then(rnnLearner.rnnWithLoss).func(trainDialect, test_set, env)
+        )
         log = Logs(
             train_loss=train_loss,
             validation_loss=validation_loss,
             test_loss=test_loss / total_test_steps,
             learning_rate=learning_rate,
-            effective_learning_rate=jnp.maximum(0, learning_rate),
         )
+        _ = yield from oho.rnnWithGradient.flat_map(doSgdStep_Clipped)
+
         return pure(log, PX3[OHO, OhoInputOutput, ENV]())
 
-    model = (
-        eqx.filter_jit(traverse(oho.rnnWithGradient.flat_map(doSgdStep).then(log())).func)
-        .lower(dialect, dataloader, initEnv)
-        .compile()
-    )
+    model = eqx.filter_jit(traverse(updateStep()).func).lower(dialect, dataloader, initEnv).compile()
 
     # model2 = eqx.filter_jit(repeatM(onlineLearner.rnn).func).lower(dialect, dataloader, initEnv).compile()
 
@@ -261,7 +264,7 @@ def ohoLoop(
     logs = logs.value
 
     eqx.tree_serialise_leaves("some_filename.eqx", logs)
-    print(logs.learning_rate)
+    print(logs.learning_rate**2)
     # print(logs.learning_rate)
     print(logs.test_loss)
 
@@ -288,6 +291,8 @@ def ohoLoop(
 def onlineLearnerLoop(
     dataloader: Traversable[InputOutput],
     t_series_length: int,
+    test_set: Traversable[InputOutput],
+    test_steps: int,
 ):
     type DL = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]
     type ENV = RnnGodState[RnnParameter, SgdParameter, SgdParameter]
@@ -325,27 +330,26 @@ def onlineLearnerLoop(
     dialect = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]()
 
     model = (
-        eqx.filter_jit(
-            lambda a1, a2, a3: repeatM(onlineLearner.rnnWithGradient.flat_map(doSgdStep)).func(a2, a1, a3),
-            donate="all-except-first",
-        )
-        .lower(dataloader, dialect, initEnv)
+        eqx.filter_jit(repeatM(onlineLearner.rnnWithGradient.flat_map(doSgdStep)).func)
+        .lower(dialect, dataloader, initEnv)
         .compile()
     )
 
-    lossFn = (
-        eqx.filter_jit(accumulate(onlineLearner.rnnWithLoss, add, 0).func).lower(dialect, dataloader, initEnv).compile()
+    lossFn = eqx.filter_jit(
+        resetRnnActivation(initEnv.activation).then(accumulate(onlineLearner.rnnWithLoss, add, 0)).func
     )
 
     # model2 = eqx.filter_jit(repeatM(onlineLearner.rnn).func).lower(dialect, dataloader, initEnv).compile()
 
     start = time.time()
-    _, trained_env = model(dataloader, dialect, initEnv)
+    _, trained_env = model(dialect, dataloader, initEnv)
     jax.block_until_ready(trained_env)
     print(f"Train Time: {time.time() - start}")
 
     loss, _ = lossFn(dialect, dataloader, trained_env)
     print(loss / t_series_length)
+    test_loss, _ = lossFn(dialect, test_set, trained_env)
+    print(test_loss / test_steps)
 
     # for time_series in map(
     #     lambda x: InputOutput(x[0], x[1]), zip(dataloader.value.x, dataloader.value.y)
@@ -372,29 +376,32 @@ def onlineLearnerLoop(
     # print(f"Plot saved to {output_path}")
 
 
-def main2():
-    N = 10_000
+def main2() -> None:
+    N = 1_000_000
+    N_test = 1_000
     rng_key = jax.random.key(0)
-    rng_key, prng1, prng2 = jax.random.split(rng_key, 3)
-    X, Y = generate_add_task_dataset(N, 5, 9, 1, prng1)
+    rng_key, prng1, _ = jax.random.split(rng_key, 3)
+    X, Y = generate_add_task_dataset(N, 14, 16, 1, prng1)
+    X_test, Y_test = generate_add_task_dataset(N_test, 14, 16, 1, rng_key)
 
     dataloader = Traversable(InputOutput(x=X, y=Y))
+    test_set = Traversable(InputOutput(x=X_test, y=Y_test))
 
-    onlineLearnerLoop(dataloader, N)
+    onlineLearnerLoop(dataloader, N, test_set, N_test)
 
 
 def main():
-    N = 100
-    N_val = 100
-    N_test = 100
+    N = 1_000
+    N_val = 1_000
+    N_test = 1_000
     t_series_length = 1  # how much time series goines into ONE param update
     trunc_length = 1  # controls how much avging done in one t_series
     # if trunc_length = 1, then divide by t_series_length. if trunc_length = t_series_length, then no normalization done
-    rng_key = jax.random.key(0)
-    rng_key, prng1, prng2, prng3 = jax.random.split(rng_key, 4)
-    X, Y = generate_add_task_dataset(N, 5, 9, 1, prng1)
-    X_val, Y_val = generate_add_task_dataset(N_val, 5, 9, 1, prng2)
-    X_test, Y_test = generate_add_task_dataset(N_test, 5, 9, 1, prng3)
+    rng_key = jax.random.key(27)
+    rng_key, prng1, prng2 = jax.random.split(rng_key, 3)
+    X, Y = generate_add_task_dataset(N, 16, 18, 1, prng1)
+    X_val, Y_val = generate_add_task_dataset(N_val, 16, 18, 1, prng2)
+    X_test, Y_test = generate_add_task_dataset(N_test, 16, 18, 1, rng_key)
 
     def transform(arr: Array, _t: int):
         return arr.reshape((_t, -1) + arr.shape[1:])
@@ -419,25 +426,6 @@ def main():
     )
 
     test_set = Traversable(InputOutput(x=X_test, y=Y_test))
-
-    # dataloader = Traversable(
-    #     Traversable(
-    #         OhoInputOutput(
-    #             train=InputOutput(x=X, y=Y),
-    #             val=InputOutput(x=X_val, y=Y_val),
-    #         )
-    #     )
-    # )
-
-    # dataloader = map(
-    #     lambda data: Traversable(
-    #         OhoInputOutput(
-    #             train=InputOutput(x=data[0], y=data[1]),
-    #             val=InputOutput(x=X_val, y=Y_val),
-    #         )
-    #     ),
-    #     zip(X, Y),
-    # )
 
     ohoLoop(dataloader, t_series_length, trunc_length, N, test_set, N_test)
 
@@ -518,6 +506,6 @@ def main():
     # # %%
 
 
-main()
+main2()
 
 # %%

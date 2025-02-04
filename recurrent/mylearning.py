@@ -86,13 +86,24 @@ def doSgdStep[Interpreter: _SGD_Can[Env, Param], Data, Env, Param: CanDiff](
 
 
 @do()
-def doSgdStep_Softplus[Interpreter: _SGD_Can[Env, Param], Data, Env, Param: CanDiff](
+def doSgdStep_Squared[Interpreter: _SGD_Can[Env, Param], Data, Env, Param: CanDiff](
     gr: Gradient[Param],
 ) -> G[Fold[Interpreter, Data, Env, Unit]]:
     interpreter = yield from askForInterpreter(PX[Interpreter]())
     isParam = yield from interpreter.getParameter()
     hyperparam = yield from interpreter.getHyperParameter()
-    new_param = invmap(isParam, lambda x: jnp.ravel(x - jnp.maximum(0, hyperparam.learning_rate) * gr.value))
+    new_param = invmap(isParam, lambda x: jnp.ravel(x - (hyperparam.learning_rate**2) * gr.value))
+    return interpreter.putParameter(new_param)
+
+
+@do()
+def doSgdStep_Clipped[Interpreter: _SGD_Can[Env, Param], Data, Env, Param: CanDiff](
+    gr: Gradient[Param],
+) -> G[Fold[Interpreter, Data, Env, Unit]]:
+    interpreter = yield from askForInterpreter(PX[Interpreter]())
+    isParam = yield from interpreter.getParameter()
+    hyperparam = yield from interpreter.getHyperParameter()
+    new_param = invmap(isParam, lambda x: jnp.ravel(jnp.maximum(0, x - hyperparam.learning_rate * gr.value)))
     return interpreter.putParameter(new_param)
 
 
