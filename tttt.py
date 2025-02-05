@@ -864,27 +864,173 @@
 # # print("Tangent output:", tangent_out)  # Directional derivative
 
 
+# import jax
+# import jax.numpy as jnp
+
+# # Example pytrees
+# pytree1 = {"a": jnp.array([1, 2, 3]), "b": jnp.array([4, 5, 6])}
+
+
+# pytree2 = {
+#     "a": {"x": jnp.array([40, 50, 60]), "y": jnp.array([70, 80, 90])},
+#     "b": {"x": jnp.array([40, 50, 60]), "y": jnp.array([70, 80, 90])},
+# }
+
+
+# # Function to apply element-wise to each leaf
+# def add_arrays(arr1, arr2):
+#     print(arr1)
+#     print(arr2)
+#     return arr1 + arr2
+
+
+# # Using jax.tree_map to apply the function over the pytrees
+# result = jax.tree_map(add_arrays, pytree1, jnp.array([1, 2, 3]))
+
+# print(result)
+
+
+# import tree_math as tm
+# import jax.numpy as jnp
+# import jax
+# import equinox as eqx
+
+
+# def compute_fn(v):
+#     return jax.tree.map(lambda leaf: leaf**2, v)
+
+
+# # Wrap with JAX's jacobian
+# compute_fn_jacobian = jax.jacobian(compute_fn)
+
+# # Example usage
+# v = tm.Vector(
+#     {"x": jnp.arange(2, dtype=jnp.float32), "y": jnp.arange(5, dtype=jnp.float32)}
+# )
+
+# # Compute the function value and its Jacobian
+# value = compute_fn(v)
+# jacobian = compute_fn_jacobian(v)
+
+# print("Function value:", value)
+# eqx.tree_pprint(jacobian.tree)
+
+# tangent = tm.Vector(
+#     {"x": jnp.arange(2, dtype=jnp.float32), "y": jnp.arange(5, dtype=jnp.float32)}
+# )
+
+# print(tangent @ jacobian)
+
+# # Loop through the first batch dimension
+# for i in range(jacobian.tree["x"].tree["x"].shape[0]):  # Assuming batch size is the first dimension
+#     single_pytree = jax.tree_util.tree_map(lambda x: x[i], pytree)
+#     print(f"PyTree for batch {i}: {single_pytree}")
+
+
+# import jax
+# import jax.numpy as jnp
+
+# # Define pytree1 where each key points to a simple structure (not deeply recursive)
+# pytree1 = {
+#     "a": {"a": jnp.array([1, 2]), "b": jnp.array([3, 4])},
+#     "b": {"a": jnp.array([5, 6]), "b": jnp.array([7, 8])},
+# }
+
+# # Define pytree2, which has the same structure but values can be processed differently
+# pytree2 = {
+#     "a": {
+#         "x": jnp.array([10, 20]),
+#         "y": jnp.array([30, 40]),
+#         "c": jnp.array([50, 600]),
+#     },
+#     "b": {
+#         "x": jnp.array([50, 60]),
+#         "y": jnp.array([70, 80]),
+#         "c": jnp.array([90, 100]),
+#     },
+# }
+
+
+# # Define a function to combine values
+# def combine_fn(x, y):
+#     print(x)
+#     print(y)
+#     print()
+#     return x
+
+
+# # Use jax.tree_map to map the function across both pythrees
+# result = jax.tree_map(combine_fn, pytree1, pytree2)
+
+# print("Result:")
+# print(result)
+
+# from typing import Callable
+# import jax
+# import jax.numpy as jnp
+# import equinox as eqx
+
+
+# # Define a custom Equinox module to mirror the pytree structure
+# class MyModule(eqx.Module):
+#     a: "MyModule | jnp.ndarray"  # Nested structure with flexibility for arrays or further modules
+#     fn: Callable[[str], str] = eqx.field(default=lambda x: x, static=True)
+
+
+# # Initialize the Equinox module with the same structure as the pytree
+# module = MyModule(a=MyModule(a=jnp.array([1.0, 2.0])))
+
+
+# # Define a function that takes the Equinox module and returns another module of the same structure
+# def my_function(mod: MyModule) -> MyModule:
+#     x = mod.a.a
+#     # Return a module with the same structure and transformed values
+#     return MyModule(a=MyModule(a=x**2))
+
+
+# # Compute the Jacobian of the function with respect to the module
+# jacobian_fn = jax.jacobian(my_function)
+
+# # Apply the Jacobian to the module
+# jacobian_result = jacobian_fn(module)
+
+# # Print the Jacobian result
+# print("Jacobian result:", jacobian_result)
+
+# # Verify the structure matches the module
+# structure_matches = eqx.tree_equal(jacobian_result, module)
+# print("Structure matches module:", structure_matches)
+
+
+# class Head[T]:
+#     value: int
+
+
+# class Node[T]:
+#     value: T
+
+
+# type llist[T] = Head[T] | Node[llist[T]]
+
 import jax
 import jax.numpy as jnp
+from jax import lax
 
-# Example pytrees
-pytree1 = {"a": jnp.array([1, 2, 3]), "b": jnp.array([4, 5, 6])}
-
-
-pytree2 = {
-    "a": {"x": jnp.array([40, 50, 60]), "y": jnp.array([70, 80, 90])},
-    "b": {"x": jnp.array([40, 50, 60]), "y": jnp.array([70, 80, 90])},
+# Define a pytree with the same leading dimension but different rest dimensions
+pytree = {
+    "a": jnp.ones((5, 3)),  # Shape (5, 3)
+    "b": None,  # Shape (5, 2) -- Different rest dimension
 }
 
 
-# Function to apply element-wise to each leaf
-def add_arrays(arr1, arr2):
-    print(arr1)
-    print(arr2)
-    return arr1 + arr2
+# Define scan function
+def scan_fn(carry, x):
+    carry = carry + jnp.sum(x["b"])
+    return carry, carry
 
 
-# Using jax.tree_map to apply the function over the pytrees
-result = jax.tree_map(add_arrays, pytree1, jnp.array([1, 2, 3]))
+# Run scan
+init = jnp.array(0.0)
+_, out = lax.scan(scan_fn, init, pytree)
 
-print(result)
+print(out)
