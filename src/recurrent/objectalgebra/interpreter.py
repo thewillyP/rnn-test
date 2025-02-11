@@ -19,6 +19,22 @@ from recurrent.util import prng_split
 type GOD[A, B, C] = RnnGodState[A, B, C]
 
 
+class BaseLogger[A, B, C](PutLog[GOD[A, B, C], Logs], GetLog[GOD[A, B, C], Logs]):
+    def putLog[D](self, s: Logs) -> Fold[Self, D, GOD[A, B, C], Unit]:
+        return modifies(lambda e: eqx.tree_at(lambda t: t.logs, e, eqx.combine(s, e.logs)))
+
+    def getLog[D](self) -> Fold[Self, D, GOD[A, B, C], Logs]:
+        return gets(lambda e: e.logs)
+
+
+class BilevelLogger[A, B, C](PutLog[GOD[A, B, C], Logs], GetLog[GOD[A, B, C], Logs]):
+    def putLog[D](self, s: Logs) -> Fold[Self, D, GOD[A, B, C], Unit]:
+        return modifies(lambda e: eqx.tree_at(lambda t: t.oho_logs, e, eqx.combine(s, e.oho_logs)))
+
+    def getLog[D](self) -> Fold[Self, D, GOD[A, B, C], Logs]:
+        return gets(lambda e: e.oho_logs)
+
+
 class BaseRnnGodInterpreter[A, B, C](
     GetActivation[GOD[A, B, C], ACTIVATION],
     PutActivation[GOD[A, B, C], ACTIVATION],
@@ -31,7 +47,6 @@ class BaseRnnGodInterpreter[A, B, C](
     GetRnnConfig[GOD[A, B, C]],
     GetUORO[GOD[A, B, C]],
     PutUORO[GOD[A, B, C]],
-    PutLog[GOD[A, B, C], Logs],
 ):
     type God = GOD[A, B, C]
 
@@ -68,9 +83,6 @@ class BaseRnnGodInterpreter[A, B, C](
     def putUORO[D](self, s: UORO_Param) -> Fold[Self, D, God, Unit]:
         return modifies(lambda e: eqx.tree_at(lambda t: t.uoro, e, s))
 
-    def putLog[D](self, s: Logs) -> Fold[Self, D, God, Unit]:
-        return modifies(lambda e: eqx.tree_at(lambda t: t.logs, e, eqx.combine(s, e.logs)))
-
 
 class DataInterpreter(
     HasInput[InputOutput, jax.Array],
@@ -97,6 +109,12 @@ class RNGInterpreter[A, B, C](HasPRNG[GOD[A, B, C], PRNG]):
 class BaseRnnInterpreter[A, B, C](BaseRnnGodInterpreter[A, B, C], DataInterpreter, RNGInterpreter[A, B, C]): ...
 
 
+class BaseWithLog[A, B, C](BaseRnnInterpreter[A, B, C], BaseLogger[A, B, C]): ...
+
+
+class BaseWithBilevelLog[A, B, C](BaseRnnInterpreter[A, B, C], BilevelLogger[A, B, C]): ...
+
+
 class _Dialect[E, A, B](
     GetParameter[E, A],
     PutParameter[E, A],
@@ -117,6 +135,7 @@ class BilevelRnnGodInterpreter[A, B, C](
     GetInfluenceTensor[GOD[A, B, C], Gradient[B]],
     PutInfluenceTensor[GOD[A, B, C], Gradient[B]],
     PutLog[GOD[A, B, C], Logs],
+    GetLog[GOD[A, B, C], Logs],
 ):
     type G = GOD[A, B, C]
 
@@ -151,8 +170,11 @@ class BilevelRnnGodInterpreter[A, B, C](
     def getRnnConfig[D](self) -> Fold[Self, D, G, RnnConfig]:
         return gets(lambda e: e.rnnConfig_bilevel)
 
-    def putLog[D](self, s: Logs) -> Fold[Self, D, G, Unit]:
-        return modifies(lambda e: eqx.tree_at(lambda t: t.oho_logs, e, eqx.combine(s, e.oho_logs)))
+    def putLog[D](self, s: Logs) -> Fold[Self, D, GOD[A, B, C], Unit]:
+        return pure(Unit(), PX3[Self, D, GOD[A, B, C]]())
+
+    def getLog[D](self) -> Fold[Self, D, GOD[A, B, C], Logs]:
+        return gets(lambda e: e.oho_logs)
 
 
 # will end up duping labels w/o using since data oriented for supervised stream

@@ -1,635 +1,611 @@
-from copy import deepcopy
-from itertools import cycle
-from typing import Any
-from data import *
-from learning import SGD, efficientBPTT_Vanilla_Full
-from objectalgebra import OhoStateInterpreter
-from rnn import *
-import torch
-import wandb
+# %%
 import argparse
-from abc import ABC, abstractmethod
-import os
-from toolz import take
-from records import ArtifactConfig, Logger, ZeroInit, RandomInit, RnnConfig, Config, Random, Sparse, Wave
+import time
 
+import jax.experimental
+import optax
+from recurrent.datarecords import InputOutput, OhoInputOutput
+from recurrent.monad import foldM
+from recurrent.mylearning import *
+from recurrent.myrecords import RnnGodState
+from recurrent.mytypes import *
 
-        
-class WandbLogger(Logger):
-    
-    def log2External(self, artifactConfig: ArtifactConfig, saveFile: Callable[[str], None], name: str):
-        path = artifactConfig.path(name)
-        saveFile(path)
-        artifact = artifactConfig.artifact(wandb.run.id)
-        artifact.add_file(path)
-        wandb.log_artifact(artifact)
-    
-    def log(self, dict: dict[str, Any]):
-        wandb.log(dict)
-    
-    def init(self, projectName: str, config: argparse.Namespace):
-        wandb.login(key=os.getenv("WANDB_API_KEY"))
-        wandb.init(project=projectName, config=config)
-    
-    def watchPytorch(self, model: nn.Module):
-        wandb.watch(model, log_freq=1000, log="all")
+from recurrent.objectalgebra.interpreter import (
+    BaseRnnInterpreter,
+    BaseWithBilevelLog,
+    BaseWithLog,
+    OhoInterpreter,
+)
 
-class PrettyPrintLogger(Logger):
-        
-    def log2External(self, artifactConfig: ArtifactConfig, saveFile: Callable[[str], None], name: str):
-        print(f"Saving {name} to {artifactConfig.path(name)}")
-        saveFile(artifactConfig.path(name))
-        print(f"Saved {name} to {artifactConfig.path(name)}")
+from matplotlib import pyplot as plt
+from recurrent.parameters import (
+    RnnConfig,
+    RnnParameter,
+    SgdParameter,
+    UORO_Param,
+)
+from memory_profiler import profile
+from torch.utils.data import TensorDataset, DataLoader
+from toolz.itertoolz import partition_all
+from recurrent.util import *
+import jax.numpy as jnp
+import equinox as eqx
+import jax
 
-    def log(self, dict: dict[str, Any]):
-        for key, value in dict.items():
-            print(f"{key}: {value}")
-    
-    def init(self, projectName: str, config: argparse.Namespace):
-        print(f"Initialized project {projectName} with config {config}")
-    
-    def watchPytorch(self, model: nn.Module):
-        print("Model is being watched")
-
+# jax.config.update("jax_enable_x64", True)
 
 """
-xs: Iterator[Iterator[DATA@efficientBPTT_Vanilla]],
-    env: ENV@efficientBPTT_Vanilla
-) -> ENV@efficientBPTT_Vanilla
-
-Iteratr1 = single dimension, time series split up size
-Iterator2 = actual time series
-
-[1, T, D]
-just wrap dataset in a []
-to add batch
-[B, 1, T, D]
-I just vmap
+Todo
+1) implement vanilla rnn training loop 
+2) implement oho to show how easy it is
+3) implement feedforward to show how easy it is
 """
 
-def update_optimizer_hyperparams(model, optimizer):
-    optimizer.param_groups[0]['lr'] = model.eta
-    optimizer.param_groups[0]['weight_decay'] = model.lambda_l2
-    return optimizer
-
-def unflatten_array(X, N, param_shapes):
-    """Takes flattened array and returns in natural shape for network
-    parameters."""
-    return [torch.reshape(X[N[i]:N[i + 1]], s) \
-        for i, s in enumerate(param_shapes)]
-
-def flatten_array_w_0bias(X):
-    """Takes list of arrays in natural shape of the network parameters
-    and returns as a flattened 1D numpy array."""
-    vec = []
-    for x in X:
-        if len(x.shape) == 0 :
-            vec.append(torch.zeros(x.shape).flatten())
-        else:
-            vec.append(x.flatten())
-    return torch.cat(vec)
-
-
-def compute_HessianVectorProd(config: Config, model, dFdS, data, target, name:str):
-
-    eps_machine = torch.finfo(data.dtype).eps
-
-    ## Compute Hessian Vector product h
-    vmax_x, vmax_d = 0, 0
-
-    # model_plus = deepcopy(model)
-    model_plus = RNN(config.rnnConfig, config.learning_rate, config.l2_regularization)
-    model_plus.load_state_dict(model.state_dict())
-    for param, direction in zip(model_plus.parameters(), dFdS):
-        vmax_x = max(vmax_x, torch.max(torch.abs(param)).item())
-        vmax_d = max(vmax_d, torch.max(abs(direction)).item())
-        break
-    # wandb.log({f"{name}_vmax_x": vmax_x, f"{name}_vmax_d": vmax_d}, commit=False)
-
-    if vmax_d ==0: vmax_d = 1
-    Hess_est_r = (eps_machine ** 0.5) * (1+vmax_x) / vmax_d
-    Hess_est_r = max([ Hess_est_r, 0.001])
-    # wandb.log({f"{name}_Hess_est_r": Hess_est_r}, commit=False)
-    for ((parameter_name, param), direction) in zip(model_plus.named_parameters(), dFdS):
-        perturbation =  Hess_est_r * direction
-        # wandb.log({f"{name}_perturbation_{parameter_name}": torch.linalg.norm(perturbation, 2).item()}, commit=False)
-        # wandb.log({f"{name}_peturbation_max_{parameter_name}": torch.max(perturbation).item()}, commit=False)
-        # wandb.log({f"{name}_peturbation_min_{parameter_name}": torch.min(perturbation).item()}, commit=False)
-        param.data.add_(perturbation)
-
-    model_plus.train()
-    loss = trainStepIO(config, data, target, model_plus)
-    # wandb.log({f"{name}_model_plus_loss": loss}, commit=False)
-
-    # model_minus = deepcopy(model)
-    model_minus = RNN(config.rnnConfig, config.learning_rate, config.l2_regularization)
-    model_minus.load_state_dict(model.state_dict())
-    for param, direction in zip(model_minus.parameters(), dFdS):
-        perturbation =  Hess_est_r * direction
-        param.data.add_(-perturbation)
-    
-    model_minus.train()
-    loss = trainStepIO(config, data, target, model_minus)
-    # wandb.log({f"{name}_model_minus_loss": loss}, commit=False)
-
-    g_plus  = get_grads(model_plus)
-    g_minus = get_grads(model_minus)
-    # wandb.log({f"{name}_g_plus_norm": torch.linalg.norm(g_plus, 2).item()}, commit=False)
-    # wandb.log({f"{name}_g_minus_norm": torch.linalg.norm(g_minus, 2).item()}, commit=False)
-
-    Hv = (g_plus - g_minus) / (2 * Hess_est_r)
-    
-    return Hv 
-
-
-def get_grad_valid(config: Config, model, data, target):
-
-    # val_model = deepcopy(model)
-    val_model = RNN(config.rnnConfig, config.learning_rate, config.l2_regularization)
-    val_model.load_state_dict(model.state_dict())
-    val_model.train()
-    val_loss = trainStepIO(config, data, target, val_model)
-    torch.nn.utils.clip_grad_norm_(val_model.parameters(), 1)
-    grad_val = get_grads(val_model)
-
-    wandb.log({"validation_loss": val_loss}, commit=False)
-    
-    return grad_val
-
-
-# def make_functional(mod, disable_autograd_tracking=False):
-#     params_dict = dict(mod.named_parameters())
-#     params_names = params_dict.keys()
-#     params_values = tuple(params_dict.values())
-    
-#     stateless_mod = copy.deepcopy(mod)
-#     stateless_mod.to('meta')
-
-#     def fmodel(new_params_values, *args, **kwargs):
-#         new_params_dict = {name: value for name, value in zip(params_names, new_params_values)}
-#         return torch.func.functional_call(stateless_mod, new_params_dict, args, kwargs)
-  
-#     if disable_autograd_tracking:
-#         params_values = torch.utils._pytree.tree_map(torch.Tensor.detach, params_values)
-#     return fmodel, params_values
-
-
-def vector_to_named_parameters(vector, model):
-    # Get named parameters and their sizes
-    named_params = list(model.named_parameters())
-    param_sizes = [param.numel() for _, param in named_params]
-
-    # Generate slices for the vector
-    slices = torch.split(vector, param_sizes)
-
-    # Use dictionary comprehension with zip
-    named_params_dict = {name: slice.view(param.size()) for (name, param), slice in zip(named_params, slices)}
-    return named_params_dict
-
-def meta_update(config: Config, data_vl, target_vl, data_tr, target_tr, model, optimizer):
-
-    #Compute Hessian Vector Product
-    
-
-    def hvp(f, primals, tangents):
-        return torch.func.jvp(torch.func.grad(f), primals, tangents)[1]
-    
-    def compute_loss(params, x, y):
-        params = vector_to_named_parameters(params, model)
-        xs = torch.chunk(x, config.time_chunk_size, dim=1)
-        ys = torch.chunk(y, config.time_chunk_size, dim=1)
-        s = config.rnnInitialActivation(x.size(0))
-        loss = 0
-        for i, (xi, yi )in enumerate(zip(xs, ys)):
-            prediction, activations = torch.func.functional_call(model, params, (xi, s))
-            if i == 0:
-                ts = torch.arange(0, xi.size(1))
-                mask = ts >= max(config.t1, config.t2)
-                mask = mask.unsqueeze(-1)
-                m = torch.vmap(lambda x: x * mask)
-                yi = m(yi)
-                prediction = m(prediction)
-            myloss = config.criterion(prediction, yi)
-            loss += myloss / config.time_chunk_size
-            s = activations[:, -1, :].clone().detach().unsqueeze(0)
-        return loss.squeeze()
-    lossFn = lambda params: compute_loss(params, data_tr, target_tr)
-
-    parameters = torch.nn.utils.parameters_to_vector(model.parameters())
-
-    Hv_lr = hvp(lossFn, (parameters, ), (model.dFdlr, ))
-
-    param_shapes = model.param_shapes
-    dFdlr_test = unflatten_array(model.dFdlr, model.param_cumsum, param_shapes)
-    # Hv_lr_test  = compute_HessianVectorProd(config, model, dFdlr_test, data_tr, target_tr, "lr")
-
-    # print(Hv_lr - Hv_lr_test)
-    # assert torch.allclose(Hv_lr, Hv_lr_test)
-
-    # dFdl2_test = unflatten_array(model.dFdl2, model.param_cumsum, param_shapes)
-    # Hv_l2_test  = compute_HessianVectorProd(config, model, dFdl2_test, data_tr, target_tr, "l2")
-    Hv_l2 = hvp(lossFn, (parameters, ), (model.dFdl2, ))
-
-    # assert torch.allclose(Hv_l2, Hv_l2_test)
-
-    grad_valid = get_grad_valid(config, model, data_vl, target_vl)
-
-    grad = get_grads(model)
-    param = torch.nn.utils.parameters_to_vector(model.parameters()).data
-
-    # print("yay")    
-    # quit()
-
-    #Update hyper-parameters   
-    model.update_dFdlr(Hv_lr, param, grad)
-    model.update_dFdlambda_l2(Hv_l2, param)
-
-    if config.is_oho:
-        model.update_eta(config.meta_learning_rate, grad_valid)
-        # model.update_lambda(config.meta_learning_rate, grad_valid)
-        optimizer = update_optimizer_hyperparams(model, optimizer)
-
-    return model, optimizer, grad_valid
-
-
-def trainStepIO(config: Config, x, y, model):
-    xs = torch.chunk(x, config.time_chunk_size, dim=1)
-    ys = torch.chunk(y, config.time_chunk_size, dim=1)
-    s = config.rnnInitialActivation(x.size(0))
-    real_loss = 0
-    for i, (xi, yi )in enumerate(zip(xs, ys)):
-        outputs, _ = model(xi, s)
-        if i == 0:
-            ts = torch.arange(0, xi.size(1))
-            mask = ts >= max(config.t1, config.t2)
-            mask = mask.unsqueeze(-1)
-            m = torch.vmap(lambda x: x * mask)
-            yi = m(yi)
-            outputs = m(outputs)
-        myloss = config.criterion(outputs, yi)
-        loss = myloss / config.time_chunk_size
-        real_loss += myloss.item()
-        loss.backward()
-        s = model.activations[:, -1, :].clone().detach().unsqueeze(0)
-    return real_loss
-
-global_step = 0
-def train(config: Config, logger: Logger, model: RNN, train_loader: Iterator, validation_loader: Iterator, test_loader: Iterator, test_ds: TensorDataset):
-    global  global_step
-    optimizer = config.optimizerFn(model.parameters(), lr=config.learning_rate, weight_decay=config.l2_regularization)
-    optimizer = update_optimizer_hyperparams(model, optimizer)
-
-    dataGenerator_ = getRandomTask(Wave())
-    ts_ = torch.arange(0, config.seq)
-    test_ds_ = getDatasetIO(dataGenerator_, config.t1, config.t2, ts_, config.numTe)
-    test_loader_ = getDataLoaderIO(test_ds_, config.batch_size_te)
-
-    for epoch in range(config.num_epochs):
-        the_test_loss = test_loss(config, test_loader, model)
-        the_wave_test_loss = wave_test_loss(config, model, test_loader_)
-        counter = 0
-        for i, (x, y) in enumerate(train_loader):   
-            optimizer.zero_grad()
-            real_loss = 0
-            counter += x.size(0)
-            real_loss = trainStepIO(config, x, y, model)
-            real_loss *= x.size(0)
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
-            optimizer.step()
-            grad_valid = torch.zeros(1)
-
-            grad_valid = torch.zeros(1)
-            if config.numVl > 0:
-                data_vl, target_vl = next(validation_loader)
-                try:
-                    model, optimizer, grad_valid = meta_update(config, data_vl, target_vl, x, y, model, optimizer)
-                except:
-                    pass
-
-            if (epoch * len(train_loader) + i) % config.logFrequency == 0:
-                log_data = {"loss": real_loss / counter
-                        , "gradient_norm": gradient_norm(model)
-                        , "learning_rate": optimizer.param_groups[0]['lr']
-                        , "l2_regularization": optimizer.param_groups[0]['weight_decay']
-                        , "validation_gradient_norm": torch.linalg.norm(grad_valid, 2).item()
-                        , "dFdlr_tensor_norm": torch.linalg.norm(model.dFdlr, 2).item()
-                        , "dFdl2_tensor_norm": torch.linalg.norm(model.dFdl2, 2).item()
-                        , "parameter_norm": torch.linalg.norm(torch.nn.utils.parameters_to_vector(model.parameters()), 2).item()
-                        , "iteration": epoch * len(train_loader) + i
-                        , "epoch": epoch}
-                
-                # l2 = lambda x: torch.linalg.norm(x, 2)
-                # vmapped = torch.vmap(torch.vmap(l2))(model.activations)
-                # activations = {"activation_norms": vmapped.mean().item(), "activation_max": vmapped.max().item(), "activation_min": vmapped.min().item()}
-                # log_data.update(activations)
-
-                logger.log(log_data)
-        
-        logger.log({"test_loss": the_test_loss,
-                    "wave_test_loss": the_wave_test_loss,
-                    "epoch": epoch})
-        if (epoch+1) % config.checkpointFrequency == 0:
-            log_modelIO(config, logger, model, f"epoch_{epoch}")
-            logger.log({"performance": visualize(config, model, test_ds),
-                        "wave_performance": visualize(config, model, test_ds_),
-                        "epoch": epoch})
-        global_step += 1
-
-    return model
-
-
-def visualize(config: Config, model: RNN, dataset: TensorDataset):
-    ts = torch.arange(0, config.seq)
-    samples = min(config.performanceSamples, len(dataset))
-    test_loader = DataLoader(dataset, batch_size=1, shuffle=False)
-    
-    n_cols = 3
-    n_rows = (samples + n_cols - 1) // n_cols
-    
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 5 * n_rows))
-    axes = axes.flatten() 
-    
-    for i, (xs, ys) in enumerate(take(samples, test_loader)):
-        predicts, _ = model(xs, config.rnnInitialActivation(xs.size(0)))
-        ys = ys[0]
-        predicts = predicts[0]
-        
-        ax = axes[i]
-        ax.plot(ts.detach().numpy(), ys.flatten().detach().numpy(), label='True Values')
-        ax.plot(ts.detach().numpy(), predicts.flatten().detach().numpy(), label='Predictions')
-        ax.set_xlabel('Time Steps')
-        ax.set_ylabel('Values')
-        ax.set_title(f"Predictions vs True Values for {config.task} (Sample {i+1})")
-        ax.legend()
-    # Hide any empty subplots if there are fewer samples than subplots
-    for j in range(i+1, len(axes)):
-        axes[j].axis('off')
-
-    fig.tight_layout()  # Adjust layout for better spacing
-    img = wandb.Image(fig)
-    plt.close(fig)
-    return img
-
-def test_loss(config: Config, loader: DataLoader, model: RNN):
-    total_loss = 0
-    total_samples = 0
-    model.eval()
-    with torch.no_grad():
-        for inputs, targets in loader:
-            predictions, _ = model(inputs, config.rnnInitialActivation(inputs.size(0)))
-            batch_loss = config.criterion(predictions, targets) * inputs.size(0)
-            total_loss += batch_loss.item()
-            total_samples += inputs.size(0)
-    
-    model.train()
-    return total_loss / total_samples
-
-def wave_test_loss(config: Config, model: RNN, test_loader: DataLoader):
-    total_loss = 0
-    total_samples = 0
-    with torch.no_grad():
-        for inputs, targets in test_loader:
-            predictions, _ = model(inputs, config.rnnInitialActivation(inputs.size(0)))
-            batch_loss = config.criterion(predictions, targets) * inputs.size(0)
-            total_loss += batch_loss.item()
-            total_samples += inputs.size(0)
-    
-    return total_loss / total_samples
-
-
-def get_grads(model: torch.nn.Module):
-    grads = [
-        param.grad.detach().flatten()
-        for param in model.parameters()
-        if param.grad is not None
-    ]
-    return torch.cat(grads)
-
-def gradient_norm(model: RNN):
-    grads = get_grads(model)
-    return torch.linalg.norm(grads, 2).item()
-
-
-def parseIO():
-    parser = argparse.ArgumentParser(description="Parse configuration parameters for RnnConfig and Config.")
-
-    # Arguments for RnnConfig
-    parser.add_argument('--n_in', type=int, required=True, help='Number of input features for the RNN')
-    parser.add_argument('--n_h', type=int, required=True, help='Number of hidden units for the RNN')
-    parser.add_argument('--n_out', type=int, required=True, help='Number of output features for the RNN')
-    parser.add_argument('--num_layers', type=int, required=True, help='Number of layers in the RNN')
-
-    # Arguments for Config
-    parser.add_argument('--task', type=str, choices=['Random', 'Sparse', 'Wave'], required=True,
-                        help="Task type (Random, Sparse, or Wave)")
-    parser.add_argument('--randomType', type=str, choices=['Uniform', 'Normal'], required=False,
-                        help="Random type (Uniform or Normal)")
-    parser.add_argument('--init_scheme', type=str, choices=['ZeroInit', 'RandomInit', 'StaticRandomInit'], required=True,
-                        help="Rnn init scheme type (ZeroInit, or RandomInit)")
-    parser.add_argument('--outT', type=int, help="Output time step (required if task is Sparse)")
-    parser.add_argument('--seq', type=int, required=True, help='Sequence length')
-    parser.add_argument('--numTr', type=int, required=True, help='Number of training samples')
-    parser.add_argument('--numVl', type=int, required=True, help='Number of validation samples')
-    parser.add_argument('--numTe', type=int, required=True, help='Number of testing samples')
-    parser.add_argument('--batch_size_tr', type=int, required=True, help='Training batch size')
-    parser.add_argument('--batch_size_vl', type=int, required=True, help='Validation batch size')
-    parser.add_argument('--batch_size_te', type=int, required=True, help='Testing batch size')
-    parser.add_argument('--t1', type=int, required=True, help='Parameter t1')
-    parser.add_argument('--t2', type=int, required=True, help='Parameter t2')
-    parser.add_argument('--num_epochs', type=int, required=True, help='Number of training epochs')
-    parser.add_argument('--learning_rate', type=float, required=True, help='Learning rate')
-    parser.add_argument('--optimizerFn', type=str, choices=['Adam', 'SGD'], required=True,
-                        help="Optimizer function (Adam or SGD)")
-    parser.add_argument('--lossFn', type=str, choices=['mse'], required=True,
-                        help="Loss function (currently only mse is supported)")
-    parser.add_argument('--mode', type=str, choices=['test', 'experiment'], required=True,
-                        help="Execution mode (test or experiment)")
-    parser.add_argument('--checkpoint_freq', type=int, required=True,
-                        help="Frequency of checkpoints during training (in epochs)")
-    parser.add_argument('--seed', type=int, required=True,
-                        help="Pytorch seed")
-    parser.add_argument('--projectName', type=str, required=True,
-                        help="Wandb project name")
-    parser.add_argument('--logger', type=str, choices=['wandb', 'prettyprint'], required=True,
-                        help="Choice of logger to use")
-    parser.add_argument('--performance_samples', type=int, required=True,
-                        help="Number of samples to visualize performance")
-    parser.add_argument('--activation_fn', type=str, choices=['relu', 'tanh'], required=True,
-                        help="Activation function (relu or tanh)")
-    parser.add_argument('--log_freq', type=int, required=True,
-                        help="Frequency of logging during training (in iterations)")
-    parser.add_argument('--l2_regularization', type=float, required=True, help='Learning rate')
-    parser.add_argument('--meta_learning_rate', type=float, required=True, help='Meta Learning rate')
-    parser.add_argument('--is_oho', type=int, required=True, help='Is OHO')
-    parser.add_argument('--time_chunk_size', type=int, required=True, help='Time chunk size')
-
-    args = parser.parse_args()
-
-    # Validate Sparse task requires outT
-    if args.task == 'Sparse' and args.outT is None:
-        parser.error("--outT is required when --task is Sparse")
-    
-    if args.task == 'Random' and args.randomType is None:
-        parser.error("--randomType is required when --task is Random")
-    
-    match args.is_oho:
-        case 0:
-            is_oho = False
-        case 1:
-            is_oho = True
-        case _:
-            raise ValueError("Invalid is_oho value")
-
-    match args.lossFn:
-        case 'mse':
-            loss_function = lambda x, y: torch.functional.F.mse_loss(x, y, reduction='none').sum(dim=1).mean(dim=0)
-        case _:
-            raise ValueError("Currently only mse is supported as a loss function")
-
-    # Determine optimizer function
-    match args.optimizerFn:
-        case 'Adam':
-            optimizer_fn = torch.optim.Adam
-        case 'SGD':
-            optimizer_fn = torch.optim.SGD
-        case _:
-            raise ValueError("Currently only Adam and SGD are supported as optimizer functions")
-
-    # Placeholder for task initialization
-    match args.task:
-        case 'Sparse':
-            task = Sparse(args.outT)
-        case 'Random':
-            match args.randomType:
-                case 'Uniform':
-                    randType = Uniform()
-                case 'Normal':
-                    randType = Normal()
-                case _:
-                    raise ValueError("Invalid random type")
-            task = Random(randType)
-        case 'Wave':
-            task = Wave()
-        case _:
-            raise ValueError("Invalid task type")
-    
-    match args.logger:
-        case 'wandb':
-            logger = WandbLogger()
-        case 'prettyprint':
-            logger = PrettyPrintLogger()
-        case _:
-            raise ValueError("Invalid logger type")
-    
-    match args.init_scheme:
-        case 'ZeroInit':
-            scheme = ZeroInit()
-        case 'RandomInit':
-            scheme = RandomInit()
-        case 'StaticRandomInit':
-            scheme = StaticRandomInit()
-        case _:
-            raise ValueError("Invalid init type")
-        
-    match args.activation_fn:
-        case 'relu':
-            activation_fn = torch.relu
-        case 'tanh':
-            activation_fn = torch.tanh
-        case _:
-            raise ValueError("Invalid activation function")
-    
-    rnnConfig = RnnConfig(
-        n_in=args.n_in,
-        n_h=args.n_h,
-        n_out=args.n_out,
-        num_layers=args.num_layers,
-        scheme=scheme,
-        activation=activation_fn
+
+def generate_add_task_dataset(N, t_1, t_2, tau_task, rng_key):
+    """y(t) = 0.5 + 0.5 * x(t - t_1) - 0.25 * x(t - t_2)"""
+    N = N // tau_task
+
+    x = jax.random.bernoulli(rng_key, 0.5, (N,)).astype(jnp.float32)
+
+    y = 0.5 + 0.5 * jnp.roll(x, t_1) - 0.25 * jnp.roll(x, t_2)
+
+    X = jnp.asarray([x, 1 - x]).T
+    Y = jnp.asarray([y, 1 - y]).T
+
+    # Temporally stretch according to the desire timescale of change.
+    X = jnp.tile(X, tau_task).reshape((tau_task * N, 2))
+    Y = jnp.tile(Y, tau_task).reshape((tau_task * N, 2))
+
+    return X, Y
+
+
+def constructRnnEnv(rng_key: Array, initLearningRate: float):
+    """Constructs an RNN environment with predefined configurations."""
+
+    # Define network dimensions
+    n_h, n_in, n_out = 32, 2, 2
+    alpha = 1.0
+
+    # Define learning rates as arrays
+    # 0.02712261
+    learning_rate = jnp.asarray([initLearningRate])
+    meta_learning_rate = jnp.asarray([0.00001])
+
+    rng_key, subkey1, subkey2, subkey3 = jax.random.split(rng_key, 4)
+
+    W_in = jax.random.normal(subkey1, (n_h, n_in)) * jnp.sqrt(1 / n_in)
+    W_rec, _ = jnp.linalg.qr(jax.random.normal(subkey2, (n_h, n_h)))  # QR decomposition
+    W_out = jax.random.normal(subkey3, (n_out, n_h)) * jnp.sqrt(1 / n_h)
+    b_rec = jnp.zeros((n_h, 1))
+    b_out = jnp.zeros((n_out, 1))
+
+    w_rec = jnp.hstack([W_rec, W_in, b_rec])
+    w_out = jnp.hstack([W_out, b_out])
+
+    # Initialize parameters
+    parameter = RnnParameter(w_rec=w_rec, w_out=w_out)
+    rnn_config = RnnConfig(n_h=n_h, n_in=n_in, n_out=n_out, alpha=alpha, activationFn=jnp.tanh)
+
+    sgd = SgdParameter(learning_rate=learning_rate)
+    sgd_mlr = SgdParameter(learning_rate=meta_learning_rate)
+
+    # Generate random activation state
+    rng_key, activation_rng = jax.random.split(rng_key)
+    activation = ACTIVATION(jax.random.normal(activation_rng, (n_h,)))
+
+    # Split keys for UORO
+    rng_key, prng_A, prng_B, prng_C = jax.random.split(rng_key, num=4)
+
+    # Construct environment state
+    init_env = RnnGodState[RnnParameter, SgdParameter, SgdParameter](
+        activation=activation,
+        influenceTensor=Jacobian[RnnParameter](zeroedInfluenceTensor(n_h, parameter)),
+        ohoInfluenceTensor=Jacobian[SgdParameter](
+            zeroedInfluenceTensor(jnp.size(compose2(endowVector, toVector)(parameter)), sgd)
+        ),
+        parameter=parameter,
+        hyperparameter=sgd,
+        metaHyperparameter=sgd_mlr,
+        rnnConfig=rnn_config,
+        rnnConfig_bilevel=rnn_config,
+        uoro=UORO_Param(
+            A=jax.random.normal(prng_A, (n_h,)),
+            B=uoroBInit(prng_B, parameter),
+        ),
+        prng=prng_C,
+        logs=Logs(loss=LOSS(0.0)),
+        oho_logs=Logs(loss=LOSS(0.0)),
     )
 
-    config = Config(
-        task=task,
-        seq=args.seq,
-        numTr=args.numTr,
-        numVl=args.numVl,
-        numTe=args.numTe,
-        batch_size_tr=args.batch_size_tr,
-        batch_size_vl=args.batch_size_vl,
-        batch_size_te=args.batch_size_te,
-        t1=args.t1,
-        t2=args.t2,
-        num_epochs=args.num_epochs,
-        learning_rate=args.learning_rate,
-        rnnConfig=rnnConfig,
-        criterion=loss_function,
-        optimizerFn=optimizer_fn,
-        modelArtifact=ArtifactConfig(artifact=lambda name: wandb.Artifact(f"model_{name}", type="model"), path=lambda x: f"model_{x}.pt"),
-        datasetArtifact=ArtifactConfig(artifact=lambda name: wandb.Artifact(f"dataset_{name}", type="dataset"), path=lambda x: f"dataset_{x}.pt"),
-        checkpointFrequency=args.checkpoint_freq,
-        projectName=args.projectName,
-        seed=args.seed,
-        performanceSamples=args.performance_samples,
-        logFrequency=args.log_freq,
-        l2_regularization=args.l2_regularization,
-        meta_learning_rate=args.meta_learning_rate,
-        is_oho=is_oho,
-        time_chunk_size=args.time_chunk_size,
-        rnnInitialActivation=getRNNInit(rnnConfig.scheme, rnnConfig.num_layers, rnnConfig.n_h)
+    return rng_key, init_env
+
+
+def train(
+    dataloader: Traversable[OhoInputOutput],
+    test_set: Traversable[InputOutput],
+    t_series_length: int,
+    trunc_length: int,
+    N_test: int,
+    N_val: int,
+    initLearningRate: float,
+):
+    type Train_Dl = BaseWithLog[RnnParameter, SgdParameter, SgdParameter]
+    type OHO = OhoInterpreter[RnnParameter, SgdParameter, SgdParameter]
+    type ENV = RnnGodState[RnnParameter, SgdParameter, SgdParameter]
+
+    # interpreters
+    trainDialect = BaseWithLog[RnnParameter, SgdParameter, SgdParameter]()
+    validationDialect = BaseWithBilevelLog[RnnParameter, SgdParameter, SgdParameter]()
+    ohoDialect = OhoInterpreter[RnnParameter, SgdParameter, SgdParameter](trainDialect)
+
+    # setup
+    rng_key = jax.random.key(21)
+    rng_key, prng = jax.random.split(rng_key)
+    rng_key, initEnv = constructRnnEnv(prng, initLearningRate)
+
+    # lambda key, shape: jax.random.uniform(key, shape, minval=-1.0, maxval=1.0)
+    onlineLearner: RnnLibrary[Train_Dl, InputOutput, ENV, PREDICTION, RnnParameter]
+    onlineLearner = RTRL[
+        InputOutput,
+        ENV,
+        ACTIVATION,
+        RnnParameter,
+        jax.Array,
+        PREDICTION,
+    ]().createLearner(
+        doRnnStep(),
+        doRnnReadout(),
+        lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b)),
+        readoutRecurrentError(doRnnReadout(), lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b))),
     )
 
+    onlineLearner_folded = foldrRnnLearner(onlineLearner, initEnv.parameter)
+    rnnLearner_ = endowAveragedGradients(onlineLearner_folded, trunc_length, initEnv.parameter)
+    rnnLearner = normalizeGradientRnnLibrary(rnnLearner_)
 
-    return args, config, logger
+    oho_rtrl = RTRL[
+        OhoInputOutput,
+        ENV,
+        RnnParameter,
+        SgdParameter,
+        jax.Array,
+        Traversable[PREDICTION],
+    ]()
+    # oho_rtrl = IdentityLearner()
+
+    def validation_loss(label: Traversable[jax.Array], prediction: Traversable[PREDICTION]):
+        return LOSS(jnp.mean(optax.safe_softmax_cross_entropy(label.value, prediction.value)))
+
+    oho: RnnLibrary[OHO, OhoInputOutput, ENV, Traversable[PREDICTION], SgdParameter]
+    oho = endowBilevelOptimization(
+        rnnLearner,
+        doSgdStep,
+        trainDialect,
+        validationDialect,
+        oho_rtrl,
+        validation_loss,
+        resetRnnActivation(initEnv.activation),
+    )
+
+    @do()
+    def updateStep():
+        env = yield from get(PX[ENV]())
+        interpreter = yield from askForInterpreter(PX[OHO]())
+        oho_data = yield from ask(PX[OhoInputOutput]())
+        validation_model = resetRnnActivation(initEnv.activation).then(rnnLearner.rnnWithLoss).func
+
+        learning_rate = yield from interpreter.getParameter().fmap(lambda x: x.learning_rate)
+        te, _ = validation_model(trainDialect, test_set, env)
+        vl, _ = validation_model(trainDialect, oho_data.validation, env)  # lag 1 timestep bc show prev param validation
+        tr, _ = rnnLearner.rnnWithLoss.func(trainDialect, oho_data.train, env)
+
+        log = AllLogs(
+            trainLoss=tr / t_series_length,
+            validationLoss=vl / N_val,
+            testLoss=te / N_test,
+            learningRate=learning_rate,
+        )
+        _ = yield from oho.rnnWithGradient.flat_map(doSgdStep_Clipped)
+
+        return pure(log, PX3[OHO, OhoInputOutput, ENV]())
+
+    model = eqx.filter_jit(traverse(updateStep()).func).lower(ohoDialect, dataloader, initEnv).compile()
+
+    start = time.time()
+    logs, trained_env = model(ohoDialect, dataloader, initEnv)
+    tttt = f"Train Time: {time.time() - start}"
+    logs: AllLogs = logs.value
+
+    print(logs.trainLoss[-1])
+    print(logs.testLoss[-1])
+    print(logs.validationLoss[-1])
+    print(logs.learningRate[-1])
+    print(tttt)
+
+    return logs, trained_env
 
 
-
-def log_modelIO(config: Config, logger: Logger, model: RNN, name: str):
-    logger.log2External(config.modelArtifact, lambda path: torch.save(model.state_dict(), path), name)
-
-def log_datasetIO(config: Config, logger: Logger, dataset: TensorDataset, name: str):
-    logger.log2External(config.datasetArtifact, lambda path: torch.save(dataset, path), name)
-
-
-def main():
-    args, config, logger = parseIO()
-    torch.manual_seed(config.seed)
-
-    logger.init(config.projectName, args)
-    model = RNN(config.rnnConfig, config.learning_rate, config.l2_regularization) # Random IO 
-    # logger.watchPytorch(model)
-    log_modelIO(config, logger, model, "init")
-
-    ts = torch.arange(0, config.seq)
-    dataGenerator = getRandomTask(config.task)
-
-    train_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTr)
-    train_loader = getDataLoaderIO(train_ds, config.batch_size_tr)
-    test_dataset = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTe)
-    test_loader = getDataLoaderIO(test_dataset, config.batch_size_te)
-    valid_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numVl)
-    valid_loader = getDataLoaderIO(valid_ds, config.batch_size_vl)
-
-    log_datasetIO(config, logger, train_ds, "train")
-    log_datasetIO(config, logger, test_dataset, "test")
-    log_datasetIO(config, logger, valid_ds, "valid")
-
-    # dataset_artifact = wandb.use_artifact('wlp9800-new-york-university/mlr-test/dataset_ef1inln6:v0', type='dataset')
-    # dataset_artifact_dir = dataset_artifact.download()
-    # dataset = torch.load(f"{dataset_artifact_dir}/dataset_train.pt")
-
-    # train_dataset, val_dataset = torch.utils.data.random_split(dataset, [config.numTr, config.numVl])
-    # train_loader = getDataLoaderIO(train_dataset, config.batch_size_tr)
-    # valid_loader = getDataLoaderIO(val_dataset, config.batch_size_vl)
-
-    # test_dataset_artifact = wandb.use_artifact('wlp9800-new-york-university/mlr-test/dataset_ef1inln6:v1', type='dataset')
-    # test_dataset_artifact_dir = test_dataset_artifact.download()
-    # test_dataset = torch.load(f"{test_dataset_artifact_dir}/dataset_test.pt")
-    # test_loader = getDataLoaderIO(test_dataset, config.batch_size_te)
+t1 = 15
+t2 = 17
+N = 100_000
+N_val = 2000
+N_test = 5000
+t_series_length = 100  # how much time series goines into ONE param update
+trunc_length = 1  # controls how much avging done in one t_series
+# if trunc_length = 1, then divide by t_series_length. if trunc_length = t_series_length, then no normalization done
+rng_key = jax.random.key(333)  # 54
+rng_key, prng1, prng2 = jax.random.split(rng_key, 3)
+X, Y = generate_add_task_dataset(N, t1, t2, 1, prng1)
+X_val, Y_val = generate_add_task_dataset(N_val, t1, t2, 1, prng2)
+X_test, Y_test = generate_add_task_dataset(N_test, t1, t2, 1, rng_key)
 
 
-    model = train(config, logger, model, train_loader, cycle(valid_loader), test_loader, test_dataset)
+def transform(arr: Array, _t: int):
+    return arr.reshape((_t, -1) + arr.shape[1:])
 
 
+numUpdates = N // t_series_length
+X = transform(X, numUpdates)
+Y = transform(Y, numUpdates)
+# for every param update, go through whole validation
+X_val = jnp.repeat(jnp.expand_dims(X_val, axis=0), numUpdates, axis=0)
+Y_val = jnp.repeat(jnp.expand_dims(Y_val, axis=0), numUpdates, axis=0)
 
-if __name__ == "__main__":
-    main()
+dataloader = Traversable(
+    OhoInputOutput(
+        train=Traversable(InputOutput(x=X, y=Y)),
+        validation=Traversable(InputOutput(x=X_val, y=Y_val)),
+        labels=Traversable(Y_val),
+    )
+)
+
+test_set = Traversable(InputOutput(x=X_test, y=Y_test))
+
+logs, test_loss = train(dataloader, test_set, t_series_length, trunc_length, N_test, N_val, 0.4)
+
+filename = f"src/rtrl_100000_100_t1_15_t2_17_test2_mlr_e5_lr_4e1_norm"
+
+eqx.tree_serialise_leaves(f"{filename}.eqx", logs)
+
+
+plt.figure(figsize=(12, 6))
+plt.plot(logs.trainLoss, label="Train Loss", color="blue")
+plt.plot(logs.validationLoss, label="Validation Loss", color="red")
+plt.plot(logs.testLoss, label="Test Loss", color="green")
+
+ax1 = plt.gca()
+ax2 = ax1.twinx()
+ax2.plot(logs.learningRate, label="Learning Rate", color="purple", linestyle="dashed")
+ax1.set_xlabel("Epochs")
+ax1.set_ylabel("Loss")
+ax2.set_ylabel("Learning Rate")
+ax1.legend(loc="upper left")
+ax2.legend(loc="upper right")
+plt.title("Training Progress")
+plt.savefig(f"{filename}.png", dpi=300)
+plt.close()
+
+# learning_rates = logs.learning_rate
+
+# # Plot the arrays
+# plt.figure(figsize=(10, 6))
+# plt.plot(learning_rates, label="learning_rates", color="blue")
+# plt.legend()
+# plt.xlabel("Update Steps")
+# plt.ylabel("Learning Rate")
+
+# plt.savefig("learning_rates.png", dpi=300)  # You can change the dpi for quality
+# plt.close()
+
+
+# import matplotlib
+
+# matplotlib.use("Agg")
+
+
+# def moving_average(arr, window_size):
+#     """Compute the moving average with a given window size."""
+#     return jnp.convolve(arr, jnp.ones(window_size) / window_size, mode="valid")[::window_size]
+
+
+# window_size = 1000
+# y1 = jnp.load("rtrl_train.npy")
+# y1 = moving_average(y1, window_size)
+# y2 = jnp.load("uoro_train.npy")
+# y2 = moving_average(y2, window_size)
+# y3 = jnp.load("rflo_train.npy")
+# y3 = moving_average(y3, window_size)
+
+# # Plot the arrays
+# plt.figure(figsize=(10, 6))
+# plt.plot(y1, label="RTRL", color="blue")
+# plt.plot(y2, label="UORO", color="green")
+# plt.plot(y3, label="RFLO", color="pink")
+# plt.legend()
+# plt.xlabel("Update Steps")
+# plt.ylabel("Train Loss")
+# plt.ylim(0.45, 0.6)
+# # plt.xticks(range(len(y1)))
+
+# plt.savefig("learning_train.png", dpi=300)  # You can change the dpi for quality
+# plt.close()
+
+
+# class WandbLogger(Logger):
+#     def log2External(self, artifactConfig: ArtifactConfig, saveFile: Callable[[str], None], name: str):
+#         path = artifactConfig.path(name)
+#         saveFile(path)
+#         artifact = artifactConfig.artifact(wandb.run.id)
+#         artifact.add_file(path)
+#         wandb.log_artifact(artifact)
+
+#     def log(self, dict: dict[str, Any]):
+#         wandb.log(dict)
+
+#     def init(self, projectName: str, config: argparse.Namespace):
+#         wandb.login(key=os.getenv("WANDB_API_KEY"))
+#         wandb.init(project=projectName, config=config)
+
+#     def watchPytorch(self, model: nn.Module):
+#         wandb.watch(model, log_freq=1000, log="all")
+
+
+# class PrettyPrintLogger(Logger):
+#     def log2External(self, artifactConfig: ArtifactConfig, saveFile: Callable[[str], None], name: str):
+#         print(f"Saving {name} to {artifactConfig.path(name)}")
+#         saveFile(artifactConfig.path(name))
+#         print(f"Saved {name} to {artifactConfig.path(name)}")
+
+#     def log(self, dict: dict[str, Any]):
+#         for key, value in dict.items():
+#             print(f"{key}: {value}")
+
+#     def init(self, projectName: str, config: argparse.Namespace):
+#         print(f"Initialized project {projectName} with config {config}")
+
+#     def watchPytorch(self, model: nn.Module):
+#         print("Model is being watched")
+
+
+# def parseIO():
+#     parser = argparse.ArgumentParser(description="Parse configuration parameters for RnnConfig and Config.")
+
+#     # Arguments for RnnConfig
+#     parser.add_argument("--n_in", type=int, required=True, help="Number of input features for the RNN")
+#     parser.add_argument("--n_h", type=int, required=True, help="Number of hidden units for the RNN")
+#     parser.add_argument("--n_out", type=int, required=True, help="Number of output features for the RNN")
+#     parser.add_argument("--num_layers", type=int, required=True, help="Number of layers in the RNN")
+
+#     # Arguments for Config
+#     parser.add_argument(
+#         "--task",
+#         type=str,
+#         choices=["Random", "Sparse", "Wave"],
+#         required=True,
+#         help="Task type (Random, Sparse, or Wave)",
+#     )
+#     parser.add_argument(
+#         "--randomType", type=str, choices=["Uniform", "Normal"], required=False, help="Random type (Uniform or Normal)"
+#     )
+#     parser.add_argument(
+#         "--init_scheme",
+#         type=str,
+#         choices=["ZeroInit", "RandomInit", "StaticRandomInit"],
+#         required=True,
+#         help="Rnn init scheme type (ZeroInit, or RandomInit)",
+#     )
+#     parser.add_argument("--outT", type=int, help="Output time step (required if task is Sparse)")
+#     parser.add_argument("--seq", type=int, required=True, help="Sequence length")
+#     parser.add_argument("--numTr", type=int, required=True, help="Number of training samples")
+#     parser.add_argument("--numVl", type=int, required=True, help="Number of validation samples")
+#     parser.add_argument("--numTe", type=int, required=True, help="Number of testing samples")
+#     parser.add_argument("--batch_size_tr", type=int, required=True, help="Training batch size")
+#     parser.add_argument("--batch_size_vl", type=int, required=True, help="Validation batch size")
+#     parser.add_argument("--batch_size_te", type=int, required=True, help="Testing batch size")
+#     parser.add_argument("--t1", type=int, required=True, help="Parameter t1")
+#     parser.add_argument("--t2", type=int, required=True, help="Parameter t2")
+#     parser.add_argument("--num_epochs", type=int, required=True, help="Number of training epochs")
+#     parser.add_argument("--learning_rate", type=float, required=True, help="Learning rate")
+#     parser.add_argument(
+#         "--optimizerFn", type=str, choices=["Adam", "SGD"], required=True, help="Optimizer function (Adam or SGD)"
+#     )
+#     parser.add_argument(
+#         "--lossFn", type=str, choices=["mse"], required=True, help="Loss function (currently only mse is supported)"
+#     )
+#     parser.add_argument(
+#         "--mode", type=str, choices=["test", "experiment"], required=True, help="Execution mode (test or experiment)"
+#     )
+#     parser.add_argument(
+#         "--checkpoint_freq", type=int, required=True, help="Frequency of checkpoints during training (in epochs)"
+#     )
+#     parser.add_argument("--seed", type=int, required=True, help="Pytorch seed")
+#     parser.add_argument("--projectName", type=str, required=True, help="Wandb project name")
+#     parser.add_argument(
+#         "--logger", type=str, choices=["wandb", "prettyprint"], required=True, help="Choice of logger to use"
+#     )
+#     parser.add_argument(
+#         "--performance_samples", type=int, required=True, help="Number of samples to visualize performance"
+#     )
+#     parser.add_argument(
+#         "--activation_fn", type=str, choices=["relu", "tanh"], required=True, help="Activation function (relu or tanh)"
+#     )
+#     parser.add_argument(
+#         "--log_freq", type=int, required=True, help="Frequency of logging during training (in iterations)"
+#     )
+#     parser.add_argument("--l2_regularization", type=float, required=True, help="Learning rate")
+#     parser.add_argument("--meta_learning_rate", type=float, required=True, help="Meta Learning rate")
+#     parser.add_argument("--is_oho", type=int, required=True, help="Is OHO")
+#     parser.add_argument("--time_chunk_size", type=int, required=True, help="Time chunk size")
+
+#     args = parser.parse_args()
+
+#     # Validate Sparse task requires outT
+#     if args.task == "Sparse" and args.outT is None:
+#         parser.error("--outT is required when --task is Sparse")
+
+#     if args.task == "Random" and args.randomType is None:
+#         parser.error("--randomType is required when --task is Random")
+
+#     match args.is_oho:
+#         case 0:
+#             is_oho = False
+#         case 1:
+#             is_oho = True
+#         case _:
+#             raise ValueError("Invalid is_oho value")
+
+#     match args.lossFn:
+#         case "mse":
+#             loss_function = lambda x, y: torch.functional.F.mse_loss(x, y, reduction="none").sum(dim=1).mean(dim=0)
+#         case _:
+#             raise ValueError("Currently only mse is supported as a loss function")
+
+#     # Determine optimizer function
+#     match args.optimizerFn:
+#         case "Adam":
+#             optimizer_fn = torch.optim.Adam
+#         case "SGD":
+#             optimizer_fn = torch.optim.SGD
+#         case _:
+#             raise ValueError("Currently only Adam and SGD are supported as optimizer functions")
+
+#     # Placeholder for task initialization
+#     match args.task:
+#         case "Sparse":
+#             task = Sparse(args.outT)
+#         case "Random":
+#             match args.randomType:
+#                 case "Uniform":
+#                     randType = Uniform()
+#                 case "Normal":
+#                     randType = Normal()
+#                 case _:
+#                     raise ValueError("Invalid random type")
+#             task = Random(randType)
+#         case "Wave":
+#             task = Wave()
+#         case _:
+#             raise ValueError("Invalid task type")
+
+#     match args.logger:
+#         case "wandb":
+#             logger = WandbLogger()
+#         case "prettyprint":
+#             logger = PrettyPrintLogger()
+#         case _:
+#             raise ValueError("Invalid logger type")
+
+#     match args.init_scheme:
+#         case "ZeroInit":
+#             scheme = ZeroInit()
+#         case "RandomInit":
+#             scheme = RandomInit()
+#         case "StaticRandomInit":
+#             scheme = StaticRandomInit()
+#         case _:
+#             raise ValueError("Invalid init type")
+
+#     match args.activation_fn:
+#         case "relu":
+#             activation_fn = torch.relu
+#         case "tanh":
+#             activation_fn = torch.tanh
+#         case _:
+#             raise ValueError("Invalid activation function")
+
+#     rnnConfig = RnnConfig(
+#         n_in=args.n_in,
+#         n_h=args.n_h,
+#         n_out=args.n_out,
+#         num_layers=args.num_layers,
+#         scheme=scheme,
+#         activation=activation_fn,
+#     )
+
+#     config = Config(
+#         task=task,
+#         seq=args.seq,
+#         numTr=args.numTr,
+#         numVl=args.numVl,
+#         numTe=args.numTe,
+#         batch_size_tr=args.batch_size_tr,
+#         batch_size_vl=args.batch_size_vl,
+#         batch_size_te=args.batch_size_te,
+#         t1=args.t1,
+#         t2=args.t2,
+#         num_epochs=args.num_epochs,
+#         learning_rate=args.learning_rate,
+#         rnnConfig=rnnConfig,
+#         criterion=loss_function,
+#         optimizerFn=optimizer_fn,
+#         modelArtifact=ArtifactConfig(
+#             artifact=lambda name: wandb.Artifact(f"model_{name}", type="model"), path=lambda x: f"model_{x}.pt"
+#         ),
+#         datasetArtifact=ArtifactConfig(
+#             artifact=lambda name: wandb.Artifact(f"dataset_{name}", type="dataset"), path=lambda x: f"dataset_{x}.pt"
+#         ),
+#         checkpointFrequency=args.checkpoint_freq,
+#         projectName=args.projectName,
+#         seed=args.seed,
+#         performanceSamples=args.performance_samples,
+#         logFrequency=args.log_freq,
+#         l2_regularization=args.l2_regularization,
+#         meta_learning_rate=args.meta_learning_rate,
+#         is_oho=is_oho,
+#         time_chunk_size=args.time_chunk_size,
+#         rnnInitialActivation=getRNNInit(rnnConfig.scheme, rnnConfig.num_layers, rnnConfig.n_h),
+#     )
+
+#     return args, config, logger
+
+
+# def log_modelIO(config: Config, logger: Logger, model: RNN, name: str):
+#     logger.log2External(config.modelArtifact, lambda path: torch.save(model.state_dict(), path), name)
+
+
+# def log_datasetIO(config: Config, logger: Logger, dataset: TensorDataset, name: str):
+#     logger.log2External(config.datasetArtifact, lambda path: torch.save(dataset, path), name)
+
+
+# def main():
+#     args, config, logger = parseIO()
+#     torch.manual_seed(config.seed)
+
+#     logger.init(config.projectName, args)
+#     model = RNN(config.rnnConfig, config.learning_rate, config.l2_regularization)  # Random IO
+#     # logger.watchPytorch(model)
+#     log_modelIO(config, logger, model, "init")
+
+#     ts = torch.arange(0, config.seq)
+#     dataGenerator = getRandomTask(config.task)
+
+#     train_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTr)
+#     train_loader = getDataLoaderIO(train_ds, config.batch_size_tr)
+#     test_dataset = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numTe)
+#     test_loader = getDataLoaderIO(test_dataset, config.batch_size_te)
+#     valid_ds = getDatasetIO(dataGenerator, config.t1, config.t2, ts, config.numVl)
+#     valid_loader = getDataLoaderIO(valid_ds, config.batch_size_vl)
+
+#     log_datasetIO(config, logger, train_ds, "train")
+#     log_datasetIO(config, logger, test_dataset, "test")
+#     log_datasetIO(config, logger, valid_ds, "valid")
+
+#     # dataset_artifact = wandb.use_artifact('wlp9800-new-york-university/mlr-test/dataset_ef1inln6:v0', type='dataset')
+#     # dataset_artifact_dir = dataset_artifact.download()
+#     # dataset = torch.load(f"{dataset_artifact_dir}/dataset_train.pt")
+
+#     # train_dataset, val_dataset = torch.utils.data.random_split(dataset, [config.numTr, config.numVl])
+#     # train_loader = getDataLoaderIO(train_dataset, config.batch_size_tr)
+#     # valid_loader = getDataLoaderIO(val_dataset, config.batch_size_vl)
+
+#     # test_dataset_artifact = wandb.use_artifact('wlp9800-new-york-university/mlr-test/dataset_ef1inln6:v1', type='dataset')
+#     # test_dataset_artifact_dir = test_dataset_artifact.download()
+#     # test_dataset = torch.load(f"{test_dataset_artifact_dir}/dataset_test.pt")
+#     # test_loader = getDataLoaderIO(test_dataset, config.batch_size_te)
+
+#     model = train(config, logger, model, train_loader, cycle(valid_loader), test_loader, test_dataset)
+
+
+# if __name__ == "__main__":
+#     main()

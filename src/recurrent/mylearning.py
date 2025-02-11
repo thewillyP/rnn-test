@@ -107,6 +107,34 @@ def doSgdStep_Clipped[Interpreter: _SGD_Can[Env, Param], Data, Env, Param: CanDi
     return interpreter.putParameter(new_param)
 
 
+@do()
+def doSgdStep_Normalized[Interpreter: _SGD_Can[Env, Param], Data, Env, Param: CanDiff](
+    gr: Gradient[Param],
+) -> G[Fold[Interpreter, Data, Env, Unit]]:
+    interpreter = yield from askForInterpreter(PX[Interpreter]())
+    isParam = yield from interpreter.getParameter()
+    hyperparam = yield from interpreter.getHyperParameter()
+
+    grad_norm = jnp.linalg.norm(gr.value) + 1e-8  # Add epsilon to avoid division by zero
+    normalized_grad = gr.value / grad_norm
+    new_param = invmap(isParam, lambda x: jnp.ravel(x - hyperparam.learning_rate * normalized_grad))
+    return interpreter.putParameter(new_param)
+
+
+@do()
+def doExpGradStep[Interpreter: _SGD_Can[Env, Param], Data, Env, Param: CanDiff](
+    gr: Gradient[Param],
+) -> G[Fold[Interpreter, Data, Env, Unit]]:
+    interpreter = yield from askForInterpreter(PX[Interpreter]())
+    isParam = yield from interpreter.getParameter()
+    hyperparam = yield from interpreter.getHyperParameter()
+
+    # Apply exponentiated gradient update with sign correction
+    new_param = invmap(isParam, lambda x: jnp.ravel(x * jnp.exp(-hyperparam.learning_rate * jnp.sign(x) * gr.value)))
+
+    return interpreter.putParameter(new_param)
+
+
 class _RnnActivation_Can[Data, Env](
     GetActivation[Env, ACTIVATION],
     PutActivation[Env, ACTIVATION],
@@ -149,13 +177,22 @@ def doRnnReadout[Interpreter: _RnnReadout_Can[Env], Data, Env]():
 
 
 def doLoss[Data, Env, Pred, Label](lossFn: LossFn[Label, Pred]):
-    class _Loss_Can(HasLabel[Data, Label], Protocol): ...
+    class _Loss_Can(HasLabel[Data, Label], GetLog[Env, Logs], PutLog[Env, Logs], Protocol): ...
 
     @do()
     def _lossFn[Interpreter: _Loss_Can](pred: Pred):
         interpreter = yield from askForInterpreter(PX[Interpreter]())
         label = yield from interpreter.getLabel()
         loss = lossFn(pred, label)
+
+        # past_log = yield from interpreter.getLog()
+        # log_loss = Logs(loss=past_log.loss + loss)
+        # _ = yield from interpreter.putLog(log_loss)
+
+        # future_log = yield from interpreter.getLog()
+
+        # jax.debug.print("loss: {} {}", future_log.loss, interpreter)
+
         return pure(loss, PX3[Interpreter, Data, Env]())
 
     return _lossFn
@@ -290,6 +327,36 @@ def readoutRecurrentError[Interpreter: _ReadoutRecurrentError_Can[Env, Actv], En
 #     gr_summed: Pr
 #     gr_summed = jax.tree.map(lambda x: jnp.sum(x, axis=0), gr.value)
 #     return pure(Gradient(gr_summed))
+
+
+class IdentityLearner[Data, Env, Actv: CanDiff, Param: CanDiff, Label, Pred](ABC):
+    class _IdentityLearner_Can(
+        GetParameter[Env, Param],
+        HasLabel[Data, Label],
+        Protocol,
+    ): ...
+
+    type ST[Interpreter, Computed] = Fold[Interpreter, Data, Env, Computed]
+
+    def createLearner[Interpreter: _IdentityLearner_Can](
+        self,
+        activationStep: ST[Interpreter, Actv],
+        predictionStep: ST[Interpreter, Pred],
+        lossFunction: LossFn[Label, Pred],
+        _: ST[Interpreter, Gradient[Actv]],  # will be used when I make an future face learner
+    ):
+        step = activationStep.then(predictionStep)
+        rnnWithLoss = step.flat_map(doLoss(lossFunction))
+
+        @do()
+        def rnnWithGradient():
+            interpreter: Interpreter = yield from askForInterpreter(PX[Interpreter]())
+            param_shape = yield from interpreter.getParameter()
+            return pure(Gradient[Param](jnp.zeros(pytreeNumel(param_shape))), PX3[Interpreter, Data, Env]())
+
+        return RnnLibrary[Interpreter, Traversable[Data], Env, Traversable[Pred], Param](
+            rnn=step, rnnWithLoss=rnnWithLoss, rnnWithGradient=rnnWithLoss.then(rnnWithGradient())
+        )
 
 
 class OfflineLearning[Data, Env, Actv: CanDiff, Param: CanDiff, Label, Pred](ABC):
@@ -628,6 +695,7 @@ def endowBilevelOptimization[
     OHO_Label,
     OHO_DATA,
     TrainInterpreter: GetParameter[Env, Param],
+    ValidationInterpreter,
     Data,
     Env,
     Param: CanDiff,
@@ -636,6 +704,7 @@ def endowBilevelOptimization[
     rnnLearner: RnnLibrary[TrainInterpreter, Data, Env, Pred, Param],
     paramFn: Callable[[Gradient[Param]], Fold[TrainInterpreter, Data, Env, Unit]],
     trainInterpreter: TrainInterpreter,
+    validationInterpreter: ValidationInterpreter,
     bilevelOptimizer: CreateLearner[OHO_DATA, Env, Param, OHO_Param, OHO_Label, Pred],
     computeLoss: LossFn[OHO_Label, Pred],
     resetEnvForValidation: Fold[TrainInterpreter, Data, Env, Unit],
@@ -663,7 +732,7 @@ def endowBilevelOptimization[
         interpreter = yield from askForInterpreter(PX[OHO_Interpreter]())
         x = yield from interpreter.getPredictionInput()
         env = yield from get(PX[Env]())
-        predictions, _ = resetEnvForValidation.then(rnnLearner.rnn).func(trainInterpreter, x, env)
+        predictions, _ = resetEnvForValidation.then(rnnLearner.rnn).func(validationInterpreter, x, env)
         return pure(predictions, PX3[OHO_Interpreter, OHO_DATA, Env]())
 
     @do()
@@ -671,11 +740,27 @@ def endowBilevelOptimization[
         interpreter = yield from askForInterpreter(PX[OHO_Interpreter]())
         x = yield from interpreter.getPredictionInput()
         env = yield from get(PX[Env]())
-        recurrentGradient, _ = resetEnvForValidation.then(rnnLearner.rnnWithGradient).func(trainInterpreter, x, env)
+        recurrentGradient, _ = resetEnvForValidation.then(rnnLearner.rnnWithGradient).func(
+            validationInterpreter, x, env
+        )
         return pure(recurrentGradient, PX3[OHO_Interpreter, OHO_DATA, Env]())
 
     return bilevelOptimizer.createLearner(
         newActivationStep(), newPredictionStep(), computeLoss, newRecurrentErrorStep()
+    )
+
+
+def normalizeGradientRnnLibrary[Interpreter, Data, Env, Pred, Param: CanDiff](
+    rnnLearner: RnnLibrary[Interpreter, Data, Env, Pred, Param],
+) -> RnnLibrary[Interpreter, Data, Env, Pred, Param]:
+    def normalizeGradient(gr: Gradient[Param]) -> Gradient[Param]:
+        grad_norm = jnp.linalg.norm(gr.value) + 1e-8  # Avoid division by zero
+        return Gradient(gr.value / grad_norm)
+
+    return RnnLibrary(
+        rnn=rnnLearner.rnn,
+        rnnWithLoss=rnnLearner.rnnWithLoss,
+        rnnWithGradient=rnnLearner.rnnWithGradient.fmap(normalizeGradient),
     )
 
 

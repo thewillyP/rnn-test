@@ -79,3 +79,7 @@ class HasPRNG[E, T](Protocol):
 
 class PutLog[E, T](Protocol):
     def putLog[D](self, s: T) -> Fold[Self, D, E, Unit]: ...
+
+
+class GetLog[E, T](Protocol):
+    def getLog[D](self) -> Fold[Self, D, E, T]: ...
