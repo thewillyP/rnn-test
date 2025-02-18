@@ -9,6 +9,8 @@ import equinox as eqx
 from equinox import Module
 from operator import add
 
+import optax
+
 from recurrent.myfunc import compose2
 from recurrent.objectalgebra.typeclasses import *
 
@@ -103,7 +105,9 @@ def doSgdStep_Clipped[Interpreter: _SGD_Can[Env, Param], Data, Env, Param: CanDi
     interpreter = yield from askForInterpreter(PX[Interpreter]())
     isParam = yield from interpreter.getParameter()
     hyperparam = yield from interpreter.getHyperParameter()
-    new_param = invmap(isParam, lambda x: jnp.ravel(jnp.maximum(0, x - hyperparam.learning_rate * gr.value)))
+    clipped_gr = gr.value
+    # clipped_gr, _ = optax.clip_by_global_norm(1.0).update(gr.value, optax.EmptyState())
+    new_param = invmap(isParam, lambda x: jnp.ravel(jnp.maximum(0, x - hyperparam.learning_rate * clipped_gr)))
     return interpreter.putParameter(new_param)
 
 
@@ -350,7 +354,7 @@ class IdentityLearner[Data, Env, Actv: CanDiff, Param: CanDiff, Label, Pred](ABC
 
         @do()
         def rnnWithGradient():
-            interpreter: Interpreter = yield from askForInterpreter(PX[Interpreter]())
+            interpreter = yield from askForInterpreter(PX[Interpreter]())
             param_shape = yield from interpreter.getParameter()
             return pure(Gradient[Param](jnp.zeros(pytreeNumel(param_shape))), PX3[Interpreter, Data, Env]())
 
@@ -479,6 +483,7 @@ class InfluenceTensorLearner[Data, Env, Actv: CanDiff, Param: CanDiff, Label, Pr
         GetInfluenceTensor[Env, Jacobian[Param]],
         PutInfluenceTensor[Env, Jacobian[Param]],
         PastFacingLearn[Data, Env, Actv, Param, Label, Pred]._PastFacingLearner_Can,
+        PutLog[Env, Logs],
         Protocol,
     ): ...
 
@@ -499,6 +504,9 @@ class InfluenceTensorLearner[Data, Env, Actv: CanDiff, Param: CanDiff, Label, Pr
             signal = yield from recurrentError
             recurrentGradient = Gradient[Param](signal.value @ influenceTensor.value)
             _ = yield from interpreter.putInfluenceTensor(influenceTensor)
+
+            log_influence = Logs(influenceTensor=influenceTensor.value)
+            _ = yield from interpreter.putLog(log_influence)
             return pure(recurrentGradient, PX3[Interpreter, Data, Env]())
 
         return _creditAssignment()
@@ -695,7 +703,6 @@ def endowBilevelOptimization[
     OHO_Label,
     OHO_DATA,
     TrainInterpreter: GetParameter[Env, Param],
-    ValidationInterpreter,
     Data,
     Env,
     Param: CanDiff,
@@ -704,14 +711,15 @@ def endowBilevelOptimization[
     rnnLearner: RnnLibrary[TrainInterpreter, Data, Env, Pred, Param],
     paramFn: Callable[[Gradient[Param]], Fold[TrainInterpreter, Data, Env, Unit]],
     trainInterpreter: TrainInterpreter,
-    validationInterpreter: ValidationInterpreter,
     bilevelOptimizer: CreateLearner[OHO_DATA, Env, Param, OHO_Param, OHO_Label, Pred],
     computeLoss: LossFn[OHO_Label, Pred],
     resetEnvForValidation: Fold[TrainInterpreter, Data, Env, Unit],
 ) -> RnnLibrary[OHO_Interpreter, OHO_DATA, Env, Pred, OHO_Param]:
     type ST[Interpreter, Computed] = Fold[Interpreter, Data, Env, Computed]
 
-    class _EndowBilevel_Can(HasInput[OHO_DATA, Data], HasPredictionInput[OHO_DATA, Data], Protocol): ...
+    class _EndowBilevel_Can(
+        HasInput[OHO_DATA, Data], HasPredictionInput[OHO_DATA, Data], PutLog[Env, Logs], Protocol
+    ): ...
 
     @do()
     def newActivationStep[OHO_Interpreter: _EndowBilevel_Can]():
@@ -732,7 +740,7 @@ def endowBilevelOptimization[
         interpreter = yield from askForInterpreter(PX[OHO_Interpreter]())
         x = yield from interpreter.getPredictionInput()
         env = yield from get(PX[Env]())
-        predictions, _ = resetEnvForValidation.then(rnnLearner.rnn).func(validationInterpreter, x, env)
+        predictions, _ = resetEnvForValidation.then(rnnLearner.rnn).func(trainInterpreter, x, env)
         return pure(predictions, PX3[OHO_Interpreter, OHO_DATA, Env]())
 
     @do()
@@ -740,9 +748,10 @@ def endowBilevelOptimization[
         interpreter = yield from askForInterpreter(PX[OHO_Interpreter]())
         x = yield from interpreter.getPredictionInput()
         env = yield from get(PX[Env]())
-        recurrentGradient, _ = resetEnvForValidation.then(rnnLearner.rnnWithGradient).func(
-            validationInterpreter, x, env
-        )
+        recurrentGradient, _ = resetEnvForValidation.then(rnnLearner.rnnWithGradient).func(trainInterpreter, x, env)
+
+        validation_log = Logs(validationGradient=recurrentGradient.value)
+        _ = yield from interpreter.putLog(validation_log)
         return pure(recurrentGradient, PX3[OHO_Interpreter, OHO_DATA, Env]())
 
     return bilevelOptimizer.createLearner(
@@ -761,6 +770,41 @@ def normalizeGradientRnnLibrary[Interpreter, Data, Env, Pred, Param: CanDiff](
         rnn=rnnLearner.rnn,
         rnnWithLoss=rnnLearner.rnnWithLoss,
         rnnWithGradient=rnnLearner.rnnWithGradient.fmap(normalizeGradient),
+    )
+
+
+def clipGradient[Interpreter, Data, Env, Pred, Param: CanDiff](
+    clip: float,
+    rnnLearner: RnnLibrary[Interpreter, Data, Env, Pred, Param],
+) -> RnnLibrary[Interpreter, Data, Env, Pred, Param]:
+    def clippedGradient(gr: Gradient[Param]) -> Gradient[Param]:
+        clipped_gr, _ = optax.clip_by_global_norm(clip).update(gr.value, optax.EmptyState())
+        return Gradient(clipped_gr)
+
+    return RnnLibrary(
+        rnn=rnnLearner.rnn,
+        rnnWithLoss=rnnLearner.rnnWithLoss,
+        rnnWithGradient=rnnLearner.rnnWithGradient.fmap(clippedGradient),
+    )
+
+
+def logGradient[Interpreter: PutLog[Env, Logs], Data, Env, Pred, Param](
+    rnnLibrary: RnnLibrary[Interpreter, Data, Env, Pred, Param],
+):
+    type ST[Computed] = Fold[Interpreter, Data, Env, Computed]
+
+    @do()
+    def _logGradient():
+        interpreter = yield from askForInterpreter(PX[Interpreter]())
+        gr = yield from rnnLibrary.rnnWithGradient
+        log_grad = Logs(gradient=gr.value)
+        _ = yield from interpreter.putLog(log_grad)
+        return pure(gr, PX3[Interpreter, Data, Env]())
+
+    return RnnLibrary(
+        rnn=rnnLibrary.rnn,
+        rnnWithLoss=rnnLibrary.rnnWithLoss,
+        rnnWithGradient=_logGradient(),
     )
 
 

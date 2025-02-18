@@ -29,7 +29,9 @@ class UORO_Param(eqx.Module):
 
 
 class Logs(eqx.Module):
-    loss: Optional[LOSS] = eqx.field(default=None)
+    gradient: Optional[jax.Array] = eqx.field(default=None)
+    validationGradient: Optional[jax.Array] = eqx.field(default=None)
+    influenceTensor: Optional[jax.Array] = eqx.field(default=None)
 
 
 class AllLogs(eqx.Module):
@@ -37,3 +39,6 @@ class AllLogs(eqx.Module):
     validationLoss: jax.Array
     testLoss: jax.Array
     learningRate: jax.Array
+    parameterNorm: jax.Array
+    ohoGradient: jax.Array
+    trainGradient: jax.Array

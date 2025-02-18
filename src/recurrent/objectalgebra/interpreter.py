@@ -19,22 +19,6 @@ from recurrent.util import prng_split
 type GOD[A, B, C] = RnnGodState[A, B, C]
 
 
-class BaseLogger[A, B, C](PutLog[GOD[A, B, C], Logs], GetLog[GOD[A, B, C], Logs]):
-    def putLog[D](self, s: Logs) -> Fold[Self, D, GOD[A, B, C], Unit]:
-        return modifies(lambda e: eqx.tree_at(lambda t: t.logs, e, eqx.combine(s, e.logs)))
-
-    def getLog[D](self) -> Fold[Self, D, GOD[A, B, C], Logs]:
-        return gets(lambda e: e.logs)
-
-
-class BilevelLogger[A, B, C](PutLog[GOD[A, B, C], Logs], GetLog[GOD[A, B, C], Logs]):
-    def putLog[D](self, s: Logs) -> Fold[Self, D, GOD[A, B, C], Unit]:
-        return modifies(lambda e: eqx.tree_at(lambda t: t.oho_logs, e, eqx.combine(s, e.oho_logs)))
-
-    def getLog[D](self) -> Fold[Self, D, GOD[A, B, C], Logs]:
-        return gets(lambda e: e.oho_logs)
-
-
 class BaseRnnGodInterpreter[A, B, C](
     GetActivation[GOD[A, B, C], ACTIVATION],
     PutActivation[GOD[A, B, C], ACTIVATION],
@@ -47,6 +31,8 @@ class BaseRnnGodInterpreter[A, B, C](
     GetRnnConfig[GOD[A, B, C]],
     GetUORO[GOD[A, B, C]],
     PutUORO[GOD[A, B, C]],
+    PutLog[GOD[A, B, C], Logs],
+    GetLog[GOD[A, B, C], Logs],
 ):
     type God = GOD[A, B, C]
 
@@ -83,6 +69,12 @@ class BaseRnnGodInterpreter[A, B, C](
     def putUORO[D](self, s: UORO_Param) -> Fold[Self, D, God, Unit]:
         return modifies(lambda e: eqx.tree_at(lambda t: t.uoro, e, s))
 
+    def putLog[D](self, s: Logs) -> Fold[Self, D, GOD[A, B, C], Unit]:
+        return modifies(lambda e: eqx.tree_at(lambda t: t.logs, e, eqx.combine(s, e.logs)))
+
+    def getLog[D](self) -> Fold[Self, D, GOD[A, B, C], Logs]:
+        return gets(lambda e: e.logs)
+
 
 class DataInterpreter(
     HasInput[InputOutput, jax.Array],
@@ -107,12 +99,6 @@ class RNGInterpreter[A, B, C](HasPRNG[GOD[A, B, C], PRNG]):
 
 # use this as my default interpreter
 class BaseRnnInterpreter[A, B, C](BaseRnnGodInterpreter[A, B, C], DataInterpreter, RNGInterpreter[A, B, C]): ...
-
-
-class BaseWithLog[A, B, C](BaseRnnInterpreter[A, B, C], BaseLogger[A, B, C]): ...
-
-
-class BaseWithBilevelLog[A, B, C](BaseRnnInterpreter[A, B, C], BilevelLogger[A, B, C]): ...
 
 
 class _Dialect[E, A, B](
@@ -171,7 +157,7 @@ class BilevelRnnGodInterpreter[A, B, C](
         return gets(lambda e: e.rnnConfig_bilevel)
 
     def putLog[D](self, s: Logs) -> Fold[Self, D, GOD[A, B, C], Unit]:
-        return pure(Unit(), PX3[Self, D, GOD[A, B, C]]())
+        return modifies(lambda e: eqx.tree_at(lambda t: t.oho_logs, e, eqx.combine(s, e.oho_logs)))
 
     def getLog[D](self) -> Fold[Self, D, GOD[A, B, C], Logs]:
         return gets(lambda e: e.oho_logs)

@@ -1012,25 +1012,53 @@
 
 # type llist[T] = Head[T] | Node[llist[T]]
 
+# import jax
+# import jax.numpy as jnp
+# from jax import lax
+
+# # Define a pytree with the same leading dimension but different rest dimensions
+# pytree = {
+#     "a": jnp.ones((5, 3)),  # Shape (5, 3)
+#     "b": None,  # Shape (5, 2) -- Different rest dimension
+# }
+
+
+# # Define scan function
+# def scan_fn(carry, x):
+#     carry = carry + jnp.sum(x["b"])
+#     return carry, carry
+
+
+# # Run scan
+# init = jnp.array(0.0)
+# _, out = lax.scan(scan_fn, init, pytree)
+
+# print(out)
+
+
 import jax
 import jax.numpy as jnp
-from jax import lax
-
-# Define a pytree with the same leading dimension but different rest dimensions
-pytree = {
-    "a": jnp.ones((5, 3)),  # Shape (5, 3)
-    "b": None,  # Shape (5, 2) -- Different rest dimension
-}
+import optax
 
 
-# Define scan function
-def scan_fn(carry, x):
-    carry = carry + jnp.sum(x["b"])
-    return carry, carry
+# Dummy loss function
+def loss_fn(params, x):
+    return jnp.sum(jnp.square(params * x))
 
 
-# Run scan
-init = jnp.array(0.0)
-_, out = lax.scan(scan_fn, init, pytree)
+# Dummy data
+x = jnp.array([1.0, 2.0, 3.0])
+params = jnp.array([0.5, -0.2, 0.8])
 
-print(out)
+# Compute gradients
+grad_fn = jax.grad(loss_fn)
+grads = grad_fn(params, x)
+
+# Apply gradient clipping
+clipping_value = 1.0
+updates, _ = optax.clip_by_global_norm(clipping_value).update(grads, optax.EmptyState())
+
+print("Original Gradients:", grads)
+print("Clipped Gradients:", updates)
+print("gradient norm", 1 / jnp.linalg.norm(grads))
+print("new gradient norm", jnp.linalg.norm(updates))

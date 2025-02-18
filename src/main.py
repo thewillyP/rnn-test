@@ -12,8 +12,6 @@ from recurrent.mytypes import *
 
 from recurrent.objectalgebra.interpreter import (
     BaseRnnInterpreter,
-    BaseWithBilevelLog,
-    BaseWithLog,
     OhoInterpreter,
 )
 
@@ -32,7 +30,7 @@ import jax.numpy as jnp
 import equinox as eqx
 import jax
 
-# jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_enable_x64", True)
 
 """
 Todo
@@ -46,7 +44,7 @@ def generate_add_task_dataset(N, t_1, t_2, tau_task, rng_key):
     """y(t) = 0.5 + 0.5 * x(t - t_1) - 0.25 * x(t - t_2)"""
     N = N // tau_task
 
-    x = jax.random.bernoulli(rng_key, 0.5, (N,)).astype(jnp.float32)
+    x = jax.random.bernoulli(rng_key, 0.5, (N,)).astype(jnp.float64)
 
     y = 0.5 + 0.5 * jnp.roll(x, t_1) - 0.25 * jnp.roll(x, t_2)
 
@@ -70,7 +68,7 @@ def constructRnnEnv(rng_key: Array, initLearningRate: float):
     # Define learning rates as arrays
     # 0.02712261
     learning_rate = jnp.asarray([initLearningRate])
-    meta_learning_rate = jnp.asarray([0.00001])
+    meta_learning_rate = jnp.asarray([0.0005])
 
     rng_key, subkey1, subkey2, subkey3 = jax.random.split(rng_key, 4)
 
@@ -98,12 +96,12 @@ def constructRnnEnv(rng_key: Array, initLearningRate: float):
     rng_key, prng_A, prng_B, prng_C = jax.random.split(rng_key, num=4)
 
     # Construct environment state
+    influenceTensor_ = zeroedInfluenceTensor(n_h, parameter)
+    ohoInfluenceTensor_ = zeroedInfluenceTensor(jnp.size(compose2(endowVector, toVector)(parameter)), sgd)
     init_env = RnnGodState[RnnParameter, SgdParameter, SgdParameter](
         activation=activation,
-        influenceTensor=Jacobian[RnnParameter](zeroedInfluenceTensor(n_h, parameter)),
-        ohoInfluenceTensor=Jacobian[SgdParameter](
-            zeroedInfluenceTensor(jnp.size(compose2(endowVector, toVector)(parameter)), sgd)
-        ),
+        influenceTensor=Jacobian[RnnParameter](influenceTensor_),
+        ohoInfluenceTensor=Jacobian[SgdParameter](ohoInfluenceTensor_),
         parameter=parameter,
         hyperparameter=sgd,
         metaHyperparameter=sgd_mlr,
@@ -114,8 +112,12 @@ def constructRnnEnv(rng_key: Array, initLearningRate: float):
             B=uoroBInit(prng_B, parameter),
         ),
         prng=prng_C,
-        logs=Logs(loss=LOSS(0.0)),
-        oho_logs=Logs(loss=LOSS(0.0)),
+        logs=Logs(gradient=jnp.zeros_like(toVector(endowVector(parameter))), influenceTensor=influenceTensor_),
+        oho_logs=Logs(
+            gradient=jnp.zeros_like(toVector(endowVector(sgd))),
+            validationGradient=jnp.zeros_like(toVector(endowVector(parameter))),
+            influenceTensor=ohoInfluenceTensor_,
+        ),
     )
 
     return rng_key, init_env
@@ -130,17 +132,16 @@ def train(
     N_val: int,
     initLearningRate: float,
 ):
-    type Train_Dl = BaseWithLog[RnnParameter, SgdParameter, SgdParameter]
+    type Train_Dl = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]
     type OHO = OhoInterpreter[RnnParameter, SgdParameter, SgdParameter]
     type ENV = RnnGodState[RnnParameter, SgdParameter, SgdParameter]
 
     # interpreters
-    trainDialect = BaseWithLog[RnnParameter, SgdParameter, SgdParameter]()
-    validationDialect = BaseWithBilevelLog[RnnParameter, SgdParameter, SgdParameter]()
+    trainDialect = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]()
     ohoDialect = OhoInterpreter[RnnParameter, SgdParameter, SgdParameter](trainDialect)
 
     # setup
-    rng_key = jax.random.key(21)
+    rng_key = jax.random.key(444)
     rng_key, prng = jax.random.split(rng_key)
     rng_key, initEnv = constructRnnEnv(prng, initLearningRate)
 
@@ -161,8 +162,9 @@ def train(
     )
 
     onlineLearner_folded = foldrRnnLearner(onlineLearner, initEnv.parameter)
-    rnnLearner_ = endowAveragedGradients(onlineLearner_folded, trunc_length, initEnv.parameter)
-    rnnLearner = normalizeGradientRnnLibrary(rnnLearner_)
+    rnnLearner = endowAveragedGradients(onlineLearner_folded, trunc_length, initEnv.parameter)
+    rnnLearner = logGradient(rnnLearner)
+    # rnnLearner = normalizeGradientRnnLibrary(rnnLearner)
 
     oho_rtrl = RTRL[
         OhoInputOutput,
@@ -172,7 +174,7 @@ def train(
         jax.Array,
         Traversable[PREDICTION],
     ]()
-    # oho_rtrl = IdentityLearner()
+    oho_rtrl = IdentityLearner()
 
     def validation_loss(label: Traversable[jax.Array], prediction: Traversable[PREDICTION]):
         return LOSS(jnp.mean(optax.safe_softmax_cross_entropy(label.value, prediction.value)))
@@ -182,11 +184,12 @@ def train(
         rnnLearner,
         doSgdStep,
         trainDialect,
-        validationDialect,
         oho_rtrl,
         validation_loss,
         resetRnnActivation(initEnv.activation),
     )
+    oho = logGradient(oho)
+    # oho = clipGradient(4.0, oho)
 
     @do()
     def updateStep():
@@ -199,15 +202,19 @@ def train(
         te, _ = validation_model(trainDialect, test_set, env)
         vl, _ = validation_model(trainDialect, oho_data.validation, env)  # lag 1 timestep bc show prev param validation
         tr, _ = rnnLearner.rnnWithLoss.func(trainDialect, oho_data.train, env)
+        weights = toVector(endowVector(env.parameter))
+
+        _ = yield from oho.rnnWithGradient.flat_map(doSgdStep_Clipped)
 
         log = AllLogs(
             trainLoss=tr / t_series_length,
             validationLoss=vl / N_val,
             testLoss=te / N_test,
             learningRate=learning_rate,
+            parameterNorm=weights,
+            ohoGradient=env.oho_logs.gradient,
+            trainGradient=env.logs.gradient,
         )
-        _ = yield from oho.rnnWithGradient.flat_map(doSgdStep_Clipped)
-
         return pure(log, PX3[OHO, OhoInputOutput, ENV]())
 
     model = eqx.filter_jit(traverse(updateStep()).func).lower(ohoDialect, dataloader, initEnv).compile()
@@ -234,7 +241,7 @@ N_test = 5000
 t_series_length = 100  # how much time series goines into ONE param update
 trunc_length = 1  # controls how much avging done in one t_series
 # if trunc_length = 1, then divide by t_series_length. if trunc_length = t_series_length, then no normalization done
-rng_key = jax.random.key(333)  # 54
+rng_key = jax.random.key(3241234)  # 54, 333, 3241234, 2342
 rng_key, prng1, prng2 = jax.random.split(rng_key, 3)
 X, Y = generate_add_task_dataset(N, t1, t2, 1, prng1)
 X_val, Y_val = generate_add_task_dataset(N_val, t1, t2, 1, prng2)
@@ -260,31 +267,62 @@ dataloader = Traversable(
     )
 )
 
+# print(dataloader.value.train.value.x.shape)
+# quit()
+
 test_set = Traversable(InputOutput(x=X_test, y=Y_test))
 
-logs, test_loss = train(dataloader, test_set, t_series_length, trunc_length, N_test, N_val, 0.4)
+logs, test_loss = train(dataloader, test_set, t_series_length, trunc_length, N_test, N_val, 0.3)
 
-filename = f"src/rtrl_100000_100_t1_15_t2_17_test2_mlr_e5_lr_4e1_norm"
+filename = f"src/mytest46"
 
 eqx.tree_serialise_leaves(f"{filename}.eqx", logs)
 
 
-plt.figure(figsize=(12, 6))
-plt.plot(logs.trainLoss, label="Train Loss", color="blue")
-plt.plot(logs.validationLoss, label="Validation Loss", color="red")
-plt.plot(logs.testLoss, label="Test Loss", color="green")
+fig, (ax1, ax3, ax4, ax5) = plt.subplots(4, 1, figsize=(12, 12), gridspec_kw={"height_ratios": [2, 1, 1, 1]})
 
-ax1 = plt.gca()
+# First subplot (Losses and Learning Rate)
+ax1.plot(logs.trainLoss, label="Train Loss", color="blue")
+ax1.plot(logs.validationLoss, label="Validation Loss", color="red")
+ax1.plot(logs.testLoss, label="Test Loss", color="green")
+
 ax2 = ax1.twinx()
 ax2.plot(logs.learningRate, label="Learning Rate", color="purple", linestyle="dashed")
+
+# Labels and legends
 ax1.set_xlabel("Epochs")
 ax1.set_ylabel("Loss")
 ax2.set_ylabel("Learning Rate")
 ax1.legend(loc="upper left")
 ax2.legend(loc="upper right")
-plt.title("Training Progress")
+ax1.set_title("Training Progress")
+
+# Second subplot (Parameter Norm)
+ax3.plot(logs.parameterNorm, label="Parameter Norm", color="orange")
+ax3.set_xlabel("Epochs")
+ax3.set_ylabel("Parameter Norm")
+ax3.legend(loc="upper right")
+ax3.set_title("Parameter Norm Over Time")
+
+# Third subplot (Oho Gradient)
+ax4.plot(logs.ohoGradient, label="Oho Gradient", color="cyan")
+ax4.set_xlabel("Epochs")
+ax4.set_ylabel("Oho Gradient")
+ax4.legend(loc="upper right")
+ax4.set_title("Oho Gradient Over Time")
+
+# Fourth subplot (Train Gradient)
+ax5.plot(logs.trainGradient, label="Train Gradient", color="magenta")
+ax5.set_xlabel("Epochs")
+ax5.set_ylabel("Train Gradient")
+ax5.legend(loc="upper right")
+ax5.set_title("Train Gradient Over Time")
+
+# Adjust layout and save
+plt.tight_layout(rect=[0, 0, 1, 0.96])  # Keep the main title from overlapping
 plt.savefig(f"{filename}.png", dpi=300)
 plt.close()
+
 
 # learning_rates = logs.learning_rate
 
