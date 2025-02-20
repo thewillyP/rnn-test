@@ -30,12 +30,12 @@ import jax.numpy as jnp
 import equinox as eqx
 import jax
 
-jax.config.update("jax_enable_x64", True)
+# jax.config.update("jax_enable_x64", True)
 
 """
 Todo
-1) implement vanilla rnn training loop 
-2) implement oho to show how easy it is
+1) implement vanilla rnn training loop. Done.
+2) implement oho to show how easy it is. Done.
 3) implement feedforward to show how easy it is
 """
 
@@ -44,7 +44,7 @@ def generate_add_task_dataset(N, t_1, t_2, tau_task, rng_key):
     """y(t) = 0.5 + 0.5 * x(t - t_1) - 0.25 * x(t - t_2)"""
     N = N // tau_task
 
-    x = jax.random.bernoulli(rng_key, 0.5, (N,)).astype(jnp.float64)
+    x = jax.random.bernoulli(rng_key, 0.5, (N,)).astype(jnp.float32)
 
     y = 0.5 + 0.5 * jnp.roll(x, t_1) - 0.25 * jnp.roll(x, t_2)
 
@@ -68,7 +68,7 @@ def constructRnnEnv(rng_key: Array, initLearningRate: float):
     # Define learning rates as arrays
     # 0.02712261
     learning_rate = jnp.asarray([initLearningRate])
-    meta_learning_rate = jnp.asarray([0.0005])
+    meta_learning_rate = jnp.asarray([0.00])
 
     rng_key, subkey1, subkey2, subkey3 = jax.random.split(rng_key, 4)
 
@@ -96,6 +96,8 @@ def constructRnnEnv(rng_key: Array, initLearningRate: float):
     rng_key, prng_A, prng_B, prng_C = jax.random.split(rng_key, num=4)
 
     # Construct environment state
+    num_activ = jnp.size(activation)
+    num_params = jnp.size(compose2(endowVector, toVector)(parameter))
     influenceTensor_ = zeroedInfluenceTensor(n_h, parameter)
     ohoInfluenceTensor_ = zeroedInfluenceTensor(jnp.size(compose2(endowVector, toVector)(parameter)), sgd)
     init_env = RnnGodState[RnnParameter, SgdParameter, SgdParameter](
@@ -112,11 +114,18 @@ def constructRnnEnv(rng_key: Array, initLearningRate: float):
             B=uoroBInit(prng_B, parameter),
         ),
         prng=prng_C,
-        logs=Logs(gradient=jnp.zeros_like(toVector(endowVector(parameter))), influenceTensor=influenceTensor_),
+        logs=Logs(
+            gradient=jnp.zeros_like(toVector(endowVector(parameter))),
+            influenceTensor=influenceTensor_,
+            immediateInfluenceTensor=influenceTensor_,
+            hessian=jnp.zeros((num_activ, num_activ)),
+        ),
         oho_logs=Logs(
             gradient=jnp.zeros_like(toVector(endowVector(sgd))),
             validationGradient=jnp.zeros_like(toVector(endowVector(parameter))),
             influenceTensor=ohoInfluenceTensor_,
+            immediateInfluenceTensor=ohoInfluenceTensor_,
+            hessian=jnp.zeros((num_params, num_params)),
         ),
     )
 
@@ -130,7 +139,7 @@ def train(
     trunc_length: int,
     N_test: int,
     N_val: int,
-    initLearningRate: float,
+    initEnv: RnnGodState[RnnParameter, SgdParameter, SgdParameter],
 ):
     type Train_Dl = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]
     type OHO = OhoInterpreter[RnnParameter, SgdParameter, SgdParameter]
@@ -139,11 +148,6 @@ def train(
     # interpreters
     trainDialect = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]()
     ohoDialect = OhoInterpreter[RnnParameter, SgdParameter, SgdParameter](trainDialect)
-
-    # setup
-    rng_key = jax.random.key(444)
-    rng_key, prng = jax.random.split(rng_key)
-    rng_key, initEnv = constructRnnEnv(prng, initLearningRate)
 
     # lambda key, shape: jax.random.uniform(key, shape, minval=-1.0, maxval=1.0)
     onlineLearner: RnnLibrary[Train_Dl, InputOutput, ENV, PREDICTION, RnnParameter]
@@ -174,7 +178,7 @@ def train(
         jax.Array,
         Traversable[PREDICTION],
     ]()
-    oho_rtrl = IdentityLearner()
+    # oho_rtrl = IdentityLearner()
 
     def validation_loss(label: Traversable[jax.Array], prediction: Traversable[PREDICTION]):
         return LOSS(jnp.mean(optax.safe_softmax_cross_entropy(label.value, prediction.value)))
@@ -204,16 +208,20 @@ def train(
         tr, _ = rnnLearner.rnnWithLoss.func(trainDialect, oho_data.train, env)
         weights = toVector(endowVector(env.parameter))
 
-        _ = yield from oho.rnnWithGradient.flat_map(doSgdStep_Clipped)
+        _ = yield from oho.rnnWithGradient.flat_map(doSgdStep_Positive)
 
         log = AllLogs(
             trainLoss=tr / t_series_length,
             validationLoss=vl / N_val,
             testLoss=te / N_test,
             learningRate=learning_rate,
-            parameterNorm=weights,
+            parameterNorm=jnp.linalg.norm(weights),
             ohoGradient=env.oho_logs.gradient,
-            trainGradient=env.logs.gradient,
+            trainGradient=jnp.linalg.norm(env.logs.gradient),
+            validationGradient=jnp.linalg.norm(env.oho_logs.validationGradient),
+            immediateInfluenceTensor=jnp.linalg.norm(jnp.ravel(env.oho_logs.immediateInfluenceTensor)),
+            influenceTensor=jnp.linalg.norm(jnp.ravel(env.oho_logs.influenceTensor)),
+            hessian=jnp.linalg.eigvals(env.oho_logs.hessian),
         )
         return pure(log, PX3[OHO, OhoInputOutput, ENV]())
 
@@ -267,19 +275,21 @@ dataloader = Traversable(
     )
 )
 
-# print(dataloader.value.train.value.x.shape)
-# quit()
-
 test_set = Traversable(InputOutput(x=X_test, y=Y_test))
 
-logs, test_loss = train(dataloader, test_set, t_series_length, trunc_length, N_test, N_val, 0.3)
+rng_key, prng = jax.random.split(rng_key)
+rng_key, initEnv = constructRnnEnv(prng, 0.1)
 
-filename = f"src/mytest46"
+logs, test_loss = train(dataloader, test_set, t_series_length, trunc_length, N_test, N_val, initEnv)
+
+filename = f"src/mytest55"
 
 eqx.tree_serialise_leaves(f"{filename}.eqx", logs)
 
-
-fig, (ax1, ax3, ax4, ax5) = plt.subplots(4, 1, figsize=(12, 12), gridspec_kw={"height_ratios": [2, 1, 1, 1]})
+# Create the figure and subplots
+fig, (ax1, ax3, ax4, ax5, ax6, ax7, ax8, ax9) = plt.subplots(
+    8, 1, figsize=(12, 20), gridspec_kw={"height_ratios": [2, 1, 1, 1, 1, 1, 1, 1]}
+)
 
 # First subplot (Losses and Learning Rate)
 ax1.plot(logs.trainLoss, label="Train Loss", color="blue")
@@ -289,7 +299,7 @@ ax1.plot(logs.testLoss, label="Test Loss", color="green")
 ax2 = ax1.twinx()
 ax2.plot(logs.learningRate, label="Learning Rate", color="purple", linestyle="dashed")
 
-# Labels and legends
+# Labels and legends for the first subplot
 ax1.set_xlabel("Epochs")
 ax1.set_ylabel("Loss")
 ax2.set_ylabel("Learning Rate")
@@ -318,150 +328,74 @@ ax5.set_ylabel("Train Gradient")
 ax5.legend(loc="upper right")
 ax5.set_title("Train Gradient Over Time")
 
+# Fifth subplot (Validation Gradient)
+ax6.plot(logs.validationGradient, label="Validation Gradient", color="brown")
+ax6.set_xlabel("Epochs")
+ax6.set_ylabel("Validation Gradient")
+ax6.legend(loc="upper right")
+ax6.set_title("Validation Gradient Over Time")
+
+# Sixth subplot (Immediate Influence Tensor)
+ax7.plot(logs.immediateInfluenceTensor, label="Immediate Influence Tensor", color="teal")
+ax7.set_xlabel("Epochs")
+ax7.set_ylabel("Immediate Influence Tensor")
+ax7.legend(loc="upper right")
+ax7.set_title("Immediate Influence Tensor Over Time")
+
+# Seventh subplot (Influence Tensor)
+ax8.plot(logs.influenceTensor, label="Influence Tensor", color="darkblue")
+ax8.set_xlabel("Epochs")
+ax8.set_ylabel("Influence Tensor")
+ax8.legend(loc="upper right")
+ax8.set_title("Influence Tensor Over Time")
+
+# Eighth subplot (Hessian)
+ax9.plot(logs.hessian, label="Hessian", color="limegreen")
+ax9.set_xlabel("Epochs")
+ax9.set_ylabel("Hessian")
+ax9.legend(loc="upper right")
+ax9.set_title("Hessian Over Time")
+
 # Adjust layout and save
 plt.tight_layout(rect=[0, 0, 1, 0.96])  # Keep the main title from overlapping
 plt.savefig(f"{filename}.png", dpi=300)
 plt.close()
 
 
-# learning_rates = logs.learning_rate
-
-# # Plot the arrays
-# plt.figure(figsize=(10, 6))
-# plt.plot(learning_rates, label="learning_rates", color="blue")
-# plt.legend()
-# plt.xlabel("Update Steps")
-# plt.ylabel("Learning Rate")
-
-# plt.savefig("learning_rates.png", dpi=300)  # You can change the dpi for quality
-# plt.close()
-
-
-# import matplotlib
-
-# matplotlib.use("Agg")
-
-
-# def moving_average(arr, window_size):
-#     """Compute the moving average with a given window size."""
-#     return jnp.convolve(arr, jnp.ones(window_size) / window_size, mode="valid")[::window_size]
-
-
-# window_size = 1000
-# y1 = jnp.load("rtrl_train.npy")
-# y1 = moving_average(y1, window_size)
-# y2 = jnp.load("uoro_train.npy")
-# y2 = moving_average(y2, window_size)
-# y3 = jnp.load("rflo_train.npy")
-# y3 = moving_average(y3, window_size)
-
-# # Plot the arrays
-# plt.figure(figsize=(10, 6))
-# plt.plot(y1, label="RTRL", color="blue")
-# plt.plot(y2, label="UORO", color="green")
-# plt.plot(y3, label="RFLO", color="pink")
-# plt.legend()
-# plt.xlabel("Update Steps")
-# plt.ylabel("Train Loss")
-# plt.ylim(0.45, 0.6)
-# # plt.xticks(range(len(y1)))
-
-# plt.savefig("learning_train.png", dpi=300)  # You can change the dpi for quality
-# plt.close()
-
-
-# class WandbLogger(Logger):
-#     def log2External(self, artifactConfig: ArtifactConfig, saveFile: Callable[[str], None], name: str):
-#         path = artifactConfig.path(name)
-#         saveFile(path)
-#         artifact = artifactConfig.artifact(wandb.run.id)
-#         artifact.add_file(path)
-#         wandb.log_artifact(artifact)
-
-#     def log(self, dict: dict[str, Any]):
-#         wandb.log(dict)
-
-#     def init(self, projectName: str, config: argparse.Namespace):
-#         wandb.login(key=os.getenv("WANDB_API_KEY"))
-#         wandb.init(project=projectName, config=config)
-
-#     def watchPytorch(self, model: nn.Module):
-#         wandb.watch(model, log_freq=1000, log="all")
-
-
-# class PrettyPrintLogger(Logger):
-#     def log2External(self, artifactConfig: ArtifactConfig, saveFile: Callable[[str], None], name: str):
-#         print(f"Saving {name} to {artifactConfig.path(name)}")
-#         saveFile(artifactConfig.path(name))
-#         print(f"Saved {name} to {artifactConfig.path(name)}")
-
-#     def log(self, dict: dict[str, Any]):
-#         for key, value in dict.items():
-#             print(f"{key}: {value}")
-
-#     def init(self, projectName: str, config: argparse.Namespace):
-#         print(f"Initialized project {projectName} with config {config}")
-
-#     def watchPytorch(self, model: nn.Module):
-#         print("Model is being watched")
-
-
 # def parseIO():
 #     parser = argparse.ArgumentParser(description="Parse configuration parameters for RnnConfig and Config.")
 
+#     # later on I want to be able to get rid of this and have my model and dataset downloaded agnostically, at the cost of type safety
+#     parser.add_argument("--seq", type=int, required=True, help="Sequence length that goes into one epoch")
+#     parser.add_argument("--trunc", type=int, required=True, help="controls how much avging done in one t_series")
+#     parser.add_argument("--t1", type=int, required=True, help="Parameter t1")
+#     parser.add_argument("--t2", type=int, required=True, help="Parameter t2")
 #     # Arguments for RnnConfig
 #     parser.add_argument("--n_in", type=int, required=True, help="Number of input features for the RNN")
 #     parser.add_argument("--n_h", type=int, required=True, help="Number of hidden units for the RNN")
 #     parser.add_argument("--n_out", type=int, required=True, help="Number of output features for the RNN")
-#     parser.add_argument("--num_layers", type=int, required=True, help="Number of layers in the RNN")
-
-#     # Arguments for Config
-#     parser.add_argument(
-#         "--task",
-#         type=str,
-#         choices=["Random", "Sparse", "Wave"],
-#         required=True,
-#         help="Task type (Random, Sparse, or Wave)",
-#     )
-#     parser.add_argument(
-#         "--randomType", type=str, choices=["Uniform", "Normal"], required=False, help="Random type (Uniform or Normal)"
-#     )
-#     parser.add_argument(
-#         "--init_scheme",
-#         type=str,
-#         choices=["ZeroInit", "RandomInit", "StaticRandomInit"],
-#         required=True,
-#         help="Rnn init scheme type (ZeroInit, or RandomInit)",
-#     )
-#     parser.add_argument("--outT", type=int, help="Output time step (required if task is Sparse)")
-#     parser.add_argument("--seq", type=int, required=True, help="Sequence length")
 #     parser.add_argument("--numTr", type=int, required=True, help="Number of training samples")
 #     parser.add_argument("--numVl", type=int, required=True, help="Number of validation samples")
 #     parser.add_argument("--numTe", type=int, required=True, help="Number of testing samples")
-#     parser.add_argument("--batch_size_tr", type=int, required=True, help="Training batch size")
-#     parser.add_argument("--batch_size_vl", type=int, required=True, help="Validation batch size")
-#     parser.add_argument("--batch_size_te", type=int, required=True, help="Testing batch size")
-#     parser.add_argument("--t1", type=int, required=True, help="Parameter t1")
-#     parser.add_argument("--t2", type=int, required=True, help="Parameter t2")
-#     parser.add_argument("--num_epochs", type=int, required=True, help="Number of training epochs")
+
+#     parser.add_argument("--meta_learning_rate", type=float, required=True, help="Meta Learning rate")
 #     parser.add_argument("--learning_rate", type=float, required=True, help="Learning rate")
+#     parser.add_argument("--alpha", type=float, required=True, help="Time Constant")
+#     parser.add_argument("--bilevel-alpha", type=float, required=True, help="Time Constant")
+
 #     parser.add_argument(
-#         "--optimizerFn", type=str, choices=["Adam", "SGD"], required=True, help="Optimizer function (Adam or SGD)"
+#         "--innerOptimizerFn", type=str, choices=["SGD"], required=True, help="Optimizer function for Inner"
 #     )
 #     parser.add_argument(
-#         "--lossFn", type=str, choices=["mse"], required=True, help="Loss function (currently only mse is supported)"
+#         "--outerOptimizerFn",
+#         type=str,
+#         choices=["SGD", "SGD_Clipped", "Exp"],
+#         required=True,
+#         help="Optimizer function for Outer",
 #     )
-#     parser.add_argument(
-#         "--mode", type=str, choices=["test", "experiment"], required=True, help="Execution mode (test or experiment)"
-#     )
-#     parser.add_argument(
-#         "--checkpoint_freq", type=int, required=True, help="Frequency of checkpoints during training (in epochs)"
-#     )
-#     parser.add_argument("--seed", type=int, required=True, help="Pytorch seed")
+#     parser.add_argument("--lossFn", type=str, choices=["ce"], required=True, help="Loss function")
+#     parser.add_argument("--seed", type=int, required=True, help="Seed")
 #     parser.add_argument("--projectName", type=str, required=True, help="Wandb project name")
-#     parser.add_argument(
-#         "--logger", type=str, choices=["wandb", "prettyprint"], required=True, help="Choice of logger to use"
-#     )
 #     parser.add_argument(
 #         "--performance_samples", type=int, required=True, help="Number of samples to visualize performance"
 #     )
@@ -469,33 +403,19 @@ plt.close()
 #         "--activation_fn", type=str, choices=["relu", "tanh"], required=True, help="Activation function (relu or tanh)"
 #     )
 #     parser.add_argument(
-#         "--log_freq", type=int, required=True, help="Frequency of logging during training (in iterations)"
+#         "--outer_learner", type=str, choices=["identity", "rtrl", "uoro", "rflo"], required=True, help="Oho Learner"
 #     )
-#     parser.add_argument("--l2_regularization", type=float, required=True, help="Learning rate")
-#     parser.add_argument("--meta_learning_rate", type=float, required=True, help="Meta Learning rate")
-#     parser.add_argument("--is_oho", type=int, required=True, help="Is OHO")
-#     parser.add_argument("--time_chunk_size", type=int, required=True, help="Time chunk size")
+#     parser.add_argument(
+#         "--inner_learner", type=str, choices=["rtrl", "uoro", "rflo"], required=True, help="Inner Learner"
+#     )
+
+#     # set mlr to 0 if you want what oho would do without doing anything
 
 #     args = parser.parse_args()
 
-#     # Validate Sparse task requires outT
-#     if args.task == "Sparse" and args.outT is None:
-#         parser.error("--outT is required when --task is Sparse")
-
-#     if args.task == "Random" and args.randomType is None:
-#         parser.error("--randomType is required when --task is Random")
-
-#     match args.is_oho:
-#         case 0:
-#             is_oho = False
-#         case 1:
-#             is_oho = True
-#         case _:
-#             raise ValueError("Invalid is_oho value")
-
 #     match args.lossFn:
-#         case "mse":
-#             loss_function = lambda x, y: torch.functional.F.mse_loss(x, y, reduction="none").sum(dim=1).mean(dim=0)
+#         case "ce":
+#             loss_function = lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b))
 #         case _:
 #             raise ValueError("Currently only mse is supported as a loss function")
 
@@ -594,6 +514,7 @@ plt.close()
 #         time_chunk_size=args.time_chunk_size,
 #         rnnInitialActivation=getRNNInit(rnnConfig.scheme, rnnConfig.num_layers, rnnConfig.n_h),
 #     )
+
 
 #     return args, config, logger
 

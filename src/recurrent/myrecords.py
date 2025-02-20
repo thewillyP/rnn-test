@@ -38,6 +38,15 @@ class RnnGodState[A: eqx.Module, B: eqx.Module, C: eqx.Module](eqx.Module):
     oho_logs: Logs
 
 
+@dataclass(frozen=True)
+class IsUoro:
+    uoro: UORO_Param
+
+
+# @dataclass(frozen=True)
+# class
+
+
 def batch_rtrl[A: eqx.Module, B: eqx.Module, C: eqx.Module]() -> RnnGodState[A, B, C]:
     return RnnGodState(
         activation=0,

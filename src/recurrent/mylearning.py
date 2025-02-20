@@ -99,15 +99,13 @@ def doSgdStep_Squared[Interpreter: _SGD_Can[Env, Param], Data, Env, Param: CanDi
 
 
 @do()
-def doSgdStep_Clipped[Interpreter: _SGD_Can[Env, Param], Data, Env, Param: CanDiff](
+def doSgdStep_Positive[Interpreter: _SGD_Can[Env, Param], Data, Env, Param: CanDiff](
     gr: Gradient[Param],
 ) -> G[Fold[Interpreter, Data, Env, Unit]]:
     interpreter = yield from askForInterpreter(PX[Interpreter]())
     isParam = yield from interpreter.getParameter()
     hyperparam = yield from interpreter.getHyperParameter()
-    clipped_gr = gr.value
-    # clipped_gr, _ = optax.clip_by_global_norm(1.0).update(gr.value, optax.EmptyState())
-    new_param = invmap(isParam, lambda x: jnp.ravel(jnp.maximum(0, x - hyperparam.learning_rate * clipped_gr)))
+    new_param = invmap(isParam, lambda x: jnp.ravel(jnp.maximum(0, x - hyperparam.learning_rate * gr.value)))
     return interpreter.putParameter(new_param)
 
 
@@ -523,6 +521,7 @@ class RTRL[Data, Env, Actv: CanDiff, Param: CanDiff, Label, Pred](
         PutActivation[Env, Actv],
         GetParameter[Env, Param],
         PutParameter[Env, Param],
+        PutLog[Env, Logs],
         Protocol,
     ): ...
 
@@ -547,7 +546,11 @@ class RTRL[Data, Env, Actv: CanDiff, Param: CanDiff, Label, Pred](
 
         newInfluenceTensor: Jacobian[Param] = Jacobian(immediateJacobian__InfluenceTensor_product + immediateInfluence)
 
+        jacobian = eqx.filter_jacrev(lambda a: rnnForward(a, param0)[0])(actv0)
+
         _ = yield from put(env)
+        _ = yield from interpreter.putLog(Logs(immediateInfluenceTensor=immediateInfluence))
+        _ = yield from interpreter.putLog(Logs(hessian=jacobian))
         return pure(newInfluenceTensor, PX3[Interpreter, Data, Env]())
 
 
@@ -583,6 +586,7 @@ class RFLO[Data, Env, Actv: CanDiff, Param: CanDiff, Label, Pred](
         newInfluenceTensor: Jacobian[Param] = Jacobian((1 - alpha) * influenceTensor.value + alpha * immediateInfluence)
 
         _ = yield from put(env)
+        _ = yield from interpreter.putLog(Logs(immediateInfluenceTensor=immediateInfluence))
         return pure(newInfluenceTensor, PX3[Interpreter, Data, Env]())
 
 

@@ -1036,29 +1036,105 @@
 # print(out)
 
 
+# import jax
+# import jax.numpy as jnp
+# import optax
+
+
+# # Dummy loss function
+# def loss_fn(params, x):
+#     return jnp.sum(jnp.square(params * x))
+
+
+# # Dummy data
+# x = jnp.array([1.0, 2.0, 3.0])
+# params = jnp.array([0.5, -0.2, 0.8])
+
+# # Compute gradients
+# grad_fn = jax.grad(loss_fn)
+# grads = grad_fn(params, x)
+
+# # Apply gradient clipping
+# clipping_value = 1.0
+# updates, _ = optax.clip_by_global_norm(clipping_value).update(grads, optax.EmptyState())
+
+# print("Original Gradients:", grads)
+# print("Clipped Gradients:", updates)
+# print("gradient norm", 1 / jnp.linalg.norm(grads))
+# print("new gradient norm", jnp.linalg.norm(updates))
+
+
+from typing import Callable
 import jax
 import jax.numpy as jnp
 import optax
+import equinox as eqx
+
+jax.config.update("jax_enable_x64", True)
 
 
-# Dummy loss function
-def loss_fn(params, x):
-    return jnp.sum(jnp.square(params * x))
+class IsVector[T](eqx.Module):
+    vector: jax.Array
+    toParam: Callable[[jax.Array], T] = eqx.field(static=True)
 
 
-# Dummy data
-x = jnp.array([1.0, 2.0, 3.0])
-params = jnp.array([0.5, -0.2, 0.8])
+def endowVector[T](tree: T) -> IsVector[T]:
+    vector, toParam = jax.flatten_util.ravel_pytree(tree)
+    return IsVector(vector=vector, toParam=toParam)
 
-# Compute gradients
-grad_fn = jax.grad(loss_fn)
-grads = grad_fn(params, x)
 
-# Apply gradient clipping
-clipping_value = 1.0
-updates, _ = optax.clip_by_global_norm(clipping_value).update(grads, optax.EmptyState())
+def toVector[T](isVector: IsVector[T]) -> jax.Array:
+    return isVector.vector
 
-print("Original Gradients:", grads)
-print("Clipped Gradients:", updates)
-print("gradient norm", 1 / jnp.linalg.norm(grads))
-print("new gradient norm", jnp.linalg.norm(updates))
+
+def toParam[T](isVector: IsVector[T]) -> T:
+    return isVector.toParam(isVector.vector)
+
+
+# Simple quadratic loss
+def loss_fn(params):
+    return jnp.sum(params**2)
+
+
+# Meta-loss function (evaluated after training)
+def meta_loss_fn(params):
+    return jnp.sum((params - 1.0) ** 2)
+
+
+# Train function with optimizer unrolling
+def train(params, opt_state, lr, steps=10):
+    opt = optax.adam(lr)
+    for _ in range(steps):
+        grads = jax.grad(loss_fn)(params)
+        updates, opt_state = opt.update(grads, opt_state, params)
+        params = optax.apply_updates(params, updates)
+        jax.debug.print("{}", toVector(endowVector(opt_state)))
+    return params, opt_state
+
+
+lr = 0.1
+params = jnp.array([1.0, -1.0])
+opt_state = optax.EmptyState()
+meta_optimize = lambda lr_: meta_loss_fn(train(params, opt_state, lr_, steps=10)[0])
+
+# Compute autodiff gradient
+lr_grad_autodiff = jax.grad(meta_optimize)(0.1)
+
+# Compute finite difference approximation
+eps = 1e-4
+meta_loss_plus = meta_optimize(0.1 + eps)
+meta_loss_minus = meta_optimize(0.1 - eps)
+lr_grad_finite_diff = (meta_loss_plus - meta_loss_minus) / (2 * eps)
+
+# Print results
+print(f"Autodiff gradient: {lr_grad_autodiff}")
+print(f"Finite difference gradient: {lr_grad_finite_diff}")
+print(f"Relative difference: {abs(lr_grad_autodiff - lr_grad_finite_diff) / abs(lr_grad_finite_diff)}")
+
+opt_state_vec = endowVector(opt_state)
+opt_fn = lambda vec: toVector(endowVector(train(params, opt_state_vec.toParam(vec), lr, steps=10)[1]))
+jacobian = jax.jacobian(opt_fn)(toVector(opt_state_vec))
+
+jnp.set_printoptions(precision=3)
+jax.debug.print("\n{}", jacobian)
+print(opt_state)

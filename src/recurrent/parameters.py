@@ -32,6 +32,8 @@ class Logs(eqx.Module):
     gradient: Optional[jax.Array] = eqx.field(default=None)
     validationGradient: Optional[jax.Array] = eqx.field(default=None)
     influenceTensor: Optional[jax.Array] = eqx.field(default=None)
+    immediateInfluenceTensor: Optional[jax.Array] = eqx.field(default=None)
+    hessian: Optional[jax.Array] = eqx.field(default=None)
 
 
 class AllLogs(eqx.Module):
@@ -42,3 +44,7 @@ class AllLogs(eqx.Module):
     parameterNorm: jax.Array
     ohoGradient: jax.Array
     trainGradient: jax.Array
+    validationGradient: jax.Array
+    immediateInfluenceTensor: jax.Array
+    influenceTensor: jax.Array
+    hessian: jax.Array
