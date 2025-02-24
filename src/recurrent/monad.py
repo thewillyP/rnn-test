@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Callable, Generator, Iterable, NamedTuple
 
 from donotation import do
@@ -6,8 +7,8 @@ from pyrsistent.typing import PVector
 
 from recurrent.myfunc import foldr
 import jax
+import jax.numpy as jnp
 import equinox as eqx
-import functools as ft
 
 from recurrent.mytypes import Traversable, G
 
@@ -21,166 +22,170 @@ class PX[T](NamedTuple): ...
 class PX3[A, B, C](NamedTuple): ...
 
 
-class Fold[D, E, S, A](NamedTuple):
-    func: Callable[[D, E, S], tuple[A, S]]
+# maybe for jax
+class Maybe[T](eqx.Module):
+    isJust: jax.Array  # bool... why jax
+    payload: T
+
+    def __iter__(self) -> Generator[None, None, T]: ...  # type: ignore
+
+    def flat_map[B](self, func: Callable[[T], "Maybe[B]"]) -> "Maybe[B]":
+        shape_info = jax.eval_shape(func, self.payload)
+        return jax.lax.cond(
+            self.isJust,
+            lambda _: func(self.payload),
+            lambda _: nothing_shape(shape_info),
+            None,
+        )
+
+    def fmap[B](self, func: Callable[[T], B]) -> "Maybe[B]":
+        shape_info = jax.eval_shape(func, self.payload)
+        return jax.lax.cond(
+            self.isJust,
+            lambda _: just(func(self.payload)),
+            lambda _: nothing_shape(shape_info),
+            None,
+        )
+
+
+def just[T](value: T) -> Maybe[T]:
+    return Maybe(True, value)
+
+
+def nothing[T](value: T) -> Maybe[T]:
+    return Maybe(False, value)
+
+
+def nothing_shape[T](shape_info) -> Maybe[T]:
+    return nothing(jax.tree.map(lambda x: jnp.zeros(x.shape, dtype=x.dtype), shape_info))
+
+
+class App[I, R, S, A](NamedTuple):
+    func: Callable[[I, R, S], tuple[Maybe[A], S]]
 
     def __iter__(self) -> Generator[None, None, A]: ...  # type: ignore
 
-    def flat_map[B](self, func: Callable[[A], "Fold[D, E, S, B]"]):
-        def next(d: D, env: E, state: S) -> tuple[B, S]:
-            value, n_state = self.func(d, env, state)
-            return func(value).func(d, env, n_state)
+    def flat_map[B](self, func: Callable[[A], "App[I, R, S, B]"]):
+        def next(i: I, r: R, s: S) -> tuple[Maybe[B], S]:
+            value, n_state = self.func(i, r, s)
 
-        return Fold(next)
+            shape_info: Maybe[B] = jax.eval_shape(lambda x: func(x).func(i, r, n_state)[0], value.payload)
+            return jax.lax.cond(
+                value.isJust,
+                lambda _: func(value.payload).func(i, r, n_state),
+                lambda _: (nothing_shape(shape_info), n_state),
+                None,
+            )
+
+        return App(next)
 
     def fmap[B](self, func: Callable[[A], B]):
-        def next(d: D, env: E, state: S) -> tuple[B, S]:
-            value, n_state = self.func(d, env, state)
-            return func(value), n_state
+        def next(i: I, r: R, s: S) -> tuple[Maybe[B], S]:
+            value, n_state = self.func(i, r, s)
 
-        return Fold(next)
+            shape_info: B = jax.eval_shape(lambda x: func(x), value.payload)
+            return jax.lax.cond(
+                value.isJust,
+                lambda _: (just(func(value.payload)), n_state),
+                lambda _: (nothing_shape(shape_info), n_state),
+                None,
+            )
 
-    def then[B](self, m: "Fold[D, E, S, B]"):
+        return App(next)
+
+    def then[B](self, m: "App[I, R, S, B]"):
         return self.flat_map(lambda _: m)
 
-    def switch_dl[Pidgen](self, dl: D):
-        def next(_: Pidgen, env: E, state: S):
-            return self.func(dl, env, state)
+    def switch_dl[Pidgen](self, dl: I):
+        def next(_: Pidgen, r: R, s: S):
+            return self.func(dl, r, s)
 
-        return Fold(next)  # type: ignore
+        return App(next)  # type: ignore
 
-    def switch_data[E_new](self, data: E):
-        def next(d: D, _: E_new, state: S):
-            return self.func(d, data, state)
+    def switch_data[R_new](self, data: R):
+        def next(i: I, _: R_new, s: S):
+            return self.func(i, data, s)
 
-        return Fold(next)  # type: ignore
-
-
-def pure[D, E, S, A](value: A, _: PX3[D, E, S]) -> Fold[D, E, S, A]:
-    return Fold(lambda _d, _e, state: (value, state))
+        return App(next)  # type: ignore
 
 
-def get[D, E, S](_: PX[S]) -> Fold[D, E, S, S]:
-    return Fold(lambda _d, _e, state: (state, state))
+def pure[I, R, S, A](value: A, _: PX3[I, R, S]) -> App[I, R, S, A]:
+    return App(lambda _i, _r, s: (just(value), s))
 
 
-def put[D, E, S](new_state: S) -> Fold[D, E, S, Unit]:
-    return Fold(lambda _d, _e, _s: (Unit(), new_state))
+def app_nothing[I, R, S, A](value: A, _: PX3[I, R, S]) -> App[I, R, S, A]:
+    return App(lambda _i, _r, s: (nothing(value), s))
 
 
-def ask[D, E, S](_: PX[E]) -> Fold[D, E, S, E]:
-    return Fold(lambda _d, env, state: (env, state))
+def get[I, R, S](_: PX[S]) -> App[I, R, S, S]:
+    return App(lambda _i, _r, s: (just(s), s))
 
 
-def asks[D, E, S, A](func: Callable[[E], A]) -> Fold[D, E, S, A]:
-    return Fold(lambda _d, env, state: (func(env), state))
+def put[I, R, S](new_state: S) -> App[I, R, S, Unit]:
+    return App(lambda _i, _r, _s: (just(Unit()), new_state))
 
 
-def gets[D, E, S, A](func: Callable[[S], A]) -> Fold[D, E, S, A]:
-    return Fold(lambda _d, _e, state: (func(state), state))
+def ask[I, R, S](_: PX[R]) -> App[I, R, S, R]:
+    return App(lambda _i, r, s: (just(r), s))
 
 
-def modifies[D, E, S](func: Callable[[S], S]) -> Fold[D, E, S, Unit]:
-    return Fold(lambda _d, _e, state: (Unit(), func(state)))
+def asks[I, R, S, A](func: Callable[[R], A]) -> App[I, R, S, A]:
+    return App(lambda _i, r, s: (just(func(r)), s))
+
+
+def gets[I, R, S, A](func: Callable[[S], A]) -> App[I, R, S, A]:
+    return App(lambda _i, _r, s: (just(func(s)), s))
+
+
+def modifies[I, R, S](func: Callable[[S], S]) -> App[I, R, S, Unit]:
+    return App(lambda _i, _r, s: (just(Unit()), func(s)))
 
 
 @do()
-def modifies_[D, E, S, A](func: Callable[[S], tuple[A, S]]) -> G[Fold[D, E, S, A]]:
+def modifies_[I, R, S, A](func: Callable[[S], tuple[A, S]]) -> G[App[I, R, S, A]]:
     a, s = yield from gets(func)
     _ = yield from put(s)
-    return pure(a, PX[D, E, S]())
+    return pure(a, PX[I, R, S]())
 
 
-def askForInterpreter[D, E, S](_: PX[D]) -> Fold[D, E, S, D]:
-    return Fold(lambda d, _e, state: (d, state))
+def askForInterpreter[I, R, S](_: PX[I]) -> App[I, R, S, I]:
+    return App(lambda i, _r, s: (just(i), s))
 
 
-def stateToFold[D, E, S, T](func: Callable[[S], tuple[T, S]]) -> Fold[D, E, S, T]:
-    return Fold(lambda _d, _e, state: func(state))
+def repeatM[I, R, S, A](m: App[I, R, S, A]):
+    return traverseM(m).fmap(lambda _: Unit())
 
 
-def toFold[D, E, S, T](func: Callable[[E, S], tuple[T, S]]):
-    return Fold[D, E, S, T](lambda _d, env, state: func(env, state))  # type: ignore
+def traverseM[I, R, S, A](m: App[I, R, S, A]):
+    def wrapper(i: I, rs: Traversable[R], s: S) -> tuple[Maybe[Traversable[A]], S]:
+        def traverse(s_prev: S, r: R):
+            b, s_curr = m.func(i, r, s_prev)
+            return s_curr, b
+
+        new_state, bs = jax.lax.scan(traverse, s, rs.value)
+        bs_check = Maybe(jnp.all(bs.isJust), Traversable(bs.payload))
+        return bs_check, new_state
+
+    return App(wrapper)
 
 
-def repeatM[Dl, D, E, A](m: Fold[Dl, D, E, A]):
-    def wrapper(dl: Dl, ds: Traversable[D], state: E):
-        def repeat(s: E, d: D):
-            __, new_state = m.func(dl, d, s)
-            return new_state, None
-
-        env, _ = jax.lax.scan(repeat, state, ds.value)
-        return Unit(), env
-
-    return Fold(wrapper)
-
-
-def traverse[Dl, D, E, B](m: "Fold[Dl, D, E, B]"):
-    def wrapper(dl: Dl, ds: Traversable[D], state: E) -> tuple[Traversable[B], E]:
-        def traverse_(s_prev: E, d: D):
-            b, s = m.func(dl, d, s_prev)
-            return s, b
-
-        new_state, bs = jax.lax.scan(traverse_, state, ds.value)
-        return Traversable(bs), new_state
-
-    return Fold(wrapper)
-
-
-def accumulate[Dl, D, E, B](m: Fold[Dl, D, E, B], fn: Callable[[B, B], B], init: B):
+def accumulateM[I, R, S, A](m: App[I, R, S, A], fn: Callable[[A, A], A], init: A):
     return foldM(lambda accum: m.fmap(lambda value: fn(accum, value)), init)
 
 
-def foldM[Dl, D, E, B](func: Callable[[B], Fold[Dl, D, E, B]], init: B):
-    def wrapper(dl: Dl, ds: Traversable[D], state: E):
-        def fold(pair: tuple[B, E], d: D):
+def foldM[I, R, S, A](func: Callable[[A], App[I, R, S, A]], init: A):
+    def wrapper(i: I, rs: Traversable[R], s: S):
+        def fold(pair: tuple[Maybe[A], S], r: R) -> tuple[tuple[Maybe[A], S], None]:
             acc, s = pair
-            return func(acc).func(dl, d, s), None
+            pair_new = jax.lax.cond(
+                acc.isJust,
+                lambda _: func(acc.payload).func(i, r, s),
+                lambda _: (nothing(acc.payload), s),
+                None,
+            )
+            return pair_new, None
 
-        accum, _ = jax.lax.scan(fold, (init, state), ds.value)
+        accum, _ = jax.lax.scan(fold, (just(init), s), rs.value)
         return accum
 
-    return Fold(wrapper)
-
-
-# def reader(run: Callable[[R, S], Tuple[A, S]]) -> ReaderState[R, S, A]:
-#     return ReaderState[R, S, A](run)
-
-
-# # these guys need to be strict
-# def foldM(
-#     func: Callable[[B], ReaderState[A, S, B]], init: B
-# ) -> ReaderState[Iterable[A], S, B]:
-#     def wrapper(xs: Iterable[A], state: S) -> tuple[B, S]:
-#         def fold(x: A, pair: tuple[B, S]) -> tuple[B, S]:
-#             acc, state = pair
-#             return func(acc).run(x, state)
-
-#         return foldr(fold)(xs, (init, state))
-
-#     return ReaderState[Iterable[A], S, B](wrapper)
-
-
-# def executeM(func: ReaderState[A, S, B]) -> ReaderState[Iterable[A], S, S]:
-#     def call(a: A, state: S) -> S:
-#         _, state = func.run(a, state)
-#         return state
-
-#     def wrapper(xs: Iterable[A], state: S) -> tuple[S, S]:
-#         s = foldr(call)(xs, state)
-#         return s, s
-
-#     return ReaderState[Iterable[A], S, S](wrapper)
-
-
-# def traverse(func: ReaderState[A, S, B]) -> ReaderState[Iterable[A], S, Iterable[B]]:
-
-#     def traverse_(x: A, pair: tuple[PVector[B], S]) -> tuple[PVector[B], S]:
-#         acc, state = pair
-#         b, s = func.run(x, state)
-#         return acc.append(b), s
-
-#     def wrapper(xs: Iterable[A], state: S) -> tuple[PVector[B], S]:
-#         return foldr(traverse_)(xs, (pvector([]), state))
-
-#     return ReaderState[Iterable[A], S, Iterable[B]](wrapper)
+    return App(wrapper)
