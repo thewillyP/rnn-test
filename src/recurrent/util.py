@@ -8,6 +8,12 @@ import jax.numpy as jnp
 from recurrent.parameters import RnnParameter
 
 
+@eqx.filter_jit
+def pytree_norm(tree):
+    squared = jax.tree.map(lambda x: jnp.sum(x**2), tree)
+    return jnp.sqrt(jax.tree.reduce(jnp.add, squared))
+
+
 def prng_split(key: PRNG) -> tuple[PRNG, PRNG]:
     new_key, prng = jax.random.split(key)
     return PRNG(prng), PRNG(new_key)
