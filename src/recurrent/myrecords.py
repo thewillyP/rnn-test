@@ -1,18 +1,12 @@
 from dataclasses import dataclass
+from typing import Self
 from donotation import do
+
+from recurrent.datarecords import *
 from recurrent.monad import *
 from recurrent.mytypes import *
 from recurrent.parameters import *
 from recurrent.util import prng_split
-
-
-type MlApp[Data, A, B, X] = App[Interpreter[Data, A, B], Data, GodState[Data, A, B], X]
-
-
-@dataclass(frozen=True)
-class GodState[Data, A, B](eqx.Module):
-    states: list["State[Data, A, B]"]
-    prng: PRNG
 
 
 @dataclass(frozen=True)
@@ -27,13 +21,21 @@ class State(eqx.Module):
 
 
 @dataclass(frozen=True)
-class Interpreter[Data, A, B]:
-    type LocalApp[X] = MlApp[Data, A, B, X]
+class GodState(eqx.Module):
+    states: list[State]
+    prng: PRNG
+    logConfig: LogConfig = eqx.field(static=True)
 
-    getReccurentState: LocalApp[A]
-    putReccurentState: Callable[[A], LocalApp[Unit]]
-    getRecurrentParam: LocalApp[B]
-    putRecurrentParam: Callable[[B], LocalApp[Unit]]
+
+@dataclass(frozen=True)
+class GodInterpreter[Data]:
+    type LocalApp[X] = App[Self, Data, GodState, X]
+    type DataApp[X] = App[Self, DataGod, GodState, X]
+
+    getReccurentState: LocalApp[REC_STATE]
+    putReccurentState: Callable[[REC_STATE], LocalApp[Unit]]
+    getRecurrentParam: LocalApp[REC_PARAM]
+    putRecurrentParam: Callable[[REC_PARAM], LocalApp[Unit]]
 
     getActivation: LocalApp[ACTIVATION]
     putActivation: Callable[[ACTIVATION], LocalApp[Unit]]
@@ -42,10 +44,23 @@ class Interpreter[Data, A, B]:
     getUoro: LocalApp[UORO_Param]
     putUoro: Callable[[UORO_Param], LocalApp[Unit]]
     getRnnConfig: LocalApp[RnnConfig]
+    getLogConfig: LocalApp[LogConfig]
     putLogs: Callable[[Logs], LocalApp[Unit]]
+
+    getRnnParameter: LocalApp[RnnParameter]
+    putRnnParameter: Callable[[RnnParameter], LocalApp[Unit]]
+    getSgdParameter: LocalApp[SgdParameter]
+    putSgdParameter: Callable[[SgdParameter], LocalApp[Unit]]
 
     @do()
     def updatePRNG(self) -> G[LocalApp[PRNG]]:
         prng, new_prng = yield from gets(lambda e: prng_split(e.prng))
         _ = yield from modifies(lambda e: eqx.tree_at(lambda t: t.prng, e, new_prng))
         return pure(prng, PX3())
+
+    getInput: LocalApp[INPUT]
+    getLabel: LocalApp[LABEL]
+    getPredictionInput: LocalApp[PREDICTION_INPUT]
+
+    getInputOutput: DataApp[InputOutput]
+    getOhoInputOutput: DataApp[OhoInputOutput]

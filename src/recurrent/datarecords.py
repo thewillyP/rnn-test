@@ -12,3 +12,8 @@ class OhoInputOutput(eqx.Module):
     train: Traversable[InputOutput]
     validation: Traversable[InputOutput]
     labels: Traversable[jax.Array]
+
+
+class DataGod(eqx.Module):
+    inputOutput: InputOutput
+    ohoInputOutput: OhoInputOutput

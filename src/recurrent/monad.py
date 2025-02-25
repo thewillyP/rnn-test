@@ -117,6 +117,10 @@ def app_nothing[I, R, S, A](value: A, _: PX3[I, R, S]) -> App[I, R, S, A]:
     return App(lambda _i, _r, s: (nothing(value), s))
 
 
+def lift[I, R, S, A](value: Maybe[A], _: PX3[I, R, S]) -> App[I, R, S, A]:
+    return App(lambda _i, _r, s: (value, s))
+
+
 def get[I, R, S](_: PX[S]) -> App[I, R, S, S]:
     return App(lambda _i, _r, s: (just(s), s))
 

@@ -1,85 +1,116 @@
 from typing import Generic, Self
+from recurrent.datarecords import DataGod, InputOutput, OhoInputOutput
+from recurrent.myrecords import GodState
 from recurrent.mytypes import *
-from recurrent.parameters import (
-    RnnConfig,
-    UORO_Param,
-)
+from recurrent.parameters import *
 from typing import Protocol
 from recurrent.monad import *
 
 
 # ============== Typeclasses ==============
-class GetActivation[E, T](Protocol):
-    def getActivation[D](self) -> Fold[Self, D, E, T]: ...
 
 
-class PutActivation[E, T](Protocol):
-    def putActivation[D](self, s: T) -> Fold[Self, D, E, Unit]: ...
+class GetRecurrentState(Protocol):
+    @property
+    def getRecurrentState(self) -> App[Self, DataGod, GodState, REC_STATE]: ...
 
 
-class GetParameter[E, T](Protocol):
-    def getParameter[D](self) -> Fold[Self, D, E, T]: ...
+class PutRecurrentState(Protocol):
+    def putRecurrentState(self, s: REC_STATE) -> App[Self, DataGod, GodState, Unit]: ...
 
 
-class PutParameter[E, T](Protocol):
-    def putParameter[D](self, s: T) -> Fold[Self, D, E, Unit]: ...
+class GetRecurrentParam(Protocol):
+    @property
+    def getRecurrentParam(self) -> App[Self, DataGod, GodState, REC_PARAM]: ...
 
 
-class GetHyperParameter[E, T](Protocol):
-    def getHyperParameter[D](self) -> Fold[Self, D, E, T]: ...
+class PutRecurrentParam(Protocol):
+    def putRecurrentParam(self, s: REC_PARAM) -> App[Self, DataGod, GodState, Unit]: ...
 
 
-class PutHyperParameter[E, T](Protocol):
-    def putHyperParameter[D](self, s: T) -> Fold[Self, D, E, Unit]: ...
+class GetActivation(Protocol):
+    @property
+    def getActivation(self) -> App[Self, DataGod, GodState, ACTIVATION]: ...
 
 
-class GetInfluenceTensor[E, T](Protocol):
-    def getInfluenceTensor[D](self) -> Fold[Self, D, E, T]: ...
+class PutActivation(Protocol):
+    def putActivation(self, s: ACTIVATION) -> App[Self, DataGod, GodState, Unit]: ...
 
 
-class PutInfluenceTensor[E, T](Protocol):
-    def putInfluenceTensor[D](self, s: T) -> Fold[Self, D, E, Unit]: ...
+class GetRnnParameter(Protocol):
+    @property
+    def getRnnParameter(self) -> App[Self, DataGod, GodState, RnnParameter]: ...
 
 
-class GetRnnConfig[E](Protocol):
-    def getRnnConfig[D](self) -> Fold[Self, D, E, RnnConfig]: ...
+class PutRnnParameter(Protocol):
+    def putRnnParameter(self, s: RnnParameter) -> App[Self, DataGod, GodState, Unit]: ...
 
 
-class HasInput[D, T](Protocol):
-    def getInput[E](self) -> Fold[Self, D, E, T]: ...
+class GetSgdParameter(Protocol):
+    @property
+    def getSgdParameter(self) -> App[Self, DataGod, GodState, SgdParameter]: ...
 
 
-class HasPredictionInput[D, T](Protocol):
-    def getPredictionInput[E](self) -> Fold[Self, D, E, T]: ...
+class PutSgdParameter(Protocol):
+    def putSgdParameter(self, s: SgdParameter) -> App[Self, DataGod, GodState, Unit]: ...
 
 
-class HasLabel[D, T](Protocol):
-    def getLabel[E](self) -> Fold[Self, D, E, T]: ...
+class GetInfluenceTensor(Protocol):
+    @property
+    def getInfluenceTensor(self) -> App[Self, DataGod, GodState, JACOBIAN]: ...
 
 
-class GetUORO[E](Protocol):
-    def getUORO[D](self) -> Fold[Self, D, E, UORO_Param]: ...
+class PutInfluenceTensor(Protocol):
+    def putInfluenceTensor(self, s: JACOBIAN) -> App[Self, DataGod, GodState, Unit]: ...
 
 
-class PutUORO[E](Protocol):
-    def putUORO[D](self, s: UORO_Param) -> Fold[Self, D, E, Unit]: ...
+class GetUoro(Protocol):
+    @property
+    def getUoro(self) -> App[Self, DataGod, GodState, UORO_Param]: ...
 
 
-class HasPRNG[E, T](Protocol):
-    def generatePRNG[D](self) -> Fold[Self, D, E, tuple[T, T]]: ...
-
-    def putPRNG[D](self, s: T) -> Fold[Self, D, E, Unit]: ...
-
-    @do()
-    def updatePRNG[D, E](self) -> G[Fold[Self, D, E, T]]:
-        prng, new_prng = yield from self.generatePRNG()
-        _ = yield from self.putPRNG(new_prng)
-        return pure(prng, PX3[Self, D, E]())
+class PutUoro(Protocol):
+    def putUoro(self, s: UORO_Param) -> App[Self, DataGod, GodState, Unit]: ...
 
 
-class PutLog[E, T](Protocol):
-    def putLog[D](self, s: T) -> Fold[Self, D, E, Unit]: ...
+class GetRnnConfig(Protocol):
+    @property
+    def getRnnConfig(self) -> App[Self, DataGod, GodState, RnnConfig]: ...
 
 
-class GetLog[E, T](Protocol):
-    def getLog[D](self) -> Fold[Self, D, E, T]: ...
+class PutLogs(Protocol):
+    def putLogs(self, s: Logs) -> App[Self, DataGod, GodState, Unit]: ...
+
+
+class GetLogConfig(Protocol):
+    @property
+    def getLogConfig(self) -> App[Self, DataGod, GodState, LogConfig]: ...
+
+
+class GetInput(Protocol):
+    @property
+    def getInput(self) -> App[Self, DataGod, GodState, INPUT]: ...
+
+
+class GetLabel(Protocol):
+    @property
+    def getLabel(self) -> App[Self, DataGod, GodState, LABEL]: ...
+
+
+class GetPredictionInput(Protocol):
+    @property
+    def getPredictionInput(self) -> App[Self, DataGod, GodState, PREDICTION_INPUT]: ...
+
+
+class GetInputOutput(Protocol):
+    @property
+    def getInputOutput(self) -> App[Self, DataGod, GodState, InputOutput]: ...
+
+
+class GetOhoInputOutput(Protocol):
+    @property
+    def getOhoInputOutput(self) -> App[Self, DataGod, GodState, OhoInputOutput]: ...
+
+
+class GetPRNG(Protocol):
+    def updatePRNG(self) -> App[Self, DataGod, GodState, PRNG]: ...

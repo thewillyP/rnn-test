@@ -28,6 +28,16 @@ class Jacobian[T: CanDiff](Module):
 
 ACTIVATION = NewType("ACTIVATION", jax.Array)
 PREDICTION = NewType("PREDICTION", jax.Array)
+GRADIENT = NewType("GRADIENT", jax.Array)  # is a vector
+JACOBIAN = NewType("JACOBIAN", jax.Array)  # is a matrix
+
+INPUT = NewType("INPUT", jax.Array)  # is a vector
+LABEL = NewType("LABEL", jax.Array)  # is a vector
+PREDICTION_INPUT = NewType("PREDICTION_INPUT", jax.Array)  # is a vector
+
+REC_STATE = NewType("REC_STATE", jax.Array)  # is a vector
+REC_PARAM = NewType("REC_PARAM", jax.Array)  # is a vector
+
 LOSS = NewType("LOSS", jax.Array)  # is a scalar
 PRNG = NewType("PRNG", jax.Array)
 

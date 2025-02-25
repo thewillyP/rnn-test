@@ -48,3 +48,7 @@ class AllLogs(eqx.Module):
     immediateInfluenceTensor: jax.Array
     influenceTensor: jax.Array
     hessian: jax.Array
+
+
+class LogConfig(eqx.Module):
+    doLog: bool = eqx.field(static=True)

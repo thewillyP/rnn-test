@@ -1064,77 +1064,497 @@
 # print("new gradient norm", jnp.linalg.norm(updates))
 
 
-from typing import Callable
+# from typing import Callable
+# import jax
+# import jax.numpy as jnp
+# import optax
+# import equinox as eqx
+
+# jax.config.update("jax_enable_x64", True)
+
+
+# class IsVector[T](eqx.Module):
+#     vector: jax.Array
+#     toParam: Callable[[jax.Array], T] = eqx.field(static=True)
+
+
+# def endowVector[T](tree: T) -> IsVector[T]:
+#     vector, toParam = jax.flatten_util.ravel_pytree(tree)
+#     return IsVector(vector=vector, toParam=toParam)
+
+
+# def toVector[T](isVector: IsVector[T]) -> jax.Array:
+#     return isVector.vector
+
+
+# def toParam[T](isVector: IsVector[T]) -> T:
+#     return isVector.toParam(isVector.vector)
+
+
+# # Simple quadratic loss
+# def loss_fn(params):
+#     return jnp.sum(params**2)
+
+
+# # Meta-loss function (evaluated after training)
+# def meta_loss_fn(params):
+#     return jnp.sum((params - 1.0) ** 2)
+
+
+# # Train function with optimizer unrolling
+# def train(params, opt_state, lr, steps=10):
+#     opt = optax.adam(lr)
+#     for _ in range(steps):
+#         grads = jax.grad(loss_fn)(params)
+#         updates, opt_state = opt.update(grads, opt_state, params)
+#         params = optax.apply_updates(params, updates)
+#         jax.debug.print("{}", toVector(endowVector(opt_state)))
+#     return params, opt_state
+
+
+# lr = 0.1
+# params = jnp.array([1.0, -1.0])
+# opt_state = optax.EmptyState()
+# meta_optimize = lambda lr_: meta_loss_fn(train(params, opt_state, lr_, steps=10)[0])
+
+# # Compute autodiff gradient
+# lr_grad_autodiff = jax.grad(meta_optimize)(0.1)
+
+# # Compute finite difference approximation
+# eps = 1e-4
+# meta_loss_plus = meta_optimize(0.1 + eps)
+# meta_loss_minus = meta_optimize(0.1 - eps)
+# lr_grad_finite_diff = (meta_loss_plus - meta_loss_minus) / (2 * eps)
+
+# # Print results
+# print(f"Autodiff gradient: {lr_grad_autodiff}")
+# print(f"Finite difference gradient: {lr_grad_finite_diff}")
+# print(f"Relative difference: {abs(lr_grad_autodiff - lr_grad_finite_diff) / abs(lr_grad_finite_diff)}")
+
+# opt_state_vec = endowVector(opt_state)
+# opt_fn = lambda vec: toVector(endowVector(train(params, opt_state_vec.toParam(vec), lr, steps=10)[1]))
+# jacobian = jax.jacobian(opt_fn)(toVector(opt_state_vec))
+
+# jnp.set_printoptions(precision=3)
+# jax.debug.print("\n{}", jacobian)
+# print(opt_state)
+
+
+# from jax import numpy as jnp
+# import jax
+# from typing import NamedTuple, Tuple
+
+
+# class Nothing(NamedTuple): ...
+
+
+# class Just[T](NamedTuple):
+#     a: T
+
+
+# type Maybe[T] = Just[T] | Nothing
+
+
+# def process_maybe(prev_state: float, current_value: float) -> Tuple[float, Maybe[float]]:
+#     # if current_value == 0:
+#     #     return prev_state, Nothing()
+#     # else:
+#     #     new_value = prev_state + current_value
+#     #     return new_value, Just(new_value)
+
+#     return jax.lax.cond(
+#         current_value == 0, lambda x: (x, None), lambda x: (x + current_value, x + current_value), prev_state
+#     )
+
+
+# # The scan function that uses process_maybe
+# def scan_example(maybe_values: jnp.ndarray) -> Tuple[float, jnp.ndarray]:
+#     init_state = 0.0
+#     final_state, outputs = jax.lax.scan(process_maybe, init_state, maybe_values)
+#     return final_state, outputs
+
+
+# # Example usage
+# maybe_values = jnp.array([1.0, 2.0, 3.0, 0.0])  # Assuming we treat 0.0 as Nothing
+# final_state, outputs = scan_example(maybe_values)
+
+# print("Final State:", final_state)
+# print("Outputs:", outputs)
+
+
+# import jax
+# import jax.numpy as jnp
+# from typing import Dict, Any
+# import equinox as eqx
+
+
+# class Test(eqx.Module):
+#     tensor: jax.Array
+#     static: str = eqx.field(static=True)
+
+
+# # Define a function that returns a pytree with static fields
+# def my_function(x):
+#     return Test(tensor=x * 2, static="static_value")
+
+
+# # Evaluate shape without computation
+# shape_info = jax.eval_shape(my_function, jnp.ones((3, 3)))
+# zero_initialized = jax.tree.map(lambda x: jnp.zeros(x.shape, dtype=x.dtype), shape_info)
+# print(zero_initialized.tensor)  # Should be (3, 3)
+
+
+# # Define a new function g that transforms a PyTree
+# def g(tree: Test):
+#     return Test(tensor=tree.tensor + 1, static=tree.static)
+
+
+# g_shape_info = jax.eval_shape(g, zero_initialized)
+# zero_initialized = jax.tree.map(lambda x: jnp.zeros(x.shape, dtype=x.dtype), g_shape_info)
+# print(zero_initialized.tensor)  # Should be (3, 3)
+
+# # # Define a function that maps one pytree to another
+# # def map_pytree(pytree):
+# #     return jax.tree_map(lambda x: x if isinstance(x, str) else x + 1, pytree)
+
+
+# # # Test mapping function with eval_shape
+# # mapped_shape_info = jax.eval_shape(map_pytree, shape_info)
+# # print(jax.tree_map(lambda leaf: leaf if isinstance(leaf, str) else (leaf.shape, leaf.dtype), mapped_shape_info))
+
+# import jax
+# import jax.numpy as jnp
+# import equinox as eqx
+
+
+# class MyPyTree(eqx.Module):
+#     data: jnp.ndarray  # Batched (N, D) array
+#     condition: bool = eqx.field(static=True)  # Static field
+
+
+# @eqx.filter_jit
+# def use_lax_cond(pytree: MyPyTree) -> jnp.ndarray:
+#     """Applies jax.lax.cond based on the PyTree's condition."""
+#     return jax.vmap(
+#         lambda x: jax.lax.cond(
+#             pytree.condition,
+#             lambda _: x**2,  # If condition=True → Square
+#             lambda _: x + 1,  # If condition=False → Add 1
+#             operand=None,
+#         )
+#     )(pytree.data)
+
+
+# # Single PyTree with stacked data
+# batched_pytree = MyPyTree(
+#     data=jnp.array(
+#         [
+#             [1.0, 2.0, 3.0],  # Batch 1
+#             [4.0, 5.0, 6.0],  # Batch 2
+#         ]
+#     ),
+#     condition=False,  # Static field
+# )
+
+# # Apply function
+# result = use_lax_cond(batched_pytree)
+
+# print(result)
+
+
+# import jax
+# import jax.numpy as jnp
+# import equinox as eqx
+
+
+# class MyPyTree(eqx.Module):
+#     data: jnp.ndarray  # (Batch, Features)
+#     condition: bool = eqx.field(static=True)  # Static field
+
+
+# @eqx.filter_jit
+# def use_lax_cond(pytree: MyPyTree) -> MyPyTree:
+#     """Applies jax.lax.cond based on the PyTree's condition and returns a new PyTree."""
+#     new_data = jax.vmap(
+#         lambda x: jax.lax.cond(
+#             pytree.condition,
+#             lambda _: x**2,  # If condition=True → Square
+#             lambda _: x + 1,  # If condition=False → Add 1
+#             operand=None,
+#         )
+#     )(pytree.data)
+
+#     return MyPyTree(data=new_data, condition=pytree.condition)
+
+
+# def step_fn(carry: MyPyTree, _):
+#     """One scan step: applies transformation and returns updated PyTree."""
+#     new_pytree = use_lax_cond(carry)
+#     return new_pytree, new_pytree  # Carry and output both return PyTree
+
+
+# # Initial state
+# initial_pytree = MyPyTree(
+#     data=jnp.array(
+#         [
+#             [1.0, 2.0, 3.0],  # Batch 1
+#             [4.0, 5.0, 6.0],  # Batch 2
+#         ]
+#     ),
+#     condition=True,  # Static field
+# )
+
+# # Scan over 3 steps
+# T = 3
+# final_pytree, pytree_history = jax.lax.scan(step_fn, initial_pytree, None, length=T)
+
+# print("Final PyTree Data:\n", final_pytree.data)
+# print("\nHistory of PyTrees:")
+# for i, pytree in enumerate(pytree_history.data):
+#     print(f"Step {i + 1}:\n", pytree)
+
+# import jax
+# import jax.numpy as jnp
+# import equinox as eqx
+
+
+# class MyPyTree(eqx.Module):
+#     data: jnp.ndarray  # (Batch, Features)
+#     condition: bool
+
+
+# @eqx.filter_jit
+# def use_lax_cond(pytree: MyPyTree) -> MyPyTree:
+#     """Applies jax.lax.cond based on the PyTree's condition and returns a new PyTree."""
+#     new_data = jax.vmap(
+#         lambda x: jax.lax.cond(
+#             pytree.condition,
+#             lambda _: x**2,  # If condition=True → Square
+#             lambda _: x + 1,  # If condition=False → Add 1
+#             operand=None,
+#         )
+#     )(pytree.data)
+
+#     return MyPyTree(data=new_data, condition=pytree.condition)
+
+
+# def step_fn(carry: MyPyTree, step_index):
+#     """Scan step: modifies condition at a specific step."""
+#     new_pytree = use_lax_cond(carry)
+
+#     # Change condition to False at step 2
+#     new_condition = step_index < 1  # True for step 0, False for step 1 onward
+
+#     updated_pytree = MyPyTree(data=new_pytree.data, condition=new_condition)
+#     return updated_pytree, updated_pytree  # Carry & output both return PyTree
+
+
+# # Initial state
+# initial_pytree = MyPyTree(
+#     data=jnp.array(
+#         [
+#             [1.0, 2.0, 3.0],  # Batch 1
+#             [4.0, 5.0, 6.0],  # Batch 2
+#         ]
+#     ),
+#     condition=True,  # Now a normal JAX boolean, not static
+# )
+
+# # Scan over 3 steps
+# T = 3
+# final_pytree, pytree_history = jax.lax.scan(step_fn, initial_pytree, jnp.arange(T))
+
+# print(pytree_history.condition)
+
+# print("Final PyTree Data:\n", final_pytree.data)
+# print("\nHistory of PyTrees:")
+# for i, pytree in enumerate(pytree_history.data):
+#     print(f"Step {i + 1}:\n", pytree)
+
+
+# import jax
+# import jax.numpy as jnp
+# import equinox as eqx
+
+
+# class MyPyTree(eqx.Module):
+#     data: jnp.ndarray  # (Batch, Features)
+#     condition: jnp.ndarray
+
+
+# # Define the scan function
+# def scan_fn(carry, x):
+#     arr, flag = carry.data, carry.condition
+#     new_arr = arr + x  # Example operation
+#     new_flag = False  # Change flag to False after first step
+#     return MyPyTree(data=new_arr, condition=new_flag), new_arr
+
+
+# # Inputs
+# xs = jnp.array([1, 2, 3, 4])
+# initial_carry = MyPyTree(data=jnp.array(0), condition=True)
+
+# # Run scan
+# final_carry, outputs = jax.lax.scan(scan_fn, initial_carry, xs)
+# print(final_carry.condition)
+# print("Final carry:", final_carry)
+# print("Outputs:", outputs)
+
+
+# import jax
+# import jax.numpy as jnp
+# import time
+
+
+# # Define function using jax.lax.scan
+# def scan_cumsum(xs):
+#     def body(carry, x):
+#         carry = carry + x
+#         return carry, carry
+
+#     _, result = jax.lax.scan(body, 0.0, xs)
+#     return result
+
+
+# # Define function using a jitted for-loop
+# def loop_cumsum(xs):
+#     carry = 0.0
+#     result = []
+#     for x in xs:
+#         carry += x
+#         result.append(carry)
+#     return jnp.array(result)
+
+
+# # Generate test data
+# xs = jnp.arange(10_000, dtype=jnp.float32)
+
+# # Measure compile time for scan
+# t0 = time.time()
+# scan_cumsum_jit = jax.jit(scan_cumsum)  # JIT compile
+# scan_cumsum_jit(xs).block_until_ready()  # Trigger compilation
+# t1 = time.time()
+# scan_compile_time = t1 - t0
+
+# # Measure execution time for scan
+# t0 = time.time()
+# scan_cumsum_jit(xs).block_until_ready()
+# t1 = time.time()
+# scan_exec_time = t1 - t0
+
+# # Measure compile time for loop
+# t0 = time.time()
+# loop_cumsum_jit = jax.jit(loop_cumsum)  # JIT compile
+# loop_cumsum_jit(xs).block_until_ready()  # Trigger compilation
+# t1 = time.time()
+# loop_compile_time = t1 - t0
+
+# # Measure execution time for loop
+# t0 = time.time()
+# loop_cumsum_jit(xs).block_until_ready()
+# t1 = time.time()
+# loop_exec_time = t1 - t0
+
+# # Print results
+# print(f"JAX Scan Compile Time: {scan_compile_time:.6f} sec")
+# print(f"JAX Scan Execution Time: {scan_exec_time:.6f} sec")
+# print(f"Jitted Loop Compile Time: {loop_compile_time:.6f} sec")
+# print(f"Jitted Loop Execution Time: {loop_exec_time:.6f} sec")
+
+
+# import jax
+# import jax.numpy as jnp
+
+
+# def scan_fn(carry, x):
+#     new_carry = lambda y: carry(x(y))  # Chain the functions
+#     return new_carry, None
+
+
+# # Initial carry is the identity function
+# init_carry = lambda x: x
+
+# # Inputs to the scan (could be any functions)
+# inputs = [lambda x: x + 1, lambda x: x * 2, lambda x: x - 3]
+
+# final_carry, _ = jax.lax.scan(scan_fn, init_carry, inputs)
+
+# # Test the resulting function
+# x = 5
+# print(final_carry(x))  # Should compute ((5 + 1) * 2) - 3
+
+
+# from dataclasses import dataclass
+
+
+# class Test[A]:
+#     type test = list[A]
+
+#     def __init__(self, tttt: test):
+#         self.tttt = tttt
+
+
+# a = Test[int]([1, 2, 3])
+
+
+# import jax
+# import jax.numpy as jnp
+# import equinox as eqx
+
+
+# # Define the PyTree as an Equinox Module
+# class MyPyTree(eqx.Module):
+#     condition: bool
+#     value: jax.Array
+
+
+# # Define a function operating on the PyTree
+# def my_function(pytree: MyPyTree):
+#     return jnp.sum(pytree.value**2) if pytree.condition else jnp.sum(pytree.value)
+
+
+# # Compute the gradient w.r.t. the PyTree value
+# grad_fn = eqx.filter_jacrev(my_function)
+
+# # Create an instance of MyPyTree
+# pytree_instance = MyPyTree(condition=True, value=jnp.array([1.0, 2.0, 3.0]))
+
+# # Compute and print the gradient
+# grad_result = grad_fn(pytree_instance)
+# print(grad_result)
+
+
 import jax
 import jax.numpy as jnp
-import optax
 import equinox as eqx
-
-jax.config.update("jax_enable_x64", True)
-
-
-class IsVector[T](eqx.Module):
-    vector: jax.Array
-    toParam: Callable[[jax.Array], T] = eqx.field(static=True)
+import jax.lax as lax
 
 
-def endowVector[T](tree: T) -> IsVector[T]:
-    vector, toParam = jax.flatten_util.ravel_pytree(tree)
-    return IsVector(vector=vector, toParam=toParam)
+# Define the PyTree as an Equinox Module
+class MyPyTree(eqx.Module):
+    condition: bool
+    value: jax.Array
 
 
-def toVector[T](isVector: IsVector[T]) -> jax.Array:
-    return isVector.vector
+# Define a function operating on the PyTree
+def my_function(pytree: MyPyTree) -> MyPyTree:
+    condition = pytree.condition
+    new_value = lax.cond(
+        condition,
+        lambda _: pytree.value**2,  # If True, square the values
+        lambda _: pytree.value + 1,  # If False, add 1 to values
+        operand=None,
+    )
+    return new_value, condition
 
 
-def toParam[T](isVector: IsVector[T]) -> T:
-    return isVector.toParam(isVector.vector)
+# Compute the gradient w.r.t. the PyTree value
+grad_fn = eqx.filter_jacrev(my_function, has_aux=True)
 
+# Create an instance of MyPyTree
+pytree_instance = MyPyTree(condition=True, value=jnp.array([1.0, 2.0, 3.0]))
 
-# Simple quadratic loss
-def loss_fn(params):
-    return jnp.sum(params**2)
-
-
-# Meta-loss function (evaluated after training)
-def meta_loss_fn(params):
-    return jnp.sum((params - 1.0) ** 2)
-
-
-# Train function with optimizer unrolling
-def train(params, opt_state, lr, steps=10):
-    opt = optax.adam(lr)
-    for _ in range(steps):
-        grads = jax.grad(loss_fn)(params)
-        updates, opt_state = opt.update(grads, opt_state, params)
-        params = optax.apply_updates(params, updates)
-        jax.debug.print("{}", toVector(endowVector(opt_state)))
-    return params, opt_state
-
-
-lr = 0.1
-params = jnp.array([1.0, -1.0])
-opt_state = optax.EmptyState()
-meta_optimize = lambda lr_: meta_loss_fn(train(params, opt_state, lr_, steps=10)[0])
-
-# Compute autodiff gradient
-lr_grad_autodiff = jax.grad(meta_optimize)(0.1)
-
-# Compute finite difference approximation
-eps = 1e-4
-meta_loss_plus = meta_optimize(0.1 + eps)
-meta_loss_minus = meta_optimize(0.1 - eps)
-lr_grad_finite_diff = (meta_loss_plus - meta_loss_minus) / (2 * eps)
-
-# Print results
-print(f"Autodiff gradient: {lr_grad_autodiff}")
-print(f"Finite difference gradient: {lr_grad_finite_diff}")
-print(f"Relative difference: {abs(lr_grad_autodiff - lr_grad_finite_diff) / abs(lr_grad_finite_diff)}")
-
-opt_state_vec = endowVector(opt_state)
-opt_fn = lambda vec: toVector(endowVector(train(params, opt_state_vec.toParam(vec), lr, steps=10)[1]))
-jacobian = jax.jacobian(opt_fn)(toVector(opt_state_vec))
-
-jnp.set_printoptions(precision=3)
-jax.debug.print("\n{}", jacobian)
-print(opt_state)
+# Compute and print the gradient
+grad_result, condition = grad_fn(pytree_instance)
+print(grad_result)
+print(condition)
