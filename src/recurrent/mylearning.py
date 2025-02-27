@@ -36,8 +36,8 @@ class Library[Data, Interpreter, Pred](NamedTuple):
     modelGradient: Controller[Data, Interpreter, Gradient[REC_PARAM]]
 
 
-class CreateLearner[Data, Interpreter, Pred](Protocol):
-    def createLearner(
+class CreateLearner(Protocol):
+    def createLearner[Data, Interpreter, Pred](
         self,
         activationStep: Controller[Data, Interpreter, REC_STATE],
         readoutStep: Controller[Data, Interpreter, Pred],
@@ -245,7 +245,7 @@ class _ReadoutRecurrentError_Can(
 ): ...
 
 
-def readoutRecurrentError[Interpreter: _ReadoutRecurrentError_Can, Data, Pred](
+def readoutRecurrentError[Data, Interpreter: _ReadoutRecurrentError_Can, Pred](
     predictionStep: Controller[Data, Interpreter, Pred], lossFunction: LossFn[Pred, Data]
 ) -> Controller[Data, Interpreter, Gradient[REC_STATE]]:
     @do()
@@ -275,8 +275,8 @@ def readoutRecurrentError[Interpreter: _ReadoutRecurrentError_Can, Data, Pred](
 #     return pure(Gradient(gr_summed))
 
 
-class IdentityLearner[Data, Interpreter: GetRecurrentParam, Pred]:
-    def createLearner(
+class IdentityLearner:
+    def createLearner[Data, Interpreter: GetRecurrentParam, Pred](
         self,
         activationStep: Controller[Data, Interpreter, REC_STATE],
         readoutStep: Controller[Data, Interpreter, Pred],
@@ -304,7 +304,7 @@ class OfflineLearning:
         Protocol,
     ): ...
 
-    def createLearner[Interpreter: _OfflineLearner_Can, Data, Pred](
+    def createLearner[Data, Interpreter: _OfflineLearner_Can, Pred](
         self,
         activationStep: Controller[Data, Interpreter, REC_STATE],
         readoutStep: Controller[Data, Interpreter, Pred],
@@ -320,7 +320,6 @@ class OfflineLearning:
             interpreter: Interpreter = yield from ask(PX[Interpreter]())
             return doGradient(rnnWithLoss(data), interpreter.getRecurrentParam, interpreter.putRecurrentParam)
 
-        xdf = traverseM(rnnStep)
         return Library(
             model=traverseM(rnnStep),
             modelLossFn=rnnWithLoss,
@@ -328,36 +327,35 @@ class OfflineLearning:
         )
 
 
-class PastFacingLearn[Data, Pred]:
+# technically this inheritance setup is wrong, these should be factories instead but I am a poor man
+# the Interpreter typing is technically incorrect
+class PastFacingLearn(ABC):
     @abstractmethod
     def creditAssignment[Interpreter](
         self,
-        recurrentError: MlApp[Interpreter, Data, Gradient[REC_STATE]],
-        activationStep: MlApp[Interpreter, Data, REC_STATE],
-    ) -> MlApp[Interpreter, Data, Gradient[REC_PARAM]]: ...
+        recurrentError: Agent[Interpreter, Gradient[REC_STATE]],
+        activationStep: Agent[Interpreter, REC_STATE],
+    ) -> Agent[Interpreter, Gradient[REC_PARAM]]: ...
 
     class _CreateModel_Can(PutRecurrentState, PutRecurrentParam, Protocol): ...
 
     @staticmethod
-    def createRnnForward[Interpreter: _CreateModel_Can](
-        activationStep: MlApp[Interpreter, Data, REC_STATE],
-    ):
+    def createRnnForward[Interpreter: _CreateModel_Can](activationStep: Agent[Interpreter, REC_STATE]):
         @do()
         def _creatingModel():
-            interpreter = yield from askForInterpreter(PX[Interpreter]())
-            data = yield from ask(PX[Data]())
+            interpreter = yield from ask(PX[Interpreter]())
             env = yield from get(PX[GodState]())
 
-            def parametrized(actv_vec: REC_STATE, param_vec: REC_PARAM):
+            def agentFn(actv: REC_STATE, param: REC_PARAM) -> tuple[REC_STATE, tuple[Maybe[REC_STATE], GodState]]:
                 maybe, s = (
-                    interpreter.putRecurrentState(actv_vec)
-                    .then(interpreter.putRecurrentParam(param_vec))
+                    interpreter.putRecurrentState(actv)
+                    .then(interpreter.putRecurrentParam(param))
                     .then(activationStep)
-                    .func(interpreter, data, env)
+                    .func(interpreter, env)
                 )
                 return maybe.payload, (maybe, s)
 
-            return pure(parametrized, PX3[Interpreter, Data, GodState]())
+            return pure(agentFn, PX[tuple[Interpreter, GodState]]())
 
         return _creatingModel()
 
@@ -366,75 +364,76 @@ class PastFacingLearn[Data, Pred]:
         PutRecurrentState,
         GetRecurrentParam,
         PutRecurrentParam,
-        GetLabel,
         Protocol,
     ): ...
 
-    def createLearner[Interpreter: _PastFacingLearner_Can](
+    def createLearner[Data, Interpreter: _PastFacingLearner_Can, Pred](
         self,
-        activationStep: MlApp[Interpreter, Data, REC_STATE],
-        readoutStep: MlApp[Interpreter, Data, Pred],
-        lossFunction: LossFn[Pred],
-        lossGradientWrtActiv: MlApp[Interpreter, Data, Gradient[REC_STATE]],
-    ):
-        willGetImmediateLoss = readoutStep.flat_map(doLoss(lossFunction))
+        activationStep: Controller[Data, Interpreter, REC_STATE],
+        readoutStep: Controller[Data, Interpreter, Pred],
+        lossFunction: LossFn[Pred, Data],
+        lossGradientWrtActiv: Controller[Data, Interpreter, Gradient[REC_STATE]],
+    ) -> Library[Data, Interpreter, Pred]:
+        def immediateLoss(data: Data):
+            return readoutStep(data).fmap(lambda p: lossFunction(p, data))
 
         @do()
-        def rnnGradient() -> G[MlApp[Interpreter, Data, Gradient[REC_PARAM]]]:
-            interpreter = yield from askForInterpreter(PX[Interpreter]())
+        def rnnGradient(data: Data) -> G[Agent[Interpreter, Gradient[REC_PARAM]]]:
+            interpreter = yield from ask(PX[Interpreter]())
 
             # order matters, need to update readout (grad_o) AFTER updating activation (grad_rec updates it)
-            grad_rec = yield from self.creditAssignment(lossGradientWrtActiv, activationStep)
+            grad_rec = yield from self.creditAssignment(lossGradientWrtActiv(data), activationStep(data))
             grad_readout = yield from doGradient(
-                willGetImmediateLoss,
+                immediateLoss(data),
                 interpreter.getRecurrentParam,
                 interpreter.putRecurrentParam,
             )
 
-            return pure(grad_rec + grad_readout, PX3[Interpreter, Data, GodState]())
+            return pure(grad_rec + grad_readout, PX[tuple[Interpreter, GodState]]())
 
         return Library(
-            model=activationStep.then(readoutStep),
-            modelLossFn=activationStep.then(willGetImmediateLoss),
-            modelGradient=activationStep.then(rnnGradient()),
+            model=lambda data: activationStep(data).then(readoutStep(data)),
+            modelLossFn=lambda data: activationStep(data).then(immediateLoss(data)),
+            modelGradient=rnnGradient,
         )
 
 
-class InfluenceTensorLearner[Data, Pred](PastFacingLearn[Data, Pred]):
+class InfluenceTensorLearner(PastFacingLearn, ABC):
     class _InfluenceTensorLearner_Can(
         GetInfluenceTensor,
         PutInfluenceTensor,
-        PastFacingLearn[Data, Pred]._PastFacingLearner_Can,
+        PastFacingLearn._PastFacingLearner_Can,
         PutLogs,
         Protocol,
     ): ...
 
     @abstractmethod
     def getInfluenceTensor[Interpreter](
-        self, activationStep: MlApp[Interpreter, Data, REC_STATE]
-    ) -> MlApp[Interpreter, Data, Jacobian[REC_PARAM]]: ...
+        self, activationStep: Agent[Interpreter, REC_STATE]
+    ) -> Agent[Interpreter, Jacobian[REC_PARAM]]: ...
 
     def creditAssignment[Interpreter: _InfluenceTensorLearner_Can](
         self,
-        recurrentError: MlApp[Interpreter, Data, Gradient[REC_STATE]],
-        activationStep: MlApp[Interpreter, Data, REC_STATE],
-    ) -> App[Interpreter, Data, GodState, Gradient[REC_PARAM]]:
+        recurrentError: Agent[Interpreter, Gradient[REC_STATE]],
+        activationStep: Agent[Interpreter, REC_STATE],
+    ) -> Agent[Interpreter, Gradient[REC_PARAM]]:
         @do()
-        def _creditAssignment():
-            interpreter = yield from askForInterpreter(PX[Interpreter]())
+        def _creditAssignment() -> G[Agent[Interpreter, Gradient[REC_PARAM]]]:
+            interpreter = yield from ask(PX[Interpreter]())
             influenceTensor = yield from self.getInfluenceTensor(activationStep)
-            signal = yield from recurrentError
-            recurrentGradient = Gradient[REC_PARAM](signal.value @ influenceTensor.value)
             _ = yield from interpreter.putInfluenceTensor(JACOBIAN(influenceTensor.value))
+
+            signal = yield from recurrentError  # ORDER matters
+            recurrentGradient = Gradient[REC_PARAM](signal.value @ influenceTensor.value)
 
             log_influence = Logs(influenceTensor=influenceTensor.value)
             _ = yield from interpreter.putLogs(log_influence)
-            return pure(recurrentGradient, PX3[Interpreter, Data, GodState]())
+            return pure(recurrentGradient, PX[tuple[Interpreter, GodState]]())
 
         return _creditAssignment()
 
 
-class RTRL[Data, Pred](InfluenceTensorLearner[Data, Pred]):
+class RTRL(InfluenceTensorLearner):
     class _UpdateInfluence_Can(
         GetInfluenceTensor,
         GetRecurrentState,
@@ -447,11 +446,9 @@ class RTRL[Data, Pred](InfluenceTensorLearner[Data, Pred]):
     ): ...
 
     @do()
-    def getInfluenceTensor[Interpreter: _UpdateInfluence_Can](
-        self, activationStep: MlApp[Interpreter, Data, REC_STATE]
-    ):
+    def getInfluenceTensor[Interpreter: _UpdateInfluence_Can](self, activationStep: Agent[Interpreter, REC_STATE]):
         # Get interpreter and RNN forward function
-        interpreter = yield from askForInterpreter(PX[Interpreter]())
+        interpreter = yield from ask(PX[Interpreter]())
         rnnForward = yield from self.createRnnForward(activationStep)
 
         # Extract initial states and parameters
@@ -496,10 +493,10 @@ class RTRL[Data, Pred](InfluenceTensorLearner[Data, Pred]):
         _ = yield from put(env)
         _ = yield from interpreter.putLogs(Logs(immediateInfluenceTensor=immediateInfluence))
         _ = yield from interpreter.putLogs(Logs(hessian=jacobian))
-        return lift(maybe.fmap(lambda _: newInfluenceTensor), PX3[Interpreter, Data, GodState]())
+        return lift(maybe.fmap(lambda _: newInfluenceTensor), PX[tuple[Interpreter, GodState]]())
 
 
-class RFLO[Data, Pred](InfluenceTensorLearner[Data, Pred]):
+class RFLO(InfluenceTensorLearner):
     class _UpdateRFLO_Can(
         GetRnnConfig,
         GetInfluenceTensor,
@@ -507,12 +504,13 @@ class RFLO[Data, Pred](InfluenceTensorLearner[Data, Pred]):
         PutRecurrentState,
         GetRecurrentParam,
         PutRecurrentParam,
+        PutLogs,
         Protocol,
     ): ...
 
     @do()
-    def getInfluenceTensor[Interpreter: _UpdateRFLO_Can](self, activationStep: MlApp[Interpreter, Data, REC_STATE]):
-        interpreter = yield from askForInterpreter(PX[Interpreter]())
+    def getInfluenceTensor[Interpreter: _UpdateRFLO_Can](self, activationStep: Agent[Interpreter, REC_STATE]):
+        interpreter = yield from ask(PX[Interpreter]())
         rnnForward = yield from self.createRnnForward(activationStep)
 
         alpha = yield from interpreter.getRnnConfig.fmap(lambda x: x.alpha)
@@ -529,12 +527,12 @@ class RFLO[Data, Pred](InfluenceTensorLearner[Data, Pred]):
 
         _ = yield from put(env)
         _ = yield from interpreter.putLogs(Logs(immediateInfluenceTensor=immediateInfluence))
-        return lift(maybe.fmap(lambda _: newInfluenceTensor), PX3[Interpreter, Data, GodState]())
+        return lift(maybe.fmap(lambda _: newInfluenceTensor), PX[tuple[Interpreter, GodState]]())
 
 
-class UORO[Data, Pred](PastFacingLearn[Data, Pred]):
+class UORO(PastFacingLearn):
     class _UORO_Can(
-        PastFacingLearn[Data, Pred]._PastFacingLearner_Can,
+        PastFacingLearn._PastFacingLearner_Can,
         GetUoro,
         PutUoro,
         GetRnnConfig,
@@ -546,11 +544,11 @@ class UORO[Data, Pred](PastFacingLearn[Data, Pred]):
         self.distribution = distribution
 
     def getProjectedGradients[Interpreter: _UORO_Can](
-        self, randomVector: Array, activationStep: MlApp[Interpreter, Data, REC_STATE]
-    ) -> App[Interpreter, Data, GodState, tuple[Array, Array]]:
+        self, randomVector: Array, activationStep: Agent[Interpreter, REC_STATE]
+    ) -> Agent[Interpreter, tuple[Array, Array]]:
         @do()
         def projectGradients():
-            interpreter = yield from askForInterpreter(PX[Interpreter]())
+            interpreter = yield from ask(PX[Interpreter]())
             rnnForward = yield from self.createRnnForward(activationStep)
 
             uoro = yield from interpreter.getUoro
@@ -566,7 +564,9 @@ class UORO[Data, Pred](PastFacingLearn[Data, Pred]):
             )
 
             # 2 doing the vjp saves BIG on memory. Only use O(n^2) as we want
-            fn: Callable[[Array], tuple[Array, tuple[Maybe[REC_STATE], GodState]]] = lambda p: rnnForward(actv0, p)
+            def fn(p: Array) -> tuple[REC_STATE, tuple[Maybe[REC_STATE], GodState]]:
+                return rnnForward(actv0, p)
+
             _, vjp_func, (maybe, env) = eqx.filter_vjp(fn, param0, has_aux=True)
             immediateInfluence__Random_projection: Array
             (immediateInfluence__Random_projection,) = vjp_func(randomVector)
@@ -576,13 +576,13 @@ class UORO[Data, Pred](PastFacingLearn[Data, Pred]):
 
             _ = yield from put(env)
             maybe_new = maybe.fmap(lambda _: (immediateJacobian__A_projection, immediateInfluence__Random_projection))
-            return lift(maybe_new, PX3[Interpreter, Data, GodState]())
+            return lift(maybe_new, PX[tuple[Interpreter, GodState]]())
 
         return projectGradients()
 
     def propagateRecurrentError[Interpreter: _UORO_Can](
-        self, A_: Array, B_: Array, recurrentError: MlApp[Interpreter, Data, Gradient[REC_STATE]]
-    ) -> App[Interpreter, Data, GodState, Gradient[REC_PARAM]]:
+        self, A_: Array, B_: Array, recurrentError: Agent[Interpreter, Gradient[REC_STATE]]
+    ) -> Agent[Interpreter, Gradient[REC_PARAM]]:
         def propagate(signal: Gradient[REC_STATE]) -> Gradient[REC_PARAM]:
             q = signal.value @ A_
             return Gradient(q * B_)
@@ -591,12 +591,12 @@ class UORO[Data, Pred](PastFacingLearn[Data, Pred]):
 
     def creditAssignment[Interpreter: _UORO_Can](
         self,
-        recurrentError: MlApp[Interpreter, Data, Gradient[REC_STATE]],
-        activationStep: MlApp[Interpreter, Data, REC_STATE],
-    ) -> App[Interpreter, Data, GodState, Gradient[REC_PARAM]]:
+        recurrentError: Agent[Interpreter, Gradient[REC_STATE]],
+        activationStep: Agent[Interpreter, REC_STATE],
+    ) -> Agent[Interpreter, Gradient[REC_PARAM]]:
         @do()
         def creditAssignment_():
-            interpreter = yield from askForInterpreter(PX[Interpreter]())
+            interpreter = yield from ask(PX[Interpreter]())
             uoro = yield from interpreter.getUoro
             rnnConfig = yield from interpreter.getRnnConfig
             key = yield from interpreter.updatePRNG()
@@ -620,13 +620,21 @@ class UORO[Data, Pred](PastFacingLearn[Data, Pred]):
         return creditAssignment_()
 
 
-def foldrLibrary[Interpreter, Data, Pred](
-    library: Library[Interpreter, Data, Pred], param_shape: REC_PARAM
+def foldrLibrary[Data, Interpreter: GetRecurrentParam, Pred](
+    library: Library[Data, Interpreter, Pred],
 ) -> Library[Interpreter, Traversable[Data], Traversable[Pred]]:
+    @do()
+    def modelGradient_(data: Data):
+        interpreter = yield from ask(PX[Interpreter]())
+        param_shape: Gradient[REC_PARAM]
+        param_shape = yield from interpreter.getRecurrentParam.fmap(lambda x: Gradient(jnp.zeros_like(x)))
+
+        return accumulateM(library.modelGradient, add, param_shape)(data)
+
     return Library(
         model=traverseM(library.model),
         modelLossFn=accumulateM(library.modelLossFn, add, LOSS(jnp.array(0.0))),
-        modelGradient=accumulateM(library.modelGradient, add, Gradient[REC_PARAM](jnp.zeros_like(param_shape))),
+        modelGradient=modelGradient_,
     )
 
 
