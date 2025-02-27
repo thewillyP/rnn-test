@@ -11,7 +11,7 @@ from operator import add
 
 import optax
 
-from recurrent.monad import App
+from recurrent.monad import App, Maybe
 from recurrent.myfunc import compose2
 from recurrent.myrecords import GodState, MlApp
 from recurrent.mytypes import Gradient, Traversable
@@ -23,26 +23,27 @@ from recurrent.parameters import *
 from recurrent.util import get_leading_dim_size, pytree_split, pytreeNumel
 
 
-type MlApp[Interpreter, Data, X] = App[Interpreter, Data, GodState, X]
+type Agent[Interpreter, X] = App[Interpreter, GodState, X]
+type Controller[Data, Interpreter, X] = Callable[[Data], Agent[Interpreter, X]]
 
 
-type LossFn[Pred] = Callable[[Pred, LABEL], LOSS]
+type LossFn[Pred, Data] = Callable[[Pred, Data], LOSS]
 
 
-class Library[Interpreter, Data, Pred](NamedTuple):
-    model: MlApp[Interpreter, Data, Pred]
-    modelLossFn: MlApp[Interpreter, Data, LOSS]
-    modelGradient: MlApp[Interpreter, Data, Gradient[REC_PARAM]]
+class Library[Data, Interpreter, Pred](NamedTuple):
+    model: Controller[Data, Interpreter, Pred]
+    modelLossFn: Controller[Data, Interpreter, LOSS]
+    modelGradient: Controller[Data, Interpreter, Gradient[REC_PARAM]]
 
 
-class CreateLearner[Interpreter, Data, Pred](Protocol):
+class CreateLearner[Data, Interpreter, Pred](Protocol):
     def createLearner(
         self,
-        activationStep: MlApp[Interpreter, Data, REC_STATE],
-        readoutStep: MlApp[Interpreter, Data, Pred],
-        lossFunction: LossFn[Pred],
-        lossGradientWrtActiv: MlApp[Interpreter, Data, Gradient[REC_STATE]],
-    ) -> Library[Interpreter, Data, Pred]: ...
+        activationStep: Controller[Data, Interpreter, REC_STATE],
+        readoutStep: Controller[Data, Interpreter, Pred],
+        lossFunction: LossFn[Pred, Data],
+        lossGradientWrtActiv: Controller[Data, Interpreter, Gradient[REC_STATE]],
+    ) -> Library[Data, Interpreter, Pred]: ...
 
 
 @eqx.filter_jit
@@ -56,8 +57,8 @@ def jacobian_matrix_product(f, primal, matrix):
     return jax.vmap(wrapper, in_axes=(None, 1), out_axes=1)(primal, matrix)
 
 
-def resetRnnActivation[Interpreter: PutActivation, Data](resetActv: ACTIVATION) -> MlApp[Interpreter, Data, Unit]:
-    return askForInterpreter(PX[Interpreter]()).flat_map(lambda interpreter: interpreter.putActivation(resetActv))
+def resetRnnActivation[Interpreter: PutActivation](resetActv: ACTIVATION) -> Agent[Interpreter, Unit]:
+    return ask(PX[Interpreter]()).flat_map(lambda interpreter: interpreter.putActivation(resetActv))
 
 
 class _SGD_Can(
@@ -69,8 +70,8 @@ class _SGD_Can(
 
 
 @do()
-def doSgdStep[Interpreter: _SGD_Can, Data](gr: Gradient[REC_PARAM]) -> G[MlApp[Interpreter, Data, Unit]]:
-    interpreter = yield from askForInterpreter(PX[Interpreter]())
+def doSgdStep[Interpreter: _SGD_Can](gr: Gradient[REC_PARAM]) -> G[Agent[Interpreter, Unit]]:
+    interpreter = yield from ask(PX[Interpreter]())
     isParam = yield from interpreter.getRecurrentParam
     hyperparam = yield from interpreter.getSgdParameter
     new_param = isParam - hyperparam.learning_rate * gr.value
@@ -78,8 +79,8 @@ def doSgdStep[Interpreter: _SGD_Can, Data](gr: Gradient[REC_PARAM]) -> G[MlApp[I
 
 
 @do()
-def doSgdStep_Squared[Interpreter: _SGD_Can, Data](gr: Gradient[REC_PARAM]) -> G[MlApp[Interpreter, Data, Unit]]:
-    interpreter = yield from askForInterpreter(PX[Interpreter]())
+def doSgdStep_Squared[Interpreter: _SGD_Can](gr: Gradient[REC_PARAM]) -> G[Agent[Interpreter, Unit]]:
+    interpreter = yield from ask(PX[Interpreter]())
     isParam = yield from interpreter.getRecurrentParam
     hyperparam = yield from interpreter.getSgdParameter
     new_param = isParam - (hyperparam.learning_rate**2) * gr.value
@@ -87,8 +88,8 @@ def doSgdStep_Squared[Interpreter: _SGD_Can, Data](gr: Gradient[REC_PARAM]) -> G
 
 
 @do()
-def doSgdStep_Positive[Interpreter: _SGD_Can, Data](gr: Gradient[REC_PARAM]) -> G[MlApp[Interpreter, Data, Unit]]:
-    interpreter = yield from askForInterpreter(PX[Interpreter]())
+def doSgdStep_Positive[Interpreter: _SGD_Can](gr: Gradient[REC_PARAM]) -> G[Agent[Interpreter, Unit]]:
+    interpreter = yield from ask(PX[Interpreter]())
     isParam = yield from interpreter.getRecurrentParam
     hyperparam = yield from interpreter.getSgdParameter
     new_param = jnp.ravel(jnp.maximum(0, isParam - hyperparam.learning_rate * gr.value))
@@ -96,8 +97,8 @@ def doSgdStep_Positive[Interpreter: _SGD_Can, Data](gr: Gradient[REC_PARAM]) -> 
 
 
 @do()
-def doSgdStep_Normalized[Interpreter: _SGD_Can, Data](gr: Gradient[REC_PARAM]) -> G[MlApp[Interpreter, Data, Unit]]:
-    interpreter = yield from askForInterpreter(PX[Interpreter]())
+def doSgdStep_Normalized[Interpreter: _SGD_Can](gr: Gradient[REC_PARAM]) -> G[Agent[Interpreter, Unit]]:
+    interpreter = yield from ask(PX[Interpreter]())
     isParam = yield from interpreter.getRecurrentParam
     hyperparam = yield from interpreter.getSgdParameter
     grad_norm = jnp.linalg.norm(gr.value) + 1e-8  # Add epsilon to avoid division by zero
@@ -107,8 +108,8 @@ def doSgdStep_Normalized[Interpreter: _SGD_Can, Data](gr: Gradient[REC_PARAM]) -
 
 
 @do()
-def doExpGradStep[Interpreter: _SGD_Can, Data](gr: Gradient[REC_PARAM]) -> G[MlApp[Interpreter, Data, Unit]]:
-    interpreter = yield from askForInterpreter(PX[Interpreter]())
+def doExpGradStep[Interpreter: _SGD_Can](gr: Gradient[REC_PARAM]) -> G[Agent[Interpreter, Unit]]:
+    interpreter = yield from ask(PX[Interpreter]())
     isParam = yield from interpreter.getRecurrentParam
     hyperparam = yield from interpreter.getSgdParameter
 
@@ -122,16 +123,14 @@ class _RnnActivation_Can(
     GetActivation,
     PutActivation,
     GetRnnParameter,
-    GetInputOutput,
     GetRnnConfig,
     Protocol,
 ): ...
 
 
 @do()
-def doRnnStep[Interpreter: _RnnActivation_Can]():
-    interpreter = yield from askForInterpreter(PX[Interpreter]())
-    data = yield from interpreter.getInputOutput
+def doRnnStep[Interpreter: _RnnActivation_Can](data: InputOutput) -> G[Agent[Interpreter, Unit]]:
+    interpreter = yield from ask(PX[Interpreter]())
     a = yield from interpreter.getActivation
     param = yield from interpreter.getRnnParameter
     cfg = yield from interpreter.getRnnConfig
@@ -150,38 +149,36 @@ class _RnnReadout_Can(
 
 
 @do()
-def doRnnReadout[Interpreter: _RnnReadout_Can]():
-    interpreter = yield from askForInterpreter(PX[Interpreter]())
+def doRnnReadout[Interpreter: _RnnReadout_Can](_: InputOutput) -> G[Agent[Interpreter, PREDICTION]]:
+    interpreter = yield from ask(PX[Interpreter]())
     a = yield from interpreter.getActivation
     param = yield from interpreter.getRnnParameter
     pred = PREDICTION(param.w_out @ jnp.concat((a, jnp.asarray([1.0]))))
-    return pure(pred, PX3[Interpreter, DataGod, GodState]())
+    return pure(pred, PX[tuple[Interpreter, GodState]]())
 
 
-def doLoss[Pred](lossFn: LossFn[Pred]):  # -> Callable[..., App[Interpreter, Data, GodState, LOSS]]:
-    @do()
-    def _lossFn[Interpreter: GetLabel, Data](pred: Pred):
-        interpreter = yield from askForInterpreter(PX[Interpreter]())
-        label: LABEL = yield from interpreter.getLabel
-        loss = lossFn(pred, label)
-        return pure(loss, PX3[Interpreter, Data, GodState]())
+# def doLoss[Interpreter, Pred, Data](lossFn: LossFn[Pred, Data], data: Data):  # -> Callable[..., App[Interpreter, Data, GodState, LOSS]]:
+#     @do()
+#     def _lossFn(pred: Pred):
+#         interpreter = yield from ask(PX[Interpreter]())
+#         loss = lossFn(pred, data)
+#         return pure(loss, PX3[Interpreter, Data, GodState]())
 
-    return _lossFn
+#     return _lossFn
 
 
 @do()
-def doGradient[Interpreter, Data, Wrt: jax.Array](
-    model: MlApp[Interpreter, Data, LOSS],
-    read_wrt: MlApp[Interpreter, Data, Wrt],
-    write_wrt: Callable[[Wrt], MlApp[Interpreter, Data, Unit]],
-):
-    interpreter = yield from askForInterpreter(PX[Interpreter]())
-    data = yield from ask(PX[Data]())
+def doGradient[Interpreter, Wrt: jax.Array](
+    model: Agent[Interpreter, LOSS],
+    read_wrt: Agent[Interpreter, Wrt],
+    write_wrt: Callable[[Wrt], Agent[Interpreter, Unit]],
+) -> G[Agent[Interpreter, Gradient[Wrt]]]:
+    interpreter = yield from ask(PX[Interpreter]())
     env = yield from get(PX[GodState]())
     param = yield from read_wrt
 
-    def parametrized(p: Array):
-        maybe, s = write_wrt(p).then(model).func(interpreter, data, env)
+    def parametrized(p: Array) -> tuple[LOSS, tuple[Maybe[LOSS], GodState]]:
+        maybe, s = write_wrt(p).then(model).func(interpreter, env)
         return maybe.payload, (maybe, s)
 
     grad: GRADIENT
@@ -190,17 +187,19 @@ def doGradient[Interpreter, Data, Wrt: jax.Array](
     grad, (maybe, new_env) = eqx.filter_jacrev(parametrized, has_aux=True)(param)
 
     _ = yield from put(new_env)
-    return lift(maybe.fmap(lambda _: Gradient[Wrt](jnp.ravel(grad))), PX3[Interpreter, Data, GodState]())
+    return lift(maybe.fmap(lambda _: Gradient[Wrt](jnp.ravel(grad))), PX[tuple[Interpreter, GodState]]())
 
 
-def endowAveragedGradients[Interpreter, Data](
-    gradientFn: App[Interpreter, Traversable[Data], GodState, Gradient[REC_PARAM]],
+def endowAveragedGradients[Interpreter: GetRecurrentParam, Data](
+    gradientFn: Controller[Traversable[Data], Interpreter, Gradient[REC_PARAM]],
     trunc: int,
-    param_shape: REC_PARAM,
-) -> App[Interpreter, Traversable[Data], GodState, Gradient[REC_PARAM]]:
+) -> Controller[Traversable[Data], Interpreter, Gradient[REC_PARAM]]:
     @do()
-    def avgGradient() -> G[App[Interpreter, Traversable[Data], GodState, Gradient[REC_PARAM]]]:
-        dataset = yield from ask(PX[Traversable[Data]]())
+    def avgGradient(dataset: Traversable[Data]) -> G[Agent[Interpreter, Gradient[REC_PARAM]]]:
+        interpreter = yield from ask(PX[Interpreter]())
+        param_shape: Gradient[REC_PARAM]
+        param_shape = yield from interpreter.getRecurrentParam.fmap(lambda x: Gradient(jnp.zeros_like(x)))
+
         N = get_leading_dim_size(dataset)
         n_complete = (N // trunc) * trunc
         n_leftover = N - n_complete
@@ -212,17 +211,18 @@ def endowAveragedGradients[Interpreter, Data](
         ds_scannable_, ds_leftover = pytree_split(dataset, trunc)
         ds_scannable: Traversable[Traversable[Data]] = Traversable(ds_scannable_)
 
-        gr_scanned = yield from accumulateM(gradientFn, add, GRADIENT(jnp.zeros_like(param_shape))).switch_data(
-            ds_scannable
-        )
+        gr_scanned = yield from accumulateM(
+            gradientFn,
+            add,
+            param_shape,
+        )(ds_scannable)
 
-        interpreter = yield from askForInterpreter(PX[Interpreter]())
         env_after_scannable = yield from get(PX[GodState]())
 
-        def ifLeftoverData(leftover):
-            return gradientFn.fmap(
-                lambda gr: Gradient[REC_PARAM]((trunc / N) * gr_scanned.value + (n_leftover / N) * gr.value)
-            ).func(interpreter, leftover, env_after_scannable)
+        def ifLeftoverData(leftover: Traversable[Data]) -> tuple[Maybe[Gradient[REC_PARAM]], GodState]:
+            avgLeftover: Callable[[Gradient[REC_PARAM]], Gradient[REC_PARAM]]
+            avgLeftover = lambda gr: Gradient[REC_PARAM]((trunc / N) * gr_scanned.value + (n_leftover / N) * gr.value)
+            return gradientFn(leftover).fmap(avgLeftover).func(interpreter, env_after_scannable)
 
         gradient_final: Maybe[Gradient[REC_PARAM]]
         env_final: GodState
@@ -233,9 +233,9 @@ def endowAveragedGradients[Interpreter, Data](
             ds_leftover,
         )
         _ = yield from put(env_final)
-        return lift(gradient_final, PX3[Interpreter, Traversable[Data], GodState]())
+        return lift(gradient_final, PX[tuple[Interpreter, GodState]]())
 
-    return avgGradient()
+    return avgGradient
 
 
 class _ReadoutRecurrentError_Can(
@@ -245,18 +245,20 @@ class _ReadoutRecurrentError_Can(
 ): ...
 
 
-@do()
 def readoutRecurrentError[Interpreter: _ReadoutRecurrentError_Can, Data, Pred](
-    predictionStep: MlApp[Interpreter, Data, Pred], lossFunction: LossFn[Pred]
-):
-    interpreter = yield from askForInterpreter(PX[Interpreter]())
-    willGetImmediateLoss = predictionStep.flat_map(doLoss(lossFunction))
-    willGetRecurrentError = doGradient(
-        willGetImmediateLoss,
-        interpreter.getRecurrentState,
-        interpreter.putRecurrentState,
-    )
-    return willGetRecurrentError
+    predictionStep: Controller[Data, Interpreter, Pred], lossFunction: LossFn[Pred, Data]
+) -> Controller[Data, Interpreter, Gradient[REC_STATE]]:
+    @do()
+    def _readoutRecurrentError(data: Data) -> G[Agent[Interpreter, Gradient[REC_STATE]]]:
+        interpreter = yield from ask(PX[Interpreter]())
+        willGetImmediateLoss = predictionStep(data).fmap(lambda p: lossFunction(p, data))
+        return doGradient(
+            willGetImmediateLoss,
+            interpreter.getRecurrentState,
+            interpreter.putRecurrentState,
+        )
+
+    return _readoutRecurrentError
 
 
 # todo, recheck later
@@ -273,24 +275,25 @@ def readoutRecurrentError[Interpreter: _ReadoutRecurrentError_Can, Data, Pred](
 #     return pure(Gradient(gr_summed))
 
 
-class IdentityPastLearner:
-    def createLearner[Interpreter: GetRecurrentParam, Data, Pred](
+class IdentityLearner[Data, Interpreter: GetRecurrentParam, Pred]:
+    def createLearner(
         self,
-        activationStep: MlApp[Interpreter, Data, REC_STATE],
-        readoutStep: MlApp[Interpreter, Data, Pred],
-        lossFunction: LossFn[Pred],
-        _: MlApp[Interpreter, Data, Gradient[REC_STATE]],
-    ) -> Library[Interpreter, Data, Pred]:
+        activationStep: Controller[Data, Interpreter, REC_STATE],
+        readoutStep: Controller[Data, Interpreter, Pred],
+        lossFunction: LossFn[Pred, Data],
+        _: Controller[Data, Interpreter, Gradient[REC_STATE]],
+    ) -> Library[Data, Interpreter, Pred]:
         @do()
-        def rnnWithGradient():
-            interpreter = yield from askForInterpreter(PX[Interpreter]())
-            param_shape = yield from interpreter.getRecurrentParam
-            return pure(Gradient[REC_PARAM](jnp.zeros_like(param_shape)), PX3[Interpreter, Data, GodState]())
+        def rnnWithGradient() -> G[Agent[Interpreter, Gradient[REC_PARAM]]]:
+            interpreter = yield from ask(PX[Interpreter]())
+            param_shape: Gradient[REC_PARAM]
+            param_shape = yield from interpreter.getRecurrentParam.fmap(lambda x: Gradient(jnp.zeros_like(x)))
+            return pure(param_shape, PX[tuple[Interpreter, GodState]]())
 
         return Library(
-            model=activationStep.then(readoutStep),
-            modelLossFn=activationStep.then(doLoss(lossFunction)),
-            modelGradient=activationStep.then(rnnWithGradient()),
+            model=lambda data: activationStep(data).then(readoutStep(data)),
+            modelLossFn=lambda data: activationStep(data).then(readoutStep(data)).fmap(lambda p: lossFunction(p, data)),
+            modelGradient=lambda data: activationStep(data).then(rnnWithGradient()),
         )
 
 
@@ -298,29 +301,30 @@ class OfflineLearning:
     class _OfflineLearner_Can(
         GetRecurrentParam,
         PutRecurrentParam,
-        GetLabel,
         Protocol,
     ): ...
 
     def createLearner[Interpreter: _OfflineLearner_Can, Data, Pred](
         self,
-        activationStep: MlApp[Interpreter, Data, REC_STATE],
-        predictionStep: MlApp[Interpreter, Data, Pred],
-        lossFunction: LossFn[Pred],
-        _: MlApp[Interpreter, Data, Gradient[REC_STATE]],
-    ) -> Library[Interpreter, Traversable[Data], Traversable[Pred]]:
-        rnnStep = activationStep.then(predictionStep)
-        rnnWithLoss = accumulateM(rnnStep.flat_map(doLoss(lossFunction)), add, LOSS(jnp.Array(0.0)))
+        activationStep: Controller[Data, Interpreter, REC_STATE],
+        readoutStep: Controller[Data, Interpreter, Pred],
+        lossFunction: LossFn[Pred, Data],
+        _: Controller[Data, Interpreter, Gradient[REC_STATE]],
+    ) -> Library[Traversable[Data], Interpreter, Traversable[Pred]]:
+        rnnStep = lambda data: activationStep(data).then(readoutStep(data))
+        rnn2Loss = lambda data: rnnStep(data).fmap(lambda p: lossFunction(p, data))
+        rnnWithLoss = accumulateM(rnn2Loss, add, LOSS(jnp.Array(0.0)))
 
         @do()
-        def rnnWithGradient():
-            interpreter: Interpreter = yield from askForInterpreter(PX[Interpreter]())
-            return doGradient(rnnWithLoss, interpreter.getRecurrentParam, interpreter.putRecurrentParam)
+        def rnnWithGradient(data: Traversable[Data]) -> G[Agent[Interpreter, Gradient[REC_PARAM]]]:
+            interpreter: Interpreter = yield from ask(PX[Interpreter]())
+            return doGradient(rnnWithLoss(data), interpreter.getRecurrentParam, interpreter.putRecurrentParam)
 
+        xdf = traverseM(rnnStep)
         return Library(
             model=traverseM(rnnStep),
             modelLossFn=rnnWithLoss,
-            modelGradient=rnnWithGradient(),
+            modelGradient=rnnWithGradient,
         )
 
 

@@ -1524,37 +1524,62 @@
 # print(grad_result)
 
 
+# import jax
+# import jax.numpy as jnp
+# import equinox as eqx
+# import jax.lax as lax
+
+
+# # Define the PyTree as an Equinox Module
+# class MyPyTree(eqx.Module):
+#     condition: bool
+#     value: jax.Array
+
+
+# # Define a function operating on the PyTree
+# def my_function(pytree: MyPyTree) -> MyPyTree:
+#     condition = pytree.condition
+#     new_value = lax.cond(
+#         condition,
+#         lambda _: pytree.value**2,  # If True, square the values
+#         lambda _: pytree.value + 1,  # If False, add 1 to values
+#         operand=None,
+#     )
+#     return new_value, condition
+
+
+# # Compute the gradient w.r.t. the PyTree value
+# grad_fn = eqx.filter_jacrev(my_function, has_aux=True)
+
+# # Create an instance of MyPyTree
+# pytree_instance = MyPyTree(condition=True, value=jnp.array([1.0, 2.0, 3.0]))
+
+# # Compute and print the gradient
+# grad_result, condition = grad_fn(pytree_instance)
+# print(grad_result)
+# print(condition)
+
+
 import jax
 import jax.numpy as jnp
-import equinox as eqx
-import jax.lax as lax
 
 
-# Define the PyTree as an Equinox Module
-class MyPyTree(eqx.Module):
-    condition: bool
-    value: jax.Array
+def my_function(x: jnp.ndarray, cls: type) -> jnp.ndarray:
+    """A JIT-compiled function that takes a static class type but doesn't use it."""
+    return x * 2  # cls is not used
 
 
-# Define a function operating on the PyTree
-def my_function(pytree: MyPyTree) -> MyPyTree:
-    condition = pytree.condition
-    new_value = lax.cond(
-        condition,
-        lambda _: pytree.value**2,  # If True, square the values
-        lambda _: pytree.value + 1,  # If False, add 1 to values
-        operand=None,
-    )
-    return new_value, condition
+# JIT compile with `cls` as a static argument
+jit_func = jax.jit(my_function, static_argnames=["cls"])
+
+# Example usage
+import numpy as np
 
 
-# Compute the gradient w.r.t. the PyTree value
-grad_fn = eqx.filter_jacrev(my_function, has_aux=True)
+class Dummy:
+    pass
 
-# Create an instance of MyPyTree
-pytree_instance = MyPyTree(condition=True, value=jnp.array([1.0, 2.0, 3.0]))
 
-# Compute and print the gradient
-grad_result, condition = grad_fn(pytree_instance)
-print(grad_result)
-print(condition)
+x = jnp.array([1, 2, 3])
+result = jit_func(x, Dummy)  # Pass the class type
+print(result)  # Output: [2 4 6]

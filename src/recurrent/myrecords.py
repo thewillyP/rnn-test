@@ -28,9 +28,8 @@ class GodState(eqx.Module):
 
 
 @dataclass(frozen=True)
-class GodInterpreter[Data]:
-    type LocalApp[X] = App[Self, Data, GodState, X]
-    type DataApp[X] = App[Self, DataGod, GodState, X]
+class GodInterpreter:
+    type LocalApp[X] = App[Self, GodState, X]
 
     getReccurentState: LocalApp[REC_STATE]
     putReccurentState: Callable[[REC_STATE], LocalApp[Unit]]
@@ -56,11 +55,4 @@ class GodInterpreter[Data]:
     def updatePRNG(self) -> G[LocalApp[PRNG]]:
         prng, new_prng = yield from gets(lambda e: prng_split(e.prng))
         _ = yield from modifies(lambda e: eqx.tree_at(lambda t: t.prng, e, new_prng))
-        return pure(prng, PX3())
-
-    getInput: LocalApp[INPUT]
-    getLabel: LocalApp[LABEL]
-    getPredictionInput: LocalApp[PREDICTION_INPUT]
-
-    getInputOutput: DataApp[InputOutput]
-    getOhoInputOutput: DataApp[OhoInputOutput]
+        return pure(prng, PX[tuple[Self, GodState]]())
