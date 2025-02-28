@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from typing import Self
 from donotation import do
 
-from recurrent.datarecords import *
 from recurrent.monad import *
 from recurrent.mytypes import *
 from recurrent.parameters import *

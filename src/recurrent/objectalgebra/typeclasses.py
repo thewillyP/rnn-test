@@ -1,5 +1,4 @@
-from typing import Generic, Self
-from recurrent.datarecords import DataGod, InputOutput, OhoInputOutput
+from typing import Self
 from recurrent.myrecords import GodState
 from recurrent.mytypes import *
 from recurrent.parameters import *
