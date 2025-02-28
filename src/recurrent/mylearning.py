@@ -1,26 +1,24 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Callable, Protocol
 from donotation import do
 import jax
 from jax import Array
 import jax.numpy as jnp
 import equinox as eqx
-from equinox import Module
 from operator import add
 
 import optax
 
 from recurrent.monad import App, Maybe
-from recurrent.myfunc import compose2
-from recurrent.myrecords import GodState, MlApp
+from recurrent.myrecords import GodState, OhoData
 from recurrent.mytypes import Gradient, Traversable
 from recurrent.objectalgebra.typeclasses import *
 
 from recurrent.mytypes import *
 from recurrent.monad import *
 from recurrent.parameters import *
-from recurrent.util import get_leading_dim_size, pytree_split, pytreeNumel
+from recurrent.util import get_leading_dim_size, pytree_split
 
 
 type Agent[Interpreter, X] = App[Interpreter, GodState, X]
@@ -639,120 +637,78 @@ def foldrLibrary[Data, Interpreter: GetRecurrentParam, Pred](
 
 
 def endowBilevelOptimization[
-    OHO_Interpreter,
-    OHO_Param: CanDiff,
-    OHO_Label,
+    OHO_Interpreter: PutLogs,
     TrainInterpreter: GetRecurrentParam,
     Data,
-    Env,
-    Param: CanDiff,
     Pred,
 ](
-    library: Library[TrainInterpreter, Data, Pred],
-    paramFn: Callable[[Gradient[Param]], MlApp[TrainInterpreter, Data, Unit]],
+    library: Library[Data, TrainInterpreter, Pred],
+    paramFn: Callable[[Gradient[REC_PARAM]], Agent[TrainInterpreter, Unit]],
     trainInterpreter: TrainInterpreter,
-    bilevelOptimizer: CreateLearner[OHO_Interpreter, Data, Pred],
-    computeLoss: LossFn[Pred],
-    resetEnvForValidation: MlApp[TrainInterpreter, Data, Unit],
-) -> Library[OHO_Interpreter, Data, Pred]:
-    type ST[Interpreter, Computed] = Fold[Interpreter, Data, Env, Computed]
-
-    class _EndowBilevel_Can(
-        HasInput[OHO_DATA, Data], HasPredictionInput[OHO_DATA, Data], PutLog[Env, Logs], Protocol
-    ): ...
-
+    bilevelOptimizer: CreateLearner,
+    computeLoss: LossFn[Pred, OhoData[Data]],
+    resetEnvForValidation: Agent[TrainInterpreter, Unit],
+) -> Library[OhoData[Data], OHO_Interpreter, Pred]:
     @do()
-    def newActivationStep[OHO_Interpreter: _EndowBilevel_Can]():
+    def newActivationStep(oho_data: OhoData[Data]) -> Agent[OHO_Interpreter, REC_PARAM]:
         @do()
-        def updateParameter() -> G[MlApp[TrainInterpreter, Data, REC_PARAM]]:
-            interpreter = yield from askForInterpreter(PX[TrainInterpreter]())
-            return library.modelGradient.flat_map(paramFn).then(interpreter.getRecurrentParam)
+        def updateParameter() -> G[Agent[TrainInterpreter, REC_PARAM]]:
+            interpreter = yield from ask(PX[TrainInterpreter]())
+            return library.modelGradient(oho_data.payload).flat_map(paramFn).then(interpreter.getRecurrentParam)
 
-        interpreter = yield from askForInterpreter(PX[OHO_Interpreter]())
-        x = yield from interpreter.getInput()
-
-        activationStep: Fold[OHO_Interpreter, OHO_DATA, Env, Param]
-        activationStep = updateParameter().switch_dl(trainInterpreter).switch_data(x)
-        return activationStep
+        return updateParameter().switch_dl(trainInterpreter)
 
     @do()
-    def newPredictionStep[OHO_Interpreter: _EndowBilevel_Can]():
-        interpreter = yield from askForInterpreter(PX[OHO_Interpreter]())
-        x = yield from interpreter.getPredictionInput()
-        env = yield from get(PX[Env]())
-        predictions, _ = resetEnvForValidation.then(rnnLearner.rnn).func(trainInterpreter, x, env)
-        return pure(predictions, PX3[OHO_Interpreter, OHO_DATA, Env]())
+    def newPredictionStep(oho_data: OhoData[Data]) -> G[Agent[OHO_Interpreter, Pred]]:
+        env = yield from get(PX[GodState]())
+        agentValPr = library.model(oho_data.validation)
+        predictions, _ = resetEnvForValidation.then(agentValPr).func(trainInterpreter, env)
+        return lift(predictions, PX[tuple[OHO_Interpreter, GodState]]())
 
     @do()
-    def newRecurrentErrorStep[OHO_Interpreter: _EndowBilevel_Can]():
-        interpreter = yield from askForInterpreter(PX[OHO_Interpreter]())
-        x = yield from interpreter.getPredictionInput()
-        env = yield from get(PX[Env]())
-        recurrentGradient, _ = resetEnvForValidation.then(rnnLearner.rnnWithGradient).func(trainInterpreter, x, env)
+    def newRecurrentErrorStep(oho_data: OhoData[Data]) -> G[Agent[OHO_Interpreter, Gradient[REC_PARAM]]]:
+        env = yield from get(PX[GodState]())
+        agentValGr = library.modelGradient(oho_data.validation)
+        recurrentGradient_, _ = resetEnvForValidation.then(agentValGr).func(trainInterpreter, env)
+        recurrentGradient = yield from lift(recurrentGradient_, PX[tuple[TrainInterpreter, GodState]]())
 
         validation_log = Logs(validationGradient=recurrentGradient.value)
-        _ = yield from interpreter.putLog(validation_log)
-        return pure(recurrentGradient, PX3[OHO_Interpreter, OHO_DATA, Env]())
+        interpreter = yield from ask(PX[OHO_Interpreter]())
+        _ = yield from interpreter.putLogs(validation_log)
+        return pure(recurrentGradient, PX[tuple[OHO_Interpreter, GodState]]())
 
-    return bilevelOptimizer.createLearner(
-        newActivationStep(), newPredictionStep(), computeLoss, newRecurrentErrorStep()
-    )
+    return bilevelOptimizer.createLearner(newActivationStep, newPredictionStep, computeLoss, newRecurrentErrorStep)
 
 
-def normalizeGradientRnnLibrary[Interpreter, Data, Env, Pred, Param: CanDiff](
-    rnnLearner: RnnLibrary[Interpreter, Data, Env, Pred, Param],
-) -> RnnLibrary[Interpreter, Data, Env, Pred, Param]:
-    def normalizeGradient(gr: Gradient[Param]) -> Gradient[Param]:
+def normalizeGradient[Data, Interpreter](
+    agentGr: Controller[Data, Interpreter, Gradient[REC_PARAM]],
+) -> Controller[Data, Interpreter, Gradient[REC_PARAM]]:
+    def normalizeGradient(gr: Gradient[REC_PARAM]) -> Gradient[REC_PARAM]:
         grad_norm = jnp.linalg.norm(gr.value) + 1e-8  # Avoid division by zero
         return Gradient(gr.value / grad_norm)
 
-    return RnnLibrary(
-        rnn=rnnLearner.rnn,
-        rnnWithLoss=rnnLearner.rnnWithLoss,
-        rnnWithGradient=rnnLearner.rnnWithGradient.fmap(normalizeGradient),
-    )
+    return lambda data: agentGr(data).fmap(normalizeGradient)
 
 
-def clipGradient[Interpreter, Data, Env, Pred, Param: CanDiff](
+def clipGradient[Data, Interpreter](
     clip: float,
-    rnnLearner: RnnLibrary[Interpreter, Data, Env, Pred, Param],
-) -> RnnLibrary[Interpreter, Data, Env, Pred, Param]:
-    def clippedGradient(gr: Gradient[Param]) -> Gradient[Param]:
+    agentGr: Controller[Data, Interpreter, Gradient[REC_PARAM]],
+) -> Controller[Data, Interpreter, Gradient[REC_PARAM]]:
+    def clippedGradient(gr: Gradient[REC_PARAM]) -> Gradient[REC_PARAM]:
         clipped_gr, _ = optax.clip_by_global_norm(clip).update(gr.value, optax.EmptyState())
         return Gradient(clipped_gr)
 
-    return RnnLibrary(
-        rnn=rnnLearner.rnn,
-        rnnWithLoss=rnnLearner.rnnWithLoss,
-        rnnWithGradient=rnnLearner.rnnWithGradient.fmap(clippedGradient),
-    )
+    return lambda data: agentGr(data).fmap(clippedGradient)
 
 
-def logGradient[Interpreter: PutLog[Env, Logs], Data, Env, Pred, Param](
-    rnnLibrary: RnnLibrary[Interpreter, Data, Env, Pred, Param],
+def logGradient[Data, Interpreter: PutLogs](
+    agentGr: Controller[Data, Interpreter, Gradient[REC_PARAM]],
 ):
-    type ST[Computed] = Fold[Interpreter, Data, Env, Computed]
-
     @do()
-    def _logGradient():
-        interpreter = yield from askForInterpreter(PX[Interpreter]())
-        gr = yield from rnnLibrary.rnnWithGradient
-        log_grad = Logs(gradient=gr.value)
-        _ = yield from interpreter.putLog(log_grad)
-        return pure(gr, PX3[Interpreter, Data, Env]())
+    def _logGradient(data: Data):
+        interpreter = yield from ask(PX[Interpreter]())
+        gr = yield from agentGr(data)
+        _ = yield from interpreter.putLogs(Logs(gradient=gr.value))
+        return pure(gr, PX[tuple[Interpreter, GodState]]())
 
-    return RnnLibrary(
-        rnn=rnnLibrary.rnn,
-        rnnWithLoss=rnnLibrary.rnnWithLoss,
-        rnnWithGradient=_logGradient(),
-    )
-
-
-"""
-1. have oho get a HasLabel of Traversable[Label] so that it can match with Traversable[Pred]
-2. oho data getinput will get a traversable[data]
-3. oho data getpredictioninput will get a traversable[data], but can be of different length
-then oho data is provably stackable. given a pytree, there exists a stacking algorithm that just appends +1 to front of every array. 
-then unfolding this will make each elemenbt -1 dim, which gets me back to the original pytree
-
-"""
+    return _logGradient

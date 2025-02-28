@@ -27,6 +27,16 @@ class GodState(eqx.Module):
     logConfig: LogConfig = eqx.field(static=True)
 
 
+class InputOutput(eqx.Module):
+    x: jax.Array
+    y: jax.Array
+
+
+class OhoData[Data](eqx.Module):
+    payload: Data
+    validation: Data
+
+
 @dataclass(frozen=True)
 class GodInterpreter:
     type LocalApp[X] = App[Self, GodState, X]
