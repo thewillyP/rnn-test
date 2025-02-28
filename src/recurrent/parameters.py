@@ -4,6 +4,11 @@ import jax.flatten_util
 from recurrent.mytypes import *
 import jax
 import equinox as eqx
+import optax
+
+
+class SgdParameter(eqx.Module):
+    learning_rate: float
 
 
 class RnnParameter(eqx.Module):
@@ -11,15 +16,17 @@ class RnnParameter(eqx.Module):
     w_out: jax.Array
 
 
-class SgdParameter(eqx.Module):
-    learning_rate: jax.Array
-
-
 class RnnConfig(eqx.Module):
     n_h: int
     n_in: int
     n_out: int
     activationFn: Callable[[jax.Array], jax.Array]
+
+
+class RnnState(eqx.Module):
+    activation: ACTIVATION
+    rnnParameter: RnnParameter
+    rnnConfig: RnnConfig = eqx.field(static=True)
 
 
 class UORO_Param(eqx.Module):

@@ -1,40 +1,12 @@
 from dataclasses import dataclass
 from typing import Self
 from donotation import do
+import optax
 
 from recurrent.monad import *
 from recurrent.mytypes import *
 from recurrent.parameters import *
 from recurrent.util import prng_split
-
-
-@dataclass(frozen=True)
-class RnnState(eqx.Module):
-    activation: ACTIVATION
-    rnnParameter: RnnParameter
-    rnnConfig: RnnConfig = eqx.field(static=True)
-
-
-@dataclass(frozen=True)
-class GodState(eqx.Module):
-    prng: PRNG
-    logConfig: LogConfig = eqx.field(static=True)
-
-    # inner
-    rnnState: RnnState
-    innerInfluenceTensor: JACOBIAN
-    innerUoro: UORO_Param
-    innerLogs: Logs
-    innerTimeConstant: float = eqx.field(static=True)
-    innerLossFn: Callable[[jax.Array, jax.Array], jax.Array] = eqx.field(static=True)
-
-    # outer
-    outerInfluenceTensor: JACOBIAN
-    sgdParameter: SgdParameter
-    outerUoro: UORO_Param
-    outerLogs: Logs
-    outerTimeConstant: float = eqx.field(static=True)
-    outerLossFn: Callable[[jax.Array, jax.Array], jax.Array] = eqx.field(static=True)
 
 
 class InputOutput(eqx.Module):
@@ -45,6 +17,28 @@ class InputOutput(eqx.Module):
 class OhoData[Data](eqx.Module):
     payload: Data
     validation: Data
+
+
+@dataclass(frozen=True)
+class GodState(eqx.Module):
+    prng: PRNG
+    logConfig: LogConfig = eqx.field(static=True)
+    lossFn: Callable[[jax.Array, jax.Array], jax.Array] = eqx.field(static=True)
+
+    # inner
+    rnnState: RnnState
+    innerInfluenceTensor: JACOBIAN
+    innerUoro: UORO_Param
+    innerLogs: Logs
+    innerTimeConstant: float = eqx.field(static=True)
+    innerOptState: optax.OptState
+
+    # outer
+    outerInfluenceTensor: JACOBIAN
+    outerUoro: UORO_Param
+    outerLogs: Logs
+    outerTimeConstant: float = eqx.field(static=True)
+    outerOptState: optax.OptState
 
 
 @dataclass(frozen=True)
@@ -69,8 +63,14 @@ class GodInterpreter:
 
     getRnnParameter: LocalApp[RnnParameter]
     putRnnParameter: Callable[[RnnParameter], LocalApp[Unit]]
+
     getSgdParameter: LocalApp[SgdParameter]
     putSgdParameter: Callable[[SgdParameter], LocalApp[Unit]]
+
+    getOptState: LocalApp[optax.OptState]
+    putOptState: Callable[[optax.OptState], LocalApp[Unit]]
+    getOptimizer: LocalApp[optax.GradientTransformation]
+    getUpdater: LocalApp[Callable[[optax.Params, optax.Updates], optax.Params]]
 
     @do()
     def updatePRNG(self) -> G[LocalApp[PRNG]]:

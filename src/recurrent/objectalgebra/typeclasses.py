@@ -54,6 +54,25 @@ class PutSgdParameter(Protocol):
     def putSgdParameter(self, s: SgdParameter) -> App[Self, GodState, Unit]: ...
 
 
+class GetOptimizer(Protocol):
+    @property
+    def getOptimizer(self) -> App[Self, GodState, optax.GradientTransformation]: ...
+
+
+class GetOptState(Protocol):
+    @property
+    def getOptState(self) -> App[Self, GodState, optax.OptState]: ...
+
+
+class PutOptState(Protocol):
+    def putOptState(self, s: optax.OptState) -> App[Self, GodState, Unit]: ...
+
+
+class GetUpdater(Protocol):
+    @property
+    def getUpdater(self) -> App[Self, GodState, Callable[[optax.Params, optax.Updates], optax.Params]]: ...
+
+
 class GetInfluenceTensor(Protocol):
     @property
     def getInfluenceTensor(self) -> App[Self, GodState, JACOBIAN]: ...

@@ -59,62 +59,78 @@ def resetRnnActivation[Interpreter: PutActivation](resetActv: ACTIVATION) -> Age
     return ask(PX[Interpreter]()).flat_map(lambda interpreter: interpreter.putActivation(resetActv))
 
 
-class _SGD_Can(
+class _Opt_Can(
     GetRecurrentParam,
     PutRecurrentParam,
-    GetSgdParameter,
+    GetOptimizer,
+    GetOptState,
+    PutOptState,
+    GetUpdater,
     Protocol,
 ): ...
 
 
 @do()
-def doSgdStep[Interpreter: _SGD_Can](gr: Gradient[REC_PARAM]) -> G[Agent[Interpreter, Unit]]:
+def doOptimizerStep[Interpreter: _Opt_Can](gr: Gradient[REC_PARAM]) -> G[Agent[Interpreter, Unit]]:
     interpreter = yield from ask(PX[Interpreter]())
-    isParam = yield from interpreter.getRecurrentParam
-    hyperparam = yield from interpreter.getSgdParameter
-    new_param = isParam - hyperparam.learning_rate * gr.value
+    param = yield from interpreter.getRecurrentParam
+    optimizer = yield from interpreter.getOptimizer
+    opt_state = yield from interpreter.getOptState
+    updater = yield from interpreter.getUpdater
+    updates, new_opt_state = optimizer.update(gr.value, opt_state, param)
+    new_param = updater(param, updates)
+    _ = yield from interpreter.putOptState(new_opt_state)
     return interpreter.putRecurrentParam(REC_PARAM(new_param))
 
 
-@do()
-def doSgdStep_Squared[Interpreter: _SGD_Can](gr: Gradient[REC_PARAM]) -> G[Agent[Interpreter, Unit]]:
-    interpreter = yield from ask(PX[Interpreter]())
-    isParam = yield from interpreter.getRecurrentParam
-    hyperparam = yield from interpreter.getSgdParameter
-    new_param = isParam - (hyperparam.learning_rate**2) * gr.value
-    return interpreter.putRecurrentParam(REC_PARAM(new_param))
+# @do()
+# def doSgdStep[Interpreter: _SGD_Can](gr: Gradient[REC_PARAM]) -> G[Agent[Interpreter, Unit]]:
+#     interpreter = yield from ask(PX[Interpreter]())
+#     isParam = yield from interpreter.getRecurrentParam
+#     hyperparam = yield from interpreter.getSgdParameter
+#     new_param = isParam - hyperparam.learning_rate * gr.value
+#     return interpreter.putRecurrentParam(REC_PARAM(new_param))
 
 
-@do()
-def doSgdStep_Positive[Interpreter: _SGD_Can](gr: Gradient[REC_PARAM]) -> G[Agent[Interpreter, Unit]]:
-    interpreter = yield from ask(PX[Interpreter]())
-    isParam = yield from interpreter.getRecurrentParam
-    hyperparam = yield from interpreter.getSgdParameter
-    new_param = jnp.ravel(jnp.maximum(0, isParam - hyperparam.learning_rate * gr.value))
-    return interpreter.putRecurrentParam(REC_PARAM(new_param))
+# @do()
+# def doSgdStep_Squared[Interpreter: _SGD_Can](gr: Gradient[REC_PARAM]) -> G[Agent[Interpreter, Unit]]:
+#     interpreter = yield from ask(PX[Interpreter]())
+#     isParam = yield from interpreter.getRecurrentParam
+#     hyperparam = yield from interpreter.getSgdParameter
+#     new_param = isParam - (hyperparam.learning_rate**2) * gr.value
+#     return interpreter.putRecurrentParam(REC_PARAM(new_param))
 
 
-@do()
-def doSgdStep_Normalized[Interpreter: _SGD_Can](gr: Gradient[REC_PARAM]) -> G[Agent[Interpreter, Unit]]:
-    interpreter = yield from ask(PX[Interpreter]())
-    isParam = yield from interpreter.getRecurrentParam
-    hyperparam = yield from interpreter.getSgdParameter
-    grad_norm = jnp.linalg.norm(gr.value) + 1e-8  # Add epsilon to avoid division by zero
-    normalized_grad = gr.value / grad_norm
-    new_param = jnp.ravel(isParam - hyperparam.learning_rate * normalized_grad)
-    return interpreter.putRecurrentParam(REC_PARAM(new_param))
+# @do()
+# def doSgdStep_Positive[Interpreter: _SGD_Can](gr: Gradient[REC_PARAM]) -> G[Agent[Interpreter, Unit]]:
+#     interpreter = yield from ask(PX[Interpreter]())
+#     isParam = yield from interpreter.getRecurrentParam
+#     hyperparam = yield from interpreter.getSgdParameter
+#     new_param = jnp.ravel(jnp.maximum(0, isParam - hyperparam.learning_rate * gr.value))
+#     return interpreter.putRecurrentParam(REC_PARAM(new_param))
 
 
-@do()
-def doExpGradStep[Interpreter: _SGD_Can](gr: Gradient[REC_PARAM]) -> G[Agent[Interpreter, Unit]]:
-    interpreter = yield from ask(PX[Interpreter]())
-    isParam = yield from interpreter.getRecurrentParam
-    hyperparam = yield from interpreter.getSgdParameter
+# @do()
+# def doSgdStep_Normalized[Interpreter: _SGD_Can](gr: Gradient[REC_PARAM]) -> G[Agent[Interpreter, Unit]]:
+#     interpreter = yield from ask(PX[Interpreter]())
+#     isParam = yield from interpreter.getRecurrentParam
+#     hyperparam = yield from interpreter.getSgdParameter
+#     grad_norm = jnp.linalg.norm(gr.value) + 1e-8  # Add epsilon to avoid division by zero
+#     normalized_grad = gr.value / grad_norm
+#     new_param = jnp.ravel(isParam - hyperparam.learning_rate * normalized_grad)
+#     return interpreter.putRecurrentParam(REC_PARAM(new_param))
 
-    # Apply exponentiated gradient update with sign correction
-    new_param = jnp.ravel(isParam * jnp.exp(-hyperparam.learning_rate * jnp.sign(isParam) * gr.value))
 
-    return interpreter.putRecurrentParam(REC_PARAM(new_param))
+# @do()
+# def doExpGradStep[Interpreter: _SGD_Can](gr: Gradient[REC_PARAM]) -> G[Agent[Interpreter, Unit]]:
+#     interpreter = yield from ask(PX[Interpreter]())
+#     isParam = yield from interpreter.getRecurrentParam
+#     hyperparam = yield from interpreter.getSgdParameter
+
+#     # Apply exponentiated gradient update with sign correction
+#     new_param = jnp.ravel(isParam * jnp.exp(-hyperparam.learning_rate * jnp.sign(isParam) * gr.value))
+
+#     return interpreter.putRecurrentParam(REC_PARAM(new_param))
 
 
 class _RnnActivation_Can(
