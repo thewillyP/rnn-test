@@ -11,7 +11,7 @@ from operator import add
 import optax
 
 from recurrent.monad import App, Maybe
-from recurrent.myrecords import GodState, OhoData
+from recurrent.myrecords import GodState, InputOutput, OhoData
 from recurrent.mytypes import Gradient, Traversable
 from recurrent.objectalgebra.typeclasses import *
 
@@ -122,6 +122,7 @@ class _RnnActivation_Can(
     PutActivation,
     GetRnnParameter,
     GetRnnConfig,
+    GetTimeConstant,
     Protocol,
 ): ...
 
@@ -132,9 +133,10 @@ def doRnnStep[Interpreter: _RnnActivation_Can](data: InputOutput) -> G[Agent[Int
     a = yield from interpreter.getActivation
     param = yield from interpreter.getRnnParameter
     cfg = yield from interpreter.getRnnConfig
+    alpha = yield from interpreter.getTimeConstant
 
     a_rec = param.w_rec @ jnp.concat((a, data.x, jnp.asarray([1.0])))
-    a_new = ACTIVATION((1 - cfg.alpha) * a + cfg.alpha * cfg.activationFn(a_rec))
+    a_new = ACTIVATION((1 - alpha) * a + alpha * cfg.activationFn(a_rec))
     return interpreter.putActivation(a_new)
 
 
@@ -496,7 +498,7 @@ class RTRL(InfluenceTensorLearner):
 
 class RFLO(InfluenceTensorLearner):
     class _UpdateRFLO_Can(
-        GetRnnConfig,
+        GetTimeConstant,
         GetInfluenceTensor,
         GetRecurrentState,
         PutRecurrentState,
@@ -511,7 +513,7 @@ class RFLO(InfluenceTensorLearner):
         interpreter = yield from ask(PX[Interpreter]())
         rnnForward = yield from self.createRnnForward(activationStep)
 
-        alpha = yield from interpreter.getRnnConfig.fmap(lambda x: x.alpha)
+        alpha = yield from interpreter.getTimeConstant
         influenceTensor = yield from interpreter.getInfluenceTensor
         actv0 = yield from interpreter.getRecurrentState
         param0 = yield from interpreter.getRecurrentParam
@@ -533,7 +535,6 @@ class UORO(PastFacingLearn):
         PastFacingLearn._PastFacingLearner_Can,
         GetUoro,
         PutUoro,
-        GetRnnConfig,
         GetPRNG,
         Protocol,
     ): ...
@@ -596,9 +597,9 @@ class UORO(PastFacingLearn):
         def creditAssignment_():
             interpreter = yield from ask(PX[Interpreter]())
             uoro = yield from interpreter.getUoro
-            rnnConfig = yield from interpreter.getRnnConfig
             key = yield from interpreter.updatePRNG()
-            randomVector = self.distribution(key, (rnnConfig.n_h,))
+            state_shape = yield from interpreter.getRecurrentState.fmap(jnp.shape)
+            randomVector = self.distribution(key, state_shape)
             B_prev = uoro.B
 
             (

@@ -19,7 +19,6 @@ class RnnConfig(eqx.Module):
     n_h: int
     n_in: int
     n_out: int
-    alpha: float
     activationFn: Callable[[jax.Array], jax.Array]
 
 

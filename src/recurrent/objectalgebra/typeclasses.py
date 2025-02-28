@@ -88,3 +88,8 @@ class GetLogConfig(Protocol):
 
 class GetPRNG(Protocol):
     def updatePRNG(self) -> App[Self, GodState, PRNG]: ...
+
+
+class GetTimeConstant(Protocol):
+    @property
+    def getTimeConstant(self) -> App[Self, GodState, float]: ...
