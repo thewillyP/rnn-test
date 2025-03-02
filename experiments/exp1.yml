@@ -19,6 +19,9 @@ parameters:
   seed:
     values: [27077, 27312,  8264, 82365, 39715, 39923, 56240, 64671, 53365, 67611]
 
+  test_seed:
+    value: 12345
+
   tr_examples_per_epoch:
     value: 100
 
@@ -55,6 +58,12 @@ parameters:
   outer_optimizer:
     value: "sgd_positive"
 
+  activation_fn:
+    value: "tanh"
+
+  architecture:
+    value: "rnn"
+
   n_h:
     value: 32
 
@@ -69,3 +78,6 @@ parameters:
 
   outer_time_constant:
     value: 1.0
+
+  logFlag:
+    value: True

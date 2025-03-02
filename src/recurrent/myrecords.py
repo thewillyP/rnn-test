@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Self
+from typing import Literal, Self
 from donotation import do
 import optax
 
@@ -23,7 +23,6 @@ class OhoData[Data](eqx.Module):
 class GodState(eqx.Module):
     prng: PRNG
     logConfig: LogConfig = eqx.field(static=True)
-    lossFn: Callable[[jax.Array, jax.Array], jax.Array] = eqx.field(static=True)
 
     # inner
     rnnState: RnnState
@@ -32,6 +31,7 @@ class GodState(eqx.Module):
     innerLogs: Logs
     innerTimeConstant: float = eqx.field(static=True)
     innerOptState: optax.OptState
+    innerSgdParameter: SgdParameter
 
     # outer
     outerInfluenceTensor: JACOBIAN
@@ -39,6 +39,7 @@ class GodState(eqx.Module):
     outerLogs: Logs
     outerTimeConstant: float = eqx.field(static=True)
     outerOptState: optax.OptState
+    outerSgdParameter: SgdParameter
 
 
 @dataclass(frozen=True)
@@ -64,9 +65,6 @@ class GodInterpreter:
     getRnnParameter: LocalApp[RnnParameter]
     putRnnParameter: Callable[[RnnParameter], LocalApp[Unit]]
 
-    getSgdParameter: LocalApp[SgdParameter]
-    putSgdParameter: Callable[[SgdParameter], LocalApp[Unit]]
-
     getOptState: LocalApp[optax.OptState]
     putOptState: Callable[[optax.OptState], LocalApp[Unit]]
     getOptimizer: LocalApp[optax.GradientTransformation]
@@ -77,6 +75,38 @@ class GodInterpreter:
         prng, new_prng = yield from gets(lambda e: prng_split(e.prng))
         _ = yield from modifies(lambda e: eqx.tree_at(lambda t: t.prng, e, new_prng))
         return pure(prng, PX[tuple[Self, GodState]]())
+
+
+test = "Hi"
+
+
+@dataclass(frozen=True)
+class GodConfig:
+    inner_learning_rate: float
+    outer_learning_rate: float
+    ts: tuple[int, int]
+    seed: int
+    test_seed: int
+    tr_examples_per_epoch: int
+    vl_examples_per_epoch: int
+    tr_avg_per: int
+    vl_avg_per: int
+    numVal: int
+    numTr: int
+    numTe: int
+    inner_learner: Literal["rtrl", "uoro", "rflo", "identity"]
+    outer_learner: Literal["rtrl", "uoro", "rflo", "identity"]
+    lossFn: Literal["cross_entropy"]
+    inner_optimizer: Literal["sgd", "sgd_positive"]
+    outer_optimizer: Literal["sgd", "sgd_positive"]
+    activation_fn: Literal["tanh", "relu"]
+    architecture: Literal["rnn"]
+    n_h: int
+    n_in: int
+    n_out: int
+    inner_time_constant: float
+    outer_time_constant: float
+    logFlag: bool
 
 
 # def rnn_array(state: State) -> jax.Array:
