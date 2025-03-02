@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import replace
-from typing import Callable, Protocol, Self
+from typing import Callable, Protocol
 from donotation import do
 import jax
 from jax import Array
@@ -10,20 +10,17 @@ from operator import add
 
 import optax
 
-from recurrent.monad import App, Maybe
+from recurrent.monad import *
 from recurrent.myrecords import GodState, InputOutput, OhoData
 from recurrent.mytypes import Gradient, Traversable
 from recurrent.objectalgebra.typeclasses import *
-
 from recurrent.mytypes import *
 from recurrent.monad import *
 from recurrent.parameters import *
 from recurrent.util import get_leading_dim_size, pytree_split
 
-
 type Agent[Interpreter, Env, X] = App[Interpreter, Env, X]
 type Controller[Data, Interpreter, Env, X] = Callable[[Data], Agent[Interpreter, Env, X]]
-
 
 type LossFn[Pred, Data] = Callable[[Pred, Data], LOSS]
 
@@ -133,17 +130,12 @@ def doGradient[Interpreter, Env, Wrt: jax.Array](
     env = yield from get(PX[Env]())
     param = yield from read_wrt
 
-    def parametrized(p: Array) -> tuple[LOSS, tuple[Maybe[LOSS], Env]]:
-        maybe, s = write_wrt(p).then(model).func(interpreter, env)
-        return maybe.payload, (maybe, s)
+    def parametrized(p: Array) -> tuple[LOSS, Env]:
+        return write_wrt(p).then(model).func(interpreter, env)
 
-    grad: GRADIENT
-    maybe: Maybe[LOSS]
-    new_env: Env
-    grad, (maybe, new_env) = eqx.filter_jacrev(parametrized, has_aux=True)(param)
-
+    grad, new_env = eqx.filter_jacrev(parametrized, has_aux=True)(param)
     _ = yield from put(new_env)
-    return lift(maybe.fmap(lambda _: Gradient[Wrt](jnp.ravel(grad))), PX[tuple[Interpreter, Env]]())
+    return pure(Gradient[Wrt](jnp.ravel(grad)), PX[tuple[Interpreter, Env]]())
 
 
 def endowAveragedGradients[Interpreter: GetRecurrentParam[Env], Env, Data](
@@ -163,29 +155,25 @@ def endowAveragedGradients[Interpreter: GetRecurrentParam[Env], Env, Data](
         ds_scannable_, ds_leftover = pytree_split(dataset, trunc)
         ds_scannable: Traversable[Traversable[Data]] = Traversable(ds_scannable_)
 
-        gr_scanned = yield from accumulateM(
-            gradientFn,
-            add,
-            param_shape,
-        )(ds_scannable)
-
+        gr_scanned = yield from accumulateM(gradientFn, add, param_shape)(ds_scannable)
         env_after_scannable = yield from get(PX[Env]())
 
-        def ifLeftoverData(leftover: Traversable[Data]) -> tuple[Maybe[Gradient[REC_PARAM]], Env]:
-            avgLeftover: Callable[[Gradient[REC_PARAM]], Gradient[REC_PARAM]]
-            avgLeftover = lambda gr: Gradient[REC_PARAM]((trunc / N) * gr_scanned.value + (n_leftover / N) * gr.value)
-            return gradientFn(leftover).fmap(avgLeftover).func(interpreter, env_after_scannable)
+        def if_leftover_data(leftover: Traversable[Data]) -> tuple[Gradient[REC_PARAM], Env]:
+            gr, new_env = gradientFn(leftover).func(interpreter, env_after_scannable)
+            avg = Gradient[REC_PARAM]((trunc / N) * gr_scanned.value + (n_leftover / N) * gr.value)
+            return avg, new_env
 
-        gradient_final: Maybe[Gradient[REC_PARAM]]
-        env_final: Env
+        def no_leftover(_: Traversable[Data]) -> tuple[Gradient[REC_PARAM], Env]:
+            return Gradient[REC_PARAM]((trunc / N) * gr_scanned.value), env_after_scannable
+
         gradient_final, env_final = jax.lax.cond(
-            n_leftover == 0,
-            lambda _: (just(Gradient[REC_PARAM]((trunc / N) * gr_scanned.value)), env_after_scannable),
-            ifLeftoverData,
+            n_leftover > 0,
+            if_leftover_data,
+            no_leftover,
             ds_leftover,
         )
         _ = yield from put(env_final)
-        return lift(gradient_final, PX[tuple[Interpreter, Env]]())
+        return pure(gradient_final, PX[tuple[Interpreter, Env]]())
 
     return avgGradient
 
@@ -204,11 +192,7 @@ def readoutRecurrentError[Data, Interpreter: _ReadoutRecurrentError_Can[Env], En
     def _readoutRecurrentError(data: Data) -> G[Agent[Interpreter, Env, Gradient[REC_STATE]]]:
         interpreter = yield from ask(PX[Interpreter]())
         willGetImmediateLoss = predictionStep(data).fmap(lambda p: lossFunction(p, data))
-        return doGradient(
-            willGetImmediateLoss,
-            interpreter.getRecurrentState,
-            interpreter.putRecurrentState,
-        )
+        return doGradient(willGetImmediateLoss, interpreter.getRecurrentState, interpreter.putRecurrentState)
 
     return _readoutRecurrentError
 
@@ -282,14 +266,13 @@ class PastFacingLearn(ABC):
             interpreter = yield from ask(PX[Interpreter]())
             env = yield from get(PX[Env]())
 
-            def agentFn(actv: REC_STATE, param: REC_PARAM) -> tuple[REC_STATE, tuple[Maybe[REC_STATE], Env]]:
-                maybe, s = (
+            def agentFn(actv: REC_STATE, param: REC_PARAM) -> tuple[REC_STATE, Env]:
+                return (
                     interpreter.putRecurrentState(actv)
                     .then(interpreter.putRecurrentParam(param))
                     .then(activationStep)
                     .func(interpreter, env)
                 )
-                return maybe.payload, (maybe, s)
 
             return pure(agentFn, PX[tuple[Interpreter, Env]]())
 
@@ -383,32 +366,21 @@ class RTRL(InfluenceTensorLearner):
     @do()
     def getInfluenceTensor[Interpreter: _UpdateInfluence_Can[Env], Env](
         self, activationStep: Agent[Interpreter, Env, REC_STATE]
-    ):
+    ) -> G[Agent[Interpreter, Env, Jacobian[REC_PARAM]]]:
         interpreter = yield from ask(PX[Interpreter]())
         rnnForward = yield from self.createRnnForward(activationStep)
-
         influenceTensor = yield from interpreter.getInfluenceTensor
         actv0 = yield from interpreter.getRecurrentState
         param0 = yield from interpreter.getRecurrentParam
 
         wrtActvFn = lambda a: rnnForward(a, param0)[0]
-
-        immediateJacobian__InfluenceTensor_product: Array = jacobian_matrix_product(
-            wrtActvFn,
-            actv0,
-            influenceTensor,
-        )
-
+        immediateJacobian__InfluenceTensor_product: Array = jacobian_matrix_product(wrtActvFn, actv0, influenceTensor)
         immediateInfluence: Array
-        maybe: Maybe[REC_STATE]
         env: Env
-        immediateInfluence, (maybe, env) = eqx.filter_jacfwd(lambda p: rnnForward(actv0, p), has_aux=True)(param0)
+        immediateInfluence, env = eqx.filter_jacfwd(lambda p: rnnForward(actv0, p), has_aux=True)(param0)
+        newInfluenceTensor = Jacobian[REC_PARAM](immediateJacobian__InfluenceTensor_product + immediateInfluence)
 
-        newInfluenceTensor: Jacobian[REC_PARAM] = Jacobian(
-            immediateJacobian__InfluenceTensor_product + immediateInfluence
-        )
-
-        log_condition: bool = yield from interpreter.getLogConfig.fmap(lambda x: x.doLog)
+        log_condition = yield from interpreter.getLogConfig.fmap(lambda x: x.doLog)
         shape_info = jax.eval_shape(eqx.filter_jacrev(wrtActvFn), actv0)
         jacobian = jax.lax.cond(
             log_condition,
@@ -420,7 +392,7 @@ class RTRL(InfluenceTensorLearner):
         _ = yield from put(env)
         _ = yield from interpreter.putLogs(Logs(immediateInfluenceTensor=immediateInfluence))
         _ = yield from interpreter.putLogs(Logs(hessian=jacobian))
-        return lift(maybe.fmap(lambda _: newInfluenceTensor), PX[tuple[Interpreter, Env]]())
+        return pure(newInfluenceTensor, PX[tuple[Interpreter, Env]]())
 
 
 class RFLO(InfluenceTensorLearner):
@@ -438,25 +410,22 @@ class RFLO(InfluenceTensorLearner):
     @do()
     def getInfluenceTensor[Interpreter: _UpdateRFLO_Can[Env], Env](
         self, activationStep: Agent[Interpreter, Env, REC_STATE]
-    ):
+    ) -> G[Agent[Interpreter, Env, Jacobian[REC_PARAM]]]:
         interpreter = yield from ask(PX[Interpreter]())
         rnnForward = yield from self.createRnnForward(activationStep)
-
         alpha = yield from interpreter.getTimeConstant
         influenceTensor = yield from interpreter.getInfluenceTensor
         actv0 = yield from interpreter.getRecurrentState
         param0 = yield from interpreter.getRecurrentParam
 
         immediateInfluence: Array
-        maybe: Maybe[REC_STATE]
         env: Env
-        immediateInfluence, (maybe, env) = eqx.filter_jacrev(lambda p: rnnForward(actv0, p), has_aux=True)(param0)
-
-        newInfluenceTensor: Jacobian[REC_PARAM] = Jacobian((1 - alpha) * influenceTensor + alpha * immediateInfluence)
+        immediateInfluence, env = eqx.filter_jacrev(lambda p: rnnForward(actv0, p), has_aux=True)(param0)
+        newInfluenceTensor = Jacobian[REC_PARAM]((1 - alpha) * influenceTensor + alpha * immediateInfluence)
 
         _ = yield from put(env)
         _ = yield from interpreter.putLogs(Logs(immediateInfluenceTensor=immediateInfluence))
-        return lift(maybe.fmap(lambda _: newInfluenceTensor), PX[tuple[Interpreter, Env]]())
+        return pure(newInfluenceTensor, PX[tuple[Interpreter, Env]]())
 
 
 class UORO(PastFacingLearn):
@@ -490,10 +459,10 @@ class UORO(PastFacingLearn):
                 uoro.A,
             )
 
-            def fn(p: Array) -> tuple[REC_STATE, tuple[Maybe[REC_STATE], Env]]:
+            def fn(p: Array) -> tuple[REC_STATE, Env]:
                 return rnnForward(actv0, p)
 
-            _, vjp_func, (maybe, env) = eqx.filter_vjp(fn, param0, has_aux=True)
+            _, vjp_func, env = eqx.filter_vjp(fn, param0, has_aux=True)
             immediateInfluence__Random_projection: Array
             (immediateInfluence__Random_projection,) = vjp_func(randomVector)
 
@@ -501,8 +470,8 @@ class UORO(PastFacingLearn):
             assert isinstance(immediateInfluence__Random_projection, Array)
 
             _ = yield from put(env)
-            maybe_new = maybe.fmap(lambda _: (immediateJacobian__A_projection, immediateInfluence__Random_projection))
-            return lift(maybe_new, PX[tuple[Interpreter, Env]]())
+            pair = (immediateJacobian__A_projection, immediateInfluence__Random_projection)
+            return pure(pair, PX[tuple[Interpreter, Env]]())
 
         return projectGradients()
 
@@ -521,7 +490,7 @@ class UORO(PastFacingLearn):
         activationStep: Agent[Interpreter, Env, REC_STATE],
     ) -> Agent[Interpreter, Env, Gradient[REC_PARAM]]:
         @do()
-        def creditAssignment_():
+        def creditAssignment_() -> G[Agent[Interpreter, Env, Gradient[REC_PARAM]]]:
             interpreter = yield from ask(PX[Interpreter]())
             uoro = yield from interpreter.getUoro
             key = yield from interpreter.updatePRNG()
@@ -550,7 +519,7 @@ def foldrLibrary[Data, Interpreter: GetRecurrentParam[Env], Env, Pred](
     library: Library[Data, Interpreter, Env, Pred],
 ) -> Library[Traversable[Data], Interpreter, Env, Traversable[Pred]]:
     @do()
-    def modelGradient_(data: Traversable[Data]):
+    def modelGradient_(data: Traversable[Data]) -> G[Agent[Interpreter, Env, Gradient[REC_PARAM]]]:
         interpreter = yield from ask(PX[Interpreter]())
         param_shape: Gradient[REC_PARAM]
         param_shape = yield from interpreter.getRecurrentParam.fmap(lambda x: Gradient(jnp.zeros_like(x)))
@@ -579,7 +548,7 @@ def endowBilevelOptimization[
     resetEnvForValidation: Agent[TrainInterpreter, Env, Unit],
 ) -> Library[OhoData[Data], OHO_Interpreter, Env, Pred]:
     @do()
-    def newActivationStep(oho_data: OhoData[Data]) -> Agent[OHO_Interpreter, Env, REC_PARAM]:
+    def newActivationStep(oho_data: OhoData[Data]) -> G[Agent[OHO_Interpreter, Env, REC_PARAM]]:
         @do()
         def updateParameter() -> G[Agent[TrainInterpreter, Env, REC_PARAM]]:
             interpreter = yield from ask(PX[TrainInterpreter]())
@@ -592,15 +561,13 @@ def endowBilevelOptimization[
         env = yield from get(PX[Env]())
         agentValPr = library.model(oho_data.validation)
         predictions, _ = resetEnvForValidation.then(agentValPr).func(trainInterpreter, env)
-        return lift(predictions, PX[tuple[OHO_Interpreter, Env]]())
+        return pure(predictions, PX[tuple[OHO_Interpreter, Env]]())
 
     @do()
     def newRecurrentErrorStep(oho_data: OhoData[Data]) -> G[Agent[OHO_Interpreter, Env, Gradient[REC_PARAM]]]:
         env = yield from get(PX[Env]())
         agentValGr = library.modelGradient(oho_data.validation)
-        recurrentGradient_, _ = resetEnvForValidation.then(agentValGr).func(trainInterpreter, env)
-        recurrentGradient = yield from lift(recurrentGradient_, PX[tuple[TrainInterpreter, Env]]())
-
+        recurrentGradient, _ = resetEnvForValidation.then(agentValGr).func(trainInterpreter, env)
         validation_log = Logs(validationGradient=recurrentGradient.value)
         interpreter = yield from ask(PX[OHO_Interpreter]())
         _ = yield from interpreter.putLogs(validation_log)
@@ -632,9 +599,9 @@ def clipGradient[Data, Interpreter, Env](
 
 def logGradient[Data, Interpreter: PutLogs[Env], Env](
     agentGr: Controller[Data, Interpreter, Env, Gradient[REC_PARAM]],
-):
+) -> Controller[Data, Interpreter, Env, Gradient[REC_PARAM]]:
     @do()
-    def _logGradient(data: Data):
+    def _logGradient(data: Data) -> G[Agent[Interpreter, Env, Gradient[REC_PARAM]]]:
         interpreter = yield from ask(PX[Interpreter]())
         gr = yield from agentGr(data)
         _ = yield from interpreter.putLogs(Logs(gradient=gr.value))
