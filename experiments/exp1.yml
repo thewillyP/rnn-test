@@ -31,9 +31,6 @@ parameters:
   tr_avg_per:
     value: 1
 
-  vl_avg_per:
-    value: 2000
-
   numVal:
     value: 2000
 

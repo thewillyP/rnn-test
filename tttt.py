@@ -1560,26 +1560,336 @@
 # print(condition)
 
 
+# import jax
+# import jax.numpy as jnp
+
+
+# def my_function(x: jnp.ndarray, cls: type) -> jnp.ndarray:
+#     """A JIT-compiled function that takes a static class type but doesn't use it."""
+#     return x * 2  # cls is not used
+
+
+# # JIT compile with `cls` as a static argument
+# jit_func = jax.jit(my_function, static_argnames=["cls"])
+
+# # Example usage
+# import numpy as np
+
+
+# class Dummy:
+#     pass
+
+
+# x = jnp.array([1, 2, 3])
+# result = jit_func(x, Dummy)  # Pass the class type
+# print(result)  # Output: [2 4 6]
+
+
+# import jax
+# import jax.numpy as jnp
+# import optax
+
+
+# # Define a simple loss function
+# def loss_fn(params):
+#     return jnp.sum(params**2)  # Example: L2 loss
+
+
+# # Initialize SGD optimizer
+# learning_rate = 0.1
+# optimizer = optax.sgd(learning_rate=learning_rate)
+# print(optimizer)
+
+
+# # Example parameters
+# params = jnp.array([1.0, -2.0, 3.0])
+
+# # Initialize optimizer state
+# opt_state = optimizer.init(params)
+
+# # Compute gradients
+# grad_fn = jax.grad(loss_fn)
+# grads = grad_fn(params)
+
+# # Compute updates
+# updates, new_opt_state = optimizer.update(grads, opt_state, params)
+
+# # Apply updates to parameters
+# new_params = optax.apply_updates(params, updates)
+
+# # Print everything
+# print(opt_state)
+# print("Params before update: ", params)
+# print("Gradients: ", grads)
+# print("Updates: ", updates)
+# print("Params after update: ", new_params)
+# print("Opt State: ", new_opt_state)
+
+
+# import jax
+# import jax.numpy as jnp
+# import optax
+# from typing import Any, NamedTuple
+# import equinox as eqx
+
+
+# # Define a PyTree structure
+# class MyState(NamedTuple):
+#     optimizer: Any  # Placeholder for Optax optimizer
+#     value: jnp.ndarray  # Some arbitrary state
+
+
+# # Define an initial state with SGD optimizer
+# init_optimizer = optax.sgd(learning_rate=0.1)
+# initial_state = MyState(optimizer=init_optimizer, value=jnp.array([1.0, 2.0, 3.0]))
+
+
+# # Function that modifies the optimizer inside the PyTree
+# def update_fn(state: MyState):
+#     new_optimizer = optax.adam(learning_rate=0.01)  # Change optimizer to Adam
+#     new_state = state._replace(optimizer=new_optimizer)
+#     return jnp.sum(state.value), new_state  # Returning some computed output and the modified state
+
+
+# # JIT compile the function
+# jit_update_fn = eqx.filter_jit(update_fn)
+
+# # Apply the function
+# output, new_state = jit_update_fn(initial_state)
+
+# print("Output:", output)
+# print("New Optimizer Type:", type(new_state.optimizer))
+
+
+# import jax
+# import jax.numpy as jnp
+# import optax
+# import equinox as eqx
+
+# jax.config.update("jax_enable_x64", True)
+
+
+# # Define a PyTree structure that stores only the learning rate and a trainable parameter
+# class MyState(eqx.Module):
+#     learning_rate: float
+#     params: jnp.ndarray  # Trainable parameters
+
+
+# # Initialize state with a learning rate and parameters
+# initial_state = MyState(learning_rate=0.1, params=jnp.array([1.0, 2.0, 3.0]))
+
+
+# # Define a loss function
+# def loss_fn(params):
+#     return jnp.sum(params**2)  # Simple quadratic loss
+
+
+# # Function that updates parameters using dynamically created optimizer
+# def update_fn(state: MyState):
+#     # Dynamically create optimizer
+#     optimizer = optax.sgd(learning_rate=state.learning_rate)
+
+#     # Compute gradient of loss w.r.t. parameters
+#     grads = jax.grad(loss_fn)(state.params)
+
+#     # Initialize optimizer state (momentum, accumulators, etc.)
+#     opt_state = optimizer.init(state.params)
+
+#     # Apply the optimizer update
+#     updates, opt_state = optimizer.update(grads, opt_state, state.params)
+#     new_params = optax.apply_updates(state.params, updates)
+
+#     # Return updated parameters and modified state
+#     new_state = MyState(learning_rate=state.learning_rate, params=new_params)
+#     return jnp.sum(new_params), new_state  # Returning a computed value and updated state
+
+
+# # JIT compile the function
+# jit_update_fn = eqx.filter_jit(update_fn)  # <--- Now we're actually going to use this
+
+# # **Apply the function using JIT**
+# output, new_state = jit_update_fn(initial_state)
+
+# print("JIT Output:", output)
+# print("Updated Parameters:", new_state.params)
+
+# # Compute the autodiff gradient w.r.t. learning rate
+# grad_fn = jax.grad(lambda s: jit_update_fn(s)[0])  # Use the JIT function for gradients
+# auto_grad = grad_fn(initial_state)
+
+# # Numerical gradient check
+# epsilon = 1e-4
+# state_plus = MyState(learning_rate=initial_state.learning_rate + epsilon, params=initial_state.params)
+# state_minus = MyState(learning_rate=initial_state.learning_rate - epsilon, params=initial_state.params)
+
+# numerical_grad = (jit_update_fn(state_plus)[0] - jit_update_fn(state_minus)[0]) / (2 * epsilon)
+
+# # Print results
+# print("Autodiff Gradient:", auto_grad.learning_rate)
+# print("Numerical Gradient:", numerical_grad)
+# print("Gradient Check Passed:", jnp.allclose(auto_grad.learning_rate, numerical_grad, atol=1e-5))
+
+
+# from dataclasses import dataclass
+# import wandb
+
+
+# # Step 1: Define your configuration class using dataclass
+# @dataclass
+# class MyConfig:
+#     learning_rate: float
+#     batch_size: int
+#     model_name: str
+#     use_augmentation: bool
+
+
+# # Step 2: Initialize a new wandb run with the configuration
+# wandb.init(config={"learning_rate": 0.001, "batch_size": 32, "model_name": "resnet", "use_augmentation": True})
+
+# # Step 3: Map wandb.config to your typed config class
+# config = MyConfig(**wandb.config)
+
+# # Step 4: Test by printing out the config
+# print("WandB Config:", wandb.config)  # Prints the raw wandb.config
+# print("Typed Config:", config)  # Prints the typed config object
+
+# # Additional: Check individual attributes to make sure they match
+# assert config.learning_rate == 0.001, f"Expected 0.001, but got {config.learning_rate}"
+# assert config.batch_size == 32, f"Expected 32, but got {config.batch_size}"
+# assert config.model_name == "resnet", f"Expected 'resnet', but got {config.model_name}"
+# assert config.use_augmentation is True, f"Expected True, but got {config.use_augmentation}"
+
+# print("All assertions passed! Configuration is properly mapped.")
+
+
+# import jax
+# import jax.numpy as jnp
+# from jax.flatten_util import ravel_pytree
+
+# # Define a pytree (nested structure)
+# tree = {"a": jnp.array([1.0, 2.0]), "b": (jnp.array([3.0]), jnp.array([4.0, 5.0]))}
+
+# # Flatten the pytree
+# flat_array, unravel_fn = ravel_pytree(tree)
+
+# print("Flattened array:", flat_array)
+
+# # Attempt to unflatten with a wrong-sized array
+# wrong_size_array = jnp.array([33.0, 2.0, 3.0, 4.0, 5.0])  # Incorrect size
+# try:
+#     new_tree = unravel_fn(wrong_size_array)
+# except ValueError as e:
+#     print("Error:", e)
+
+# print(new_tree)
+
+
+# import jax
+# import jax.numpy as jnp
+
+
+# # Define a JIT-compiled function
+# # @jax.jit
+# def my_function(x):
+#     return x * 2
+
+
+# # result = my_function(4)
+
+
+# print(jax.eval_shape(my_function, None))
+
+
+# import jax
+# import jax.numpy as jnp
+# import optax
+
+
+# # Define a simple loss function
+# def loss_fn(params):
+#     return jnp.sum(params**2)
+
+
+# # Initialize parameters
+# params = jnp.array([1.0, -2.0, 3.0])
+
+# # Create Adam optimizer
+# optimizer = optax.adam(learning_rate=0.1)
+
+# # Normally, we'd initialize state with optimizer.init(params)
+# # Instead, we use an empty state
+# opt_state = optax.EmptyState()  # Not recommended for Adam
+
+# # Compute gradients
+# grads = jax.grad(loss_fn)(params)
+
+# # Attempt to apply the optimizer update
+# try:
+#     updates, opt_state = optimizer.update(grads, opt_state, params)
+#     params = optax.apply_updates(params, updates)
+#     print("Updated params:", params)
+# except Exception as e:
+#     print("Error:", e)
+
+
+# import jax
+# import jax.numpy as jnp
+
+
+# # Define some functions that transform the accumulator
+# def f1(a):
+#     return a * 2
+
+
+# def f2(a):
+#     return a + 3
+
+
+# def f3(a):
+#     return a**2
+
+
+# # Hardcoded static list of functions
+# fs = [f1, f2, f3]
+
+
+# # Function applying each function in sequence
+# def apply_functions(a):
+#     for f in fs:  # Just a normal Python loop!
+#         a = f(a)
+#     return a
+
+
+# # JIT compile
+# jit_apply_functions = jax.jit(apply_functions)
+
+# # Test
+# print(jit_apply_functions(2.0))  # Should output 49 ((2 * 2) + 3) ** 2
+# print(jit_apply_functions(2.0))  # Should output 49 ((2 * 2) + 3) ** 2
+# print(jit_apply_functions(2.0))  # Should output 49 ((2 * 2) + 3) ** 2
+# print(jit_apply_functions(2.0))  # Should output 49 ((2 * 2) + 3) ** 2
+# print(jit_apply_functions(2.0))  # Should output 49 ((2 * 2) + 3) ** 2
+
 import jax
 import jax.numpy as jnp
+import equinox as eqx
 
 
-def my_function(x: jnp.ndarray, cls: type) -> jnp.ndarray:
-    """A JIT-compiled function that takes a static class type but doesn't use it."""
-    return x * 2  # cls is not used
+# Define a PyTree with None values
+class MyTree(eqx.Module):
+    param1: jnp.ndarray | None
+    param2: jnp.ndarray | None
 
 
-# JIT compile with `cls` as a static argument
-jit_func = jax.jit(my_function, static_argnames=["cls"])
+tree = MyTree(param1=None, param2=None)
 
-# Example usage
-import numpy as np
+# Define actual arrays to update the tree
+new_values = MyTree(param1=jnp.array([1.0, 2.0, 3.0]), param2=jnp.array([[4.0, 5.0], [6.0, 7.0]]))
 
+# Update param1 first
+updated_tree = eqx.tree_at(lambda t: t.param1, tree, new_values.param1, is_leaf=lambda x: x is None)
 
-class Dummy:
-    pass
+# Update param2 next
+updated_tree = eqx.tree_at(lambda t: t.param2, updated_tree, new_values.param2, is_leaf=lambda x: x is None)
 
-
-x = jnp.array([1, 2, 3])
-result = jit_func(x, Dummy)  # Pass the class type
-print(result)  # Output: [2 4 6]
+print(updated_tree)

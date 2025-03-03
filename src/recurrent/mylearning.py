@@ -38,7 +38,7 @@ class CreateLearner(Protocol):
         readoutStep: Controller[Data, Interpreter, Env, Pred],
         lossFunction: LossFn[Pred, Data],
         lossGradientWrtActiv: Controller[Data, Interpreter, Env, Gradient[REC_STATE]],
-    ) -> Library[Data, Interpreter, Env, Pred]: ...
+    ) -> Library[Data | Traversable[Data], Interpreter, Env, Pred | Traversable[Pred]]: ...
 
 
 @eqx.filter_jit
@@ -546,7 +546,10 @@ def endowBilevelOptimization[
     bilevelOptimizer: CreateLearner,
     computeLoss: LossFn[Pred, OhoData[Data]],
     resetEnvForValidation: Agent[TrainInterpreter, Env, Unit],
-) -> Library[OhoData[Data], OHO_Interpreter, Env, Pred]:
+) -> (
+    Library[OhoData[Data], OHO_Interpreter, Env, Pred]
+    | Library[Traversable[OhoData[Data]], OHO_Interpreter, Env, Traversable[Pred]]
+):
     @do()
     def newActivationStep(oho_data: OhoData[Data]) -> G[Agent[OHO_Interpreter, Env, REC_PARAM]]:
         @do()

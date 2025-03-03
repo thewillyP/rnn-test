@@ -7,3 +7,5 @@ RUN git clone https://github.com/thewillyP/rnn-test.git
 WORKDIR /rnn-test
 
 RUN chmod -R 777 /rnn-test
+
+# eventually I just want to have my run command here, which will be a wandb sync

@@ -1,13 +1,10 @@
-# %%
-import argparse
-import time
+import pickle
 from typing import Any
 
 import jax.experimental
 import optax
-from wandb.sdk.wandb_config import Config
-from recurrent.monad import foldM
 from recurrent.mylearning import *
+from recurrent.mylearning import RFLO, RTRL, UORO, IdentityLearner
 from recurrent.myrecords import GodConfig, GodInterpreter
 from recurrent.mytypes import *
 
@@ -19,9 +16,7 @@ from recurrent.parameters import (
     SgdParameter,
     UORO_Param,
 )
-from memory_profiler import profile
-from torch.utils.data import TensorDataset, DataLoader
-from toolz.itertoolz import partition_all
+
 from recurrent.util import *
 import jax.numpy as jnp
 import equinox as eqx
@@ -31,18 +26,52 @@ import wandb
 # jax.config.update("jax_enable_x64", True)
 
 
-# def main():
-#     # Initialize a new wandb run
-#     with wandb.init(mode="offline"):
-#         # If called by wandb.agent, as below,
-#         # this config will be set by Sweep Controller
-#         # config: Config = wandb.config
-#         config = GodConfig(**wandb.config)
-#         prng = PRNG(jax.random.key(config.seed))
-#         test_prng = PRNG(jax.random.key(config.test_seed))
+def main():
+    # Initialize a new wandb run
+    with wandb.init(mode="offline") as run:
+        # If called by wandb.agent, as below,
+        # this config will be set by Sweep Controller
+        # config: Config = wandb.config
+        config = GodConfig(**wandb.config)
+        prng = PRNG(jax.random.key(config.seed))
+        test_prng = PRNG(jax.random.key(config.test_seed))
+        env_prng, data_prng = jax.random.split(prng, 2)
 
-#         lossFn = getLossFn(config)
-#         env, innerInterpreter, outerInterpreter = create_env(config, prng)
+        lossFn = getLossFn(config)
+        env, innerInterpreter, outerInterpreter = create_env(config, env_prng)
+        oho_set, test_set = create_datasets(config, data_prng, test_prng)
+
+        all_logs, trained_env = train(oho_set, test_set, lossFn, env, innerInterpreter, outerInterpreter, config)
+
+        logs = all_logs.value
+        for i in range(logs.trainLoss.shape[0]):
+            run.log(
+                {
+                    "train_loss": logs.trainLoss[i],
+                    "validation_loss": logs.validationLoss[i],
+                    "test_loss": logs.testLoss[i],
+                    "parameter_norm": logs.parameterNorm[i],
+                    "oho_gradient_norm": logs.ohoGradient[i],
+                    "train_gradient_norm": logs.trainGradient[i],
+                    "validation_gradient_norm": logs.validationGradient[i],
+                    "immediate_influence_tensor_norm": logs.immediateInfluenceTensorNorm[i],
+                    "influence_tensor_norm": logs.influenceTensorNorm[i],
+                    "hessian_eigenvalues": logs.hessian[i],
+                }
+            )
+
+        trained_env_path = "trained_env.pkl"
+        with open(trained_env_path, "wb") as f:
+            pickle.dump(trained_env, f)
+
+        # **Generate a unique artifact name using the W&B run ID**
+        artifact_name = f"trained_env_{run.id}"
+
+        artifact = wandb.Artifact(name=artifact_name, type="environment")
+        artifact.add_file(trained_env_path)
+        run.log_artifact(artifact)
+
+        run.finish()
 
 
 def getLossFn(config: GodConfig) -> Callable[[jax.Array, jax.Array], LOSS]:
@@ -277,502 +306,249 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
     return env, innerInterpreter, outerInterpreter
 
 
-def test_create_env_with_recurrent(config: GodConfig, prng: PRNG) -> None:
-    """
-    Test function to verify create_env with an equinox-jitted function using
-    recurrent state and recurrent parameters through the inner interpreter.
-
-    Args:
-        config: GodConfig object containing the environment configuration
-        prng: PRNG object for random number generation
-    """
-    # Create the environment
-    env, inner_interpreter, outer_interpreter = create_env(config, prng)
-
-    # Define a jitted function that uses recurrent state and parameters
-
-    def test_recurrent_step(
-        state: GodState, interpreter: GodInterpreter, input_vec: jax.Array
-    ) -> tuple[GodState, jax.Array]:
-        """
-        Performs one step using recurrent state and vectorized recurrent parameters.
-
-        Args:
-            state: Current GodState
-            interpreter: Inner GodInterpreter
-            input_vec: Input vector for this step
-
-        Returns:
-            Tuple of updated state and loss
-        """
-        # Get recurrent state and vectorized parameters using the interpreter
-        rec_state_app = interpreter.getReccurentState
-        rec_param_app = interpreter.getRecurrentParam  # Note: Assuming this exists or using getRnnParameter
-
-        # Execute the monadic operations
-        rec_state, _ = rec_state_app.func(interpreter, state)
-        rec_params_flat, _ = rec_param_app.func(interpreter, state)
-
-        # Reshape flat parameters back into usable form
-        n_h, n_in = config.n_h, config.n_in
-        total_param_size = n_h * (n_h + n_in + 1)  # w_rec size
-        w_rec_flat = rec_params_flat[:total_param_size]
-        W_rec = w_rec_flat.reshape(n_h, n_h + n_in + 1)
-
-        W_rec_matrix = W_rec[:, :n_h]  # Recurrent weights
-        W_in = W_rec[:, n_h : n_h + n_in]  # Input weights
-        b_rec = W_rec[:, -1]  # Bias
-
-        # Compute new recurrent state
-        # Shape: (n_h,) = (n_h, n_h) @ (n_h,) + (n_h, n_in) @ (n_in,) + (n_h,)
-        new_rec_state = jax.nn.tanh(W_rec_matrix @ rec_state + W_in @ input_vec + b_rec)
-
-        # Update state using the interpreter
-        update_state_app = interpreter.putReccurentState(new_rec_state)
-        _, new_state = update_state_app.func(interpreter, state)
-
-        # Compute a dummy loss (difference between new and old state)
-        loss = jnp.mean(jnp.square(new_rec_state - rec_state))
-
-        return new_state, loss
-
-    # Test input vector
-    input_vec = jax.random.normal(jax.random.PRNGKey(123), (config.n_in,))
-
-    # Run the test
-    initial_state = env
-    initial_rec_state, _ = inner_interpreter.getReccurentState.func(inner_interpreter, initial_state)
-    initial_rec_params, _ = inner_interpreter.getRecurrentParam.func(inner_interpreter, initial_state)
-
-    print("Initial recurrent state shape:", initial_rec_state)
-    print("Initial recurrent parameters shape:", initial_rec_params)
-    print("Input vector shape:", input_vec.shape)
-
-    # Execute the jitted function
-    new_state, loss = eqx.filter_jit(test_recurrent_step)(initial_state, inner_interpreter, input_vec)
-
-    new_rec_state, _ = inner_interpreter.getReccurentState.func(inner_interpreter, new_state)
-    new_rec_params, _ = inner_interpreter.getRecurrentParam.func(inner_interpreter, new_state)
-
-    print("New recurrent state shape:", new_rec_state)
-    print("New recurrent parameters shape:", new_rec_params)
-    print("Computed loss:", loss)
-
-    # Verify the state has been updated
-    assert not jnp.array_equal(initial_rec_state, new_rec_state), "Recurrent state should have changed after update"
-
-    # Verify shapes are consistent
-    assert initial_rec_state.shape == new_rec_state.shape, "Recurrent state shapes should remain consistent"
-    assert initial_rec_params.shape == new_rec_params.shape, "Recurrent parameter shapes should remain consistent"
-
-    # Verify parameters remain unchanged
-    assert jnp.array_equal(initial_rec_params, new_rec_params), "Recurrent parameters should not change in this test"
-
-    print("Test with recurrent state and recurrent parameters completed successfully!")
-
-
-# Example usage
-if __name__ == "__main__":
-    # Create a sample config for testing
-    sample_config = GodConfig(
-        inner_learning_rate=0.01,
-        outer_learning_rate=0.01,
-        ts=(15, 17),  # Example tuple for time steps
-        seed=42,
-        test_seed=43,
-        tr_examples_per_epoch=1000,
-        vl_examples_per_epoch=200,
-        tr_avg_per=10,
-        vl_avg_per=5,
-        numVal=200,
-        numTr=1000,
-        numTe=500,
-        inner_learner="rflo",
-        outer_learner="rflo",
-        lossFn="cross_entropy",
-        inner_optimizer="sgd",
-        outer_optimizer="sgd",
-        activation_fn="tanh",
-        architecture="rnn",
-        n_h=10,
-        n_in=2,
-        n_out=2,
-        inner_time_constant=1.0,
-        outer_time_constant=1.0,
-        logFlag=True,
-    )
-
-    # Create PRNG
-    test_prng = PRNG(jax.random.PRNGKey(42))
-
-    # Run the test
-    test_create_env_with_recurrent(sample_config, test_prng)
-
-# # def create_env(config: GodConfig, prng: PRNG) -> GodState:
-# #     def getter[T](f: Callable[[GodState], T]) -> Agent[GodInterpreter, T]:
-# #         return get(PX[GodState]()).fmap(f)
-
-# #     def putter[T](f: Callable[[GodState], T]) -> Callable[[T], Agent[GodInterpreter, Unit]]:
-# #         return lambda x: modifies(lambda s: eqx.tree_at(f, s, x))
-
-# #     prng1, prng2, prng3, prng4, prng5 = jax.random.split(prng, 5)
-
-# #     logConfig = LogConfig(doLog=config.logFlag)
-
-# #     match config.activation_fn:
-# #         case "tanh":
-# #             activationFn = jax.nn.tanh
-# #         case "relu":
-# #             activationFn = jax.nn.relu
-# #         case _:
-# #             raise ValueError("Invalid activation function")
-
-# #     match config.architecture:
-# #         case "rnn":
-# #             W_in = jax.random.normal(prng2, (config.n_h, config.n_in)) * jnp.sqrt(1 / config.n_in)
-# #             W_rec, _ = jnp.linalg.qr(jax.random.normal(prng3, (config.n_h, config.n_h)))  # QR decomposition
-# #             W_out = jax.random.normal(prng4, (config.n_out, config.n_h)) * jnp.sqrt(1 / config.n_h)
-# #             b_rec = jnp.zeros((config.n_h, 1))
-# #             b_out = jnp.zeros((config.n_out, 1))
-
-# #             w_rec = jnp.hstack([W_rec, W_in, b_rec])
-# #             w_out = jnp.hstack([W_out, b_out])
-
-# #             rnnParameter = RnnParameter(w_rec=w_rec, w_out=w_out)
-
-# #             rnnConfig = RnnConfig(
-# #                 n_h=config.n_h,
-# #                 n_in=config.n_in,
-# #                 n_out=config.n_out,
-# #                 activationFn=activationFn,
-# #             )
-
-# #             activation = ACTIVATION(jax.random.normal(prng1, (config.n_h,)))
-# #             rnnState = RnnState(rnnConfig=rnnConfig, activation=activation, rnnParameter=rnnParameter)
-
-# #             rec_state_n = jnp.size(toVector(endowVector(activation)))
-# #             rec_param_n = jnp.size(toVector(endowVector(rnnParameter)))
-
-# #             innerInfluenceTensor = jnp.zeros((rec_state_n, rec_param_n))
-
-# #             innerUoroInit = toVector(
-# #                 endowVector(
-# #                     RnnParameter(
-# #                         w_rec=jax.random.normal(prng5, rnnParameter.w_rec.shape),
-# #                         w_out=jnp.zeros_like(rnnParameter.w_out),
-# #                     )
-# #                 )
-# #             )
-
-# #             innerLogs = Logs(
-# #                 gradient=jnp.zeros_like(toVector(endowVector(rnnParameter))),
-# #                 influenceTensor=innerInfluenceTensor,
-# #                 immediateInfluenceTensor=innerInfluenceTensor,
-# #                 hessian=jnp.zeros((rec_state_n, rec_state_n)),
-# #             )
-
-# #             getActivationM = getter(lambda s: s.rnnState.activation)
-# #             putActivationM = putter(lambda s: s.rnnState.activation)
-# #             getRnnConfigM = getter(lambda s: s.rnnState.rnnConfig)
-# #             getRnnParameterM = getter(lambda s: s.rnnState.rnnParameter)
-# #             putRnnParameterM = putter(lambda s: s.rnnState.rnnParameter)
-# #             getInfluenceTensorM = getter(lambda s: s.innerInfluenceTensor)
-# #             putInfluenceTensorM = putter(lambda s: s.innerInfluenceTensor)
-
-# #             getRecurrentState = getActivationM.fmap(compose2(endowVector, toVector))
-# #             putRecurrentState = lambda x: getActivationM.fmap(lambda s: invmap(s, lambda _: x))
-# #             getRecurrentParameter = getRnnParameterM.fmap(compose2(endowVector, toVector))
-# #             putRecurrentParameter = lambda x: getRnnParameterM.fmap(lambda s: invmap(s, lambda _: x))
-
-# #         case _:
-# #             raise ValueError("Invalid architecture")
-
-# #     match config.inner_optimizer:
-# #         case "sgd":
-# #             sgd = SgdParameter(learning_rate=config.inner_learning_rate)
-# #             getOptimizerM = getter(lambda s: s.innerSgdParameter).fmap(lambda s: optax.sgd(s.learning_rate))
-# #             getUpdaterM = pure(optax.apply_updates, PX[tuple[GodInterpreter, GodState]]())
-# #             innerOptState = optax.sgd(sgd.learning_rate).init(jnp.empty((rec_param_n,)))
-# #         case "sgd_positive":
-# #             sgd = SgdParameter(learning_rate=config.inner_learning_rate)
-# #             getOptimizerM = getter(lambda s: s.innerSgdParameter).fmap(lambda s: optax.sgd(s.learning_rate))
-
-# #             def positive_updates(params: optax.Params, updates: optax.Updates):
-# #                 return jax.tree.map(lambda p, u: jnp.maximum(p + u, 0), params, updates)
-
-# #             getUpdaterM = pure(positive_updates, PX[tuple[GodInterpreter, GodState]]())
-# #             innerOptState = optax.sgd(sgd.learning_rate).init(jnp.empty((rec_param_n,)))
-# #         case _:
-# #             raise ValueError("Invalid inner optimizer")
-
-# #     match config.inner_learner:
-# #         case "rtrl":
-# #             getUoroM = getter(lambda s: s.innerUoro).flat_map(
-# #                 lambda x: app_nothing(x, PX[tuple[GodInterpreter, GodState]]())
-# #             )
-# #             putUoroM = lambda _: app_nothing(Unit(), PX[tuple[GodInterpreter, GodState]]())
-# #         case "uoro":
-# #             getUoroM = getter(lambda s: s.innerUoro)
-# #             putUoroM = putter(lambda s: s.innerUoro)
-# #         case "rflo":
-# #             getUoroM = getter(lambda s: s.innerUoro).flat_map(
-# #                 lambda x: app_nothing(x, PX[tuple[GodInterpreter, GodState]]())
-# #             )
-# #             putUoroM = lambda _: app_nothing(Unit(), PX[tuple[GodInterpreter, GodState]]())
-# #         case "identity":
-# #             getUoroM = getter(lambda s: s.innerUoro).flat_map(
-# #                 lambda x: app_nothing(x, PX[tuple[GodInterpreter, GodState]]())
-# #             )
-# #             putUoroM = lambda _: app_nothing(Unit(), PX[tuple[GodInterpreter, GodState]]())
-# #         case _:
-# #             raise ValueError("Invalid inner learner")
-
-# #     innerInterpreter = GodInterpreter(
-# #         getRecurrentState=getRecurrentState,
-# #         putRecurrentState=putRecurrentState,
-# #         getRecurrentParameter=getRecurrentParameter,
-# #         putRecurrentParameter=putRecurrentParameter,
-# #         getActivation=getActivationM,
-# #         putActivation=putActivationM,
-# #         getInfluenceTensor=getInfluenceTensorM,
-# #         putInfluenceTensor=putInfluenceTensorM,
-# #         getUoro=getUoroM,
-# #         putUoro=putUoroM,
-# #         getRnnConfig=getRnnConfigM,
-# #         getTimeConstant=getter(lambda s: s.innerTimeConstant),
-# #         getLogConfig=getter(lambda s: s.logConfig),
-# #         putLogs=putter(lambda s: s.innerLogs),
-# #         getRnnParameter=getRnnParameterM,
-# #         putRnnParameter=putRnnParameterM,
-# #         getOptState=getter(lambda s: s.innerOptState),
-# #         putOptState=putter(lambda s: s.innerOptState),
-# #         getOptimizer=getOptimizerM,
-# #         getUpdater=getUpdaterM,
-# #     )
-
-# #     match config.outer_optimizer:
-# #         case "sgd":
-# #             outer_sgd = SgdParameter(learning_rate=config.outer_learning_rate)
-# #             getOuterOptimizerM = getter(lambda s: s.outerSgdParameter).fmap(lambda s: optax.sgd(s.learning_rate))
-# #             getOuterUpdaterM = pure(optax.apply_updates, PX[tuple[GodInterpreter, GodState]]())
-# #             outerOptState = optax.sgd(outer_sgd.learning_rate).init(jnp.empty((rec_param_n,)))
-
-# #             rec_state_n = jnp.size(toVector(endowVector(activation)))
-# #             rec_param_n = jnp.size(toVector(endowVector(rnnParameter)))
-
-# #         case "sgd_positive":
-# #             outer_sgd = SgdParameter(learning_rate=config.outer_learning_rate)
-# #             getOuterOptimizerM = getter(lambda s: s.outerSgdParameter).fmap(lambda s: optax.sgd(s.learning_rate))
-# #             getOuterUpdaterM = pure(optax.apply_updates, PX[tuple[GodInterpreter, GodState]]())
-# #             outerOptState = optax.sgd(outer_sgd.learning_rate).init(jnp.empty((rec_param_n,)))
-# #         case _:
-# #             raise ValueError("Invalid outer optimizer")
-
-
-# def create_dataset(config: Config, prng: PRNG, test_prng: PRNG) -> Traversable[OhoData[InputOutput]]:
-#     pass
-
-
-# def generate_add_task_dataset(N, t_1, t_2, tau_task, rng_key):
-#     """y(t) = 0.5 + 0.5 * x(t - t_1) - 0.25 * x(t - t_2)"""
-#     N = N // tau_task
-
-#     x = jax.random.bernoulli(rng_key, 0.5, (N,)).astype(jnp.float32)
-
-#     y = 0.5 + 0.5 * jnp.roll(x, t_1) - 0.25 * jnp.roll(x, t_2)
-
-#     X = jnp.asarray([x, 1 - x]).T
-#     Y = jnp.asarray([y, 1 - y]).T
-
-#     # Temporally stretch according to the desire timescale of change.
-#     X = jnp.tile(X, tau_task).reshape((tau_task * N, 2))
-#     Y = jnp.tile(Y, tau_task).reshape((tau_task * N, 2))
-
-#     return X, Y
-
-
-# def constructRnnEnv(rng_key: Array, initLearningRate: float):
-#     """Constructs an RNN environment with predefined configurations."""
-
-#     # Define network dimensions
-#     n_h, n_in, n_out = 32, 2, 2
-#     alpha = 1.0
-
-#     # Define learning rates as arrays
-#     # 0.02712261
-#     learning_rate = jnp.asarray([initLearningRate])
-#     meta_learning_rate = jnp.asarray([0.00])
-
-#     rng_key, subkey1, subkey2, subkey3 = jax.random.split(rng_key, 4)
-
-#     W_in = jax.random.normal(subkey1, (n_h, n_in)) * jnp.sqrt(1 / n_in)
-#     W_rec, _ = jnp.linalg.qr(jax.random.normal(subkey2, (n_h, n_h)))  # QR decomposition
-#     W_out = jax.random.normal(subkey3, (n_out, n_h)) * jnp.sqrt(1 / n_h)
-#     b_rec = jnp.zeros((n_h, 1))
-#     b_out = jnp.zeros((n_out, 1))
-
-#     w_rec = jnp.hstack([W_rec, W_in, b_rec])
-#     w_out = jnp.hstack([W_out, b_out])
-
-#     # Initialize parameters
-#     parameter = RnnParameter(w_rec=w_rec, w_out=w_out)
-#     rnn_config = RnnConfig(n_h=n_h, n_in=n_in, n_out=n_out, alpha=alpha, activationFn=jnp.tanh)
-
-#     sgd = SgdParameter(learning_rate=learning_rate)
-#     sgd_mlr = SgdParameter(learning_rate=meta_learning_rate)
-
-#     # Generate random activation state
-#     rng_key, activation_rng = jax.random.split(rng_key)
-#     activation = ACTIVATION(jax.random.normal(activation_rng, (n_h,)))
-
-#     # Split keys for UORO
-#     rng_key, prng_A, prng_B, prng_C = jax.random.split(rng_key, num=4)
-
-#     # Construct environment state
-#     num_activ = jnp.size(activation)
-#     num_params = jnp.size(compose2(endowVector, toVector)(parameter))
-#     influenceTensor_ = zeroedInfluenceTensor(n_h, parameter)
-#     ohoInfluenceTensor_ = zeroedInfluenceTensor(jnp.size(compose2(endowVector, toVector)(parameter)), sgd)
-#     init_env = RnnGodState[RnnParameter, SgdParameter, SgdParameter](
-#         activation=activation,
-#         influenceTensor=Jacobian[RnnParameter](influenceTensor_),
-#         ohoInfluenceTensor=Jacobian[SgdParameter](ohoInfluenceTensor_),
-#         parameter=parameter,
-#         hyperparameter=sgd,
-#         metaHyperparameter=sgd_mlr,
-#         rnnConfig=rnn_config,
-#         rnnConfig_bilevel=rnn_config,
-#         uoro=UORO_Param(
-#             A=jax.random.normal(prng_A, (n_h,)),
-#             B=uoroBInit(prng_B, parameter),
-#         ),
-#         prng=prng_C,
-#         logs=Logs(
-#             gradient=jnp.zeros_like(toVector(endowVector(parameter))),
-#             influenceTensor=influenceTensor_,
-#             immediateInfluenceTensor=influenceTensor_,
-#             hessian=jnp.zeros((num_activ, num_activ)),
-#         ),
-#         oho_logs=Logs(
-#             gradient=jnp.zeros_like(toVector(endowVector(sgd))),
-#             validationGradient=jnp.zeros_like(toVector(endowVector(parameter))),
-#             influenceTensor=ohoInfluenceTensor_,
-#             immediateInfluenceTensor=ohoInfluenceTensor_,
-#             hessian=jnp.zeros((num_params, num_params)),
-#         ),
+def create_datasets(
+    config: GodConfig, prng: PRNG, test_rng_key: PRNG
+) -> tuple[Traversable[OhoData[Traversable[InputOutput]]], Traversable[InputOutput]]:
+    # Extract parameters from config
+    t1, t2 = config.ts
+    N_train = config.numTr
+    N_val = config.numVal
+    N_test = config.numTe
+    tr_series_length = config.tr_examples_per_epoch
+    vl_series_length = config.vl_examples_per_epoch
+
+    # Initialize PRNG keys
+    prng1, prng2 = jax.random.split(prng, 2)
+
+    # Generate raw datasets
+    X_train, Y_train = generate_add_task_dataset(N_train, t1, t2, 1, prng1)
+    X_val, Y_val = generate_add_task_dataset(N_val, t1, t2, 1, prng2)
+    X_test, Y_test = generate_add_task_dataset(N_test, t1, t2, 1, test_rng_key)
+
+    # Calculate number of updates
+    num_updates_train = N_train // tr_series_length
+    num_updates_val = N_val // vl_series_length
+
+    # Transform training data
+    X_train = transform(X_train, num_updates_train)
+    Y_train = transform(Y_train, num_updates_train)
+
+    # Transform validation data
+    X_val = transform(X_val, num_updates_val)
+    Y_val = transform(Y_val, num_updates_val)
+
+    # Repeat validation data to match training epochs if needed
+    if num_updates_val < num_updates_train:
+        repeats_needed = num_updates_train // num_updates_val + 1  # subsequent :num_updates_train trims down to exact
+        X_val = jnp.repeat(X_val, repeats_needed, axis=0)[:num_updates_train]
+        Y_val = jnp.repeat(Y_val, repeats_needed, axis=0)[:num_updates_train]
+    elif num_updates_val > num_updates_train:
+        X_val = X_val[:num_updates_train]
+        Y_val = Y_val[:num_updates_train]
+
+    # Create Traversable objects
+    train_set = Traversable(InputOutput(x=X_train, y=Y_train))
+    val_set = Traversable(InputOutput(x=X_val, y=Y_val))
+    test_set = Traversable(InputOutput(x=X_test, y=Y_test))
+
+    oho_set = Traversable(OhoData(payload=train_set, validation=val_set))
+
+    return oho_set, test_set
+
+
+def transform(arr: Array, _t: int):
+    return arr.reshape((_t, -1) + arr.shape[1:])
+
+
+def generate_add_task_dataset(N, t_1, t_2, tau_task, rng_key):
+    """y(t) = 0.5 + 0.5 * x(t - t_1) - 0.25 * x(t - t_2)"""
+    N = N // tau_task
+
+    x = jax.random.bernoulli(rng_key, 0.5, (N,)).astype(jnp.float32)
+
+    y = 0.5 + 0.5 * jnp.roll(x, t_1) - 0.25 * jnp.roll(x, t_2)
+
+    X = jnp.asarray([x, 1 - x]).T
+    Y = jnp.asarray([y, 1 - y]).T
+
+    # Temporally stretch according to the desire timescale of change.
+    X = jnp.tile(X, tau_task).reshape((tau_task * N, 2))
+    Y = jnp.tile(Y, tau_task).reshape((tau_task * N, 2))
+
+    return X, Y
+
+
+def create_learner(learner: str) -> RTRL | RFLO | UORO | IdentityLearner:
+    match learner:
+        case "rtrl":
+            return RTRL()
+        case "rflo":
+            return RFLO()
+        case "uoro":
+            return UORO(lambda key, shape: jax.random.uniform(key, shape, minval=-1.0, maxval=1.0))
+        case "identity":
+            return IdentityLearner()
+        case _:
+            raise ValueError("Invalid learner")
+
+
+def create_rnn_learner(learner: RTRL | RFLO | UORO | IdentityLearner, lossFn: Callable[[jax.Array, jax.Array], LOSS]):
+    match learner:
+        case _:
+            library: Library[InputOutput, GodInterpreter, GodState, PREDICTION]
+            library = learner.createLearner(
+                lambda d: doRnnStep(d).then(ask(PX[GodInterpreter]())).flat_map(lambda i: i.getReccurentState),
+                doRnnReadout,  # these can be passed in dynamically later
+                lambda a, b: lossFn(a, b.y),
+                readoutRecurrentError(doRnnReadout, lossFn),
+            )
+            return foldrLibrary(library)
+
+
+def train(
+    dataset: Traversable[OhoData[Traversable[InputOutput]]],
+    test_dataset: Traversable[InputOutput],
+    lossFn: Callable[[jax.Array, jax.Array], LOSS],
+    initEnv: GodState,
+    innerInterpreter: GodInterpreter,
+    outerInterpreter: GodInterpreter,
+    config: GodConfig,
+) -> tuple[Traversable[AllLogs], GodState]:
+    innerLearner = create_learner(config.inner_learner)
+    innerLibrary = create_rnn_learner(innerLearner, lossFn)
+    outerLearner = create_learner(config.outer_learner)
+
+    innerController = endowAveragedGradients(innerLibrary.modelGradient, config.tr_avg_per)
+    innerController = logGradient(innerController)
+    innerLibrary = innerLibrary._replace(modelGradient=innerController)
+
+    match outerLearner:
+        case "bptt":
+            raise NotImplementedError("BPTT is not implemented yet")
+        case _:
+            outerLibrary = endowBilevelOptimization(
+                innerLibrary,
+                doOptimizerStep,
+                innerInterpreter,
+                outerLearner,
+                lambda a, b: LOSS(jnp.mean(lossFn(a.value, b.validation.value.y))),
+                resetRnnActivation(initEnv.rnnState.activation),
+            )
+
+    outerController = logGradient(outerLibrary.modelGradient)
+    outerLibrary = outerLibrary._replace(modelGradient=outerController)
+
+    @do()
+    def updateStep(oho_data: OhoData[Traversable[InputOutput]]):
+        env = yield from get(PX[GodState]())
+        interpreter = yield from ask(PX[GodInterpreter]())
+        hyperparameters = yield from interpreter.getRecurrentParam
+        weights, _ = interpreter.getRecurrentParam.func(innerInterpreter, env)
+
+        validation_model = (
+            lambda ds: resetRnnActivation(initEnv.rnnState.activation).then(innerLibrary.modelLossFn(ds)).func
+        )
+
+        te, _ = validation_model(test_dataset)(innerInterpreter, env)
+        vl, _ = validation_model(oho_data.validation)(innerInterpreter, env)
+        tr, _ = innerLibrary.modelLossFn(oho_data.payload)(innerInterpreter, env)
+
+        _ = yield from outerLibrary.modelGradient(oho_data).flat_map(doOptimizerStep)
+
+        log = AllLogs(
+            trainLoss=tr / config.tr_examples_per_epoch,
+            validationLoss=vl / config.vl_examples_per_epoch,
+            testLoss=te / config.numTe,
+            hyperparameters=hyperparameters,
+            parameterNorm=jnp.linalg.norm(weights),
+            ohoGradient=env.outerLogs.gradient,
+            trainGradient=env.innerLogs.gradient,
+            validationGradient=env.outerLogs.validationGradient,
+            immediateInfluenceTensorNorm=jnp.linalg.norm(jnp.ravel(env.outerLogs.immediateInfluenceTensor)),
+            influenceTensorNorm=jnp.linalg.norm(jnp.ravel(env.outerLogs.influenceTensor)),
+            hessian=jnp.linalg.eigvals(env.outerLogs.hessian),
+        )
+        return pure(log, PX[tuple[GodInterpreter, GodState]]())
+
+    model = eqx.filter_jit(traverseM(updateStep)(dataset).func).lower(outerInterpreter, initEnv).compile()
+
+    logs, trained_env = model(outerInterpreter, initEnv)
+    return logs, trained_env
+
+
+# # Test script
+# def test_create_datasets():
+#     # Create initialized GodConfig object
+#     config = GodConfig(
+#         inner_learning_rate=0.01,
+#         outer_learning_rate=0.001,
+#         ts=(1, 2),
+#         seed=42,
+#         test_seed=43,
+#         tr_examples_per_epoch=10,
+#         vl_examples_per_epoch=5,
+#         tr_avg_per=1,
+#         vl_avg_per=1,
+#         num_epochs=100,
+#         numVal=200,
+#         numTr=1000,
+#         numTe=100,
+#         inner_learner="rtrl",
+#         outer_learner="rtrl",
+#         lossFn="cross_entropy",
+#         inner_optimizer="sgd",
+#         outer_optimizer="sgd",
+#         activation_fn="tanh",
+#         architecture="rnn",
+#         n_h=10,
+#         n_in=2,
+#         n_out=2,
+#         inner_time_constant=1.0,
+#         outer_time_constant=1.0,
+#         logFlag=False,
 #     )
 
-#     return rng_key, init_env
+#     # Create PRNG keys
+#     prng = jax.random.PRNGKey(config.seed)
+#     test_prng = jax.random.PRNGKey(config.test_seed)
+
+#     # Run your existing create_datasets function
+#     dataset, test_set = create_datasets(config, prng, test_prng)
+
+#     # Verify structure and shapes
+#     print("Testing dataset structure and shapes:")
+
+#     print("✓ Outer Traversable exists")
+#     inner = dataset.value
+#     print("✓ Inner Traversable exists")
+#     oho_data = inner.value
+#     print("✓ OhoData exists")
+
+#     payload = oho_data.payload
+#     print(f"Payload x shape: {payload.value.x.shape}")
+#     print(f"Payload y shape: {payload.value.y.shape}")
+#     assert payload.value.x.shape[0] == config.num_epochs
+#     print("✓ Payload has correct epoch dimension")
+
+#     validation = oho_data.validation
+#     print(f"Validation x shape: {validation.value.x.shape}")
+#     print(f"Validation y shape: {validation.value.y.shape}")
+#     assert validation.value.x.shape[0] == config.num_epochs
+#     print("✓ Validation has correct epoch dimension")
+
+#     print(f"Test x shape: {test_set.value.x.shape}")
+#     print(f"Test y shape: {test_set.value.y.shape}")
+#     print("✓ Test set exists")
+
+#     assert jnp.all(jnp.isfinite(payload.value.x))
+#     assert jnp.all(jnp.isfinite(validation.value.x))
+#     assert jnp.all(jnp.isfinite(test_set.value.x))
+#     print("✓ All arrays contain finite values")
 
 
-# def train(
-#     dataloader: Traversable[OhoInputOutput],
-#     test_set: Traversable[InputOutput],
-#     t_series_length: int,
-#     trunc_length: int,
-#     N_test: int,
-#     N_val: int,
-#     initEnv: RnnGodState[RnnParameter, SgdParameter, SgdParameter],
-# ):
-#     type Train_Dl = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]
-#     type OHO = OhoInterpreter[RnnParameter, SgdParameter, SgdParameter]
-#     type ENV = RnnGodState[RnnParameter, SgdParameter, SgdParameter]
-
-#     # interpreters
-#     trainDialect = BaseRnnInterpreter[RnnParameter, SgdParameter, SgdParameter]()
-#     ohoDialect = OhoInterpreter[RnnParameter, SgdParameter, SgdParameter](trainDialect)
-
-#     # lambda key, shape: jax.random.uniform(key, shape, minval=-1.0, maxval=1.0)
-#     onlineLearner: RnnLibrary[Train_Dl, InputOutput, ENV, PREDICTION, RnnParameter]
-#     onlineLearner = RTRL[
-#         InputOutput,
-#         ENV,
-#         ACTIVATION,
-#         RnnParameter,
-#         jax.Array,
-#         PREDICTION,
-#     ]().createLearner(
-#         doRnnStep(),
-#         doRnnReadout(),
-#         lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b)),
-#         readoutRecurrentError(doRnnReadout(), lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b))),
-#     )
-
-#     onlineLearner_folded = foldrRnnLearner(onlineLearner, initEnv.parameter)
-#     rnnLearner = endowAveragedGradients(onlineLearner_folded, trunc_length, initEnv.parameter)
-#     rnnLearner = logGradient(rnnLearner)
-#     # rnnLearner = normalizeGradientRnnLibrary(rnnLearner)
-
-#     oho_rtrl = RTRL[
-#         OhoInputOutput,
-#         ENV,
-#         RnnParameter,
-#         SgdParameter,
-#         jax.Array,
-#         Traversable[PREDICTION],
-#     ]()
-#     # oho_rtrl = IdentityLearner()
-
-#     def validation_loss(label: Traversable[jax.Array], prediction: Traversable[PREDICTION]):
-#         return LOSS(jnp.mean(optax.safe_softmax_cross_entropy(label.value, prediction.value)))
-
-#     oho: RnnLibrary[OHO, OhoInputOutput, ENV, Traversable[PREDICTION], SgdParameter]
-#     oho = endowBilevelOptimization(
-#         rnnLearner,
-#         doSgdStep,
-#         trainDialect,
-#         oho_rtrl,
-#         validation_loss,
-#         resetRnnActivation(initEnv.activation),
-#     )
-#     oho = logGradient(oho)
-#     # oho = clipGradient(4.0, oho)
-
-#     @do()
-#     def updateStep():
-#         env = yield from get(PX[ENV]())
-#         interpreter = yield from askForInterpreter(PX[OHO]())
-#         oho_data = yield from ask(PX[OhoInputOutput]())
-#         validation_model = resetRnnActivation(initEnv.activation).then(rnnLearner.rnnWithLoss).func
-
-#         learning_rate = yield from interpreter.getParameter().fmap(lambda x: x.learning_rate)
-#         te, _ = validation_model(trainDialect, test_set, env)
-#         vl, _ = validation_model(trainDialect, oho_data.validation, env)  # lag 1 timestep bc show prev param validation
-#         tr, _ = rnnLearner.rnnWithLoss.func(trainDialect, oho_data.train, env)
-#         weights = toVector(endowVector(env.parameter))
-
-#         _ = yield from oho.rnnWithGradient.flat_map(doSgdStep_Positive)
-
-#         log = AllLogs(
-#             trainLoss=tr / t_series_length,
-#             validationLoss=vl / N_val,
-#             testLoss=te / N_test,
-#             learningRate=learning_rate,
-#             parameterNorm=jnp.linalg.norm(weights),
-#             ohoGradient=env.oho_logs.gradient,
-#             trainGradient=jnp.linalg.norm(env.logs.gradient),
-#             validationGradient=jnp.linalg.norm(env.oho_logs.validationGradient),
-#             immediateInfluenceTensor=jnp.linalg.norm(jnp.ravel(env.oho_logs.immediateInfluenceTensor)),
-#             influenceTensor=jnp.linalg.norm(jnp.ravel(env.oho_logs.influenceTensor)),
-#             hessian=jnp.linalg.eigvals(env.oho_logs.hessian),
-#         )
-#         return pure(log, PX3[OHO, OhoInputOutput, ENV]())
-
-#     model = eqx.filter_jit(traverse(updateStep()).func).lower(ohoDialect, dataloader, initEnv).compile()
-
-#     start = time.time()
-#     logs, trained_env = model(ohoDialect, dataloader, initEnv)
-#     tttt = f"Train Time: {time.time() - start}"
-#     logs: AllLogs = logs.value
-
-#     print(logs.trainLoss[-1])
-#     print(logs.testLoss[-1])
-#     print(logs.validationLoss[-1])
-#     print(logs.learningRate[-1])
-#     print(tttt)
-
-#     return logs, trained_env
-
+# if __name__ == "__main__":
+#     test_create_datasets()
+#     print("\nAll tests passed!")
 
 # t1 = 15
 # t2 = 17

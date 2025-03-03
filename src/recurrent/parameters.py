@@ -50,13 +50,13 @@ class AllLogs(eqx.Module):
     trainLoss: jax.Array
     validationLoss: jax.Array
     testLoss: jax.Array
-    learningRate: jax.Array
+    hyperparameters: jax.Array
     parameterNorm: jax.Array
     ohoGradient: jax.Array
     trainGradient: jax.Array
     validationGradient: jax.Array
-    immediateInfluenceTensor: jax.Array
-    influenceTensor: jax.Array
+    immediateInfluenceTensorNorm: jax.Array
+    influenceTensorNorm: jax.Array
     hessian: jax.Array
 
 

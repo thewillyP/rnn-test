@@ -91,7 +91,6 @@ class GodConfig:
     tr_examples_per_epoch: int
     vl_examples_per_epoch: int
     tr_avg_per: int
-    vl_avg_per: int
     numVal: int
     numTr: int
     numTe: int
