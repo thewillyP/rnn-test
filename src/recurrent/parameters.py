@@ -11,6 +11,10 @@ class SgdParameter(eqx.Module):
     learning_rate: float
 
 
+class AdamParameter(eqx.Module):
+    learning_rate: float
+
+
 class RnnParameter(eqx.Module):
     w_rec: jax.Array
     w_out: jax.Array

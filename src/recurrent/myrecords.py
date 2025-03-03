@@ -19,27 +19,28 @@ class OhoData[Data](eqx.Module):
     validation: Data
 
 
-@dataclass(frozen=True)
 class GodState(eqx.Module):
     prng: PRNG
     logConfig: LogConfig = eqx.field(static=True)
-
-    # inner
-    rnnState: RnnState
-    innerInfluenceTensor: JACOBIAN
-    innerUoro: UORO_Param
-    innerLogs: Logs
     innerTimeConstant: float = eqx.field(static=True)
-    innerOptState: optax.OptState
-    innerSgdParameter: SgdParameter
-
-    # outer
-    outerInfluenceTensor: JACOBIAN
-    outerUoro: UORO_Param
-    outerLogs: Logs
     outerTimeConstant: float = eqx.field(static=True)
-    outerOptState: optax.OptState
-    outerSgdParameter: SgdParameter
+
+    # Inner fields
+    rnnState: Optional[RnnState] = eqx.field(default=None)
+    innerInfluenceTensor: Optional[JACOBIAN] = eqx.field(default=None)
+    innerUoro: Optional[UORO_Param] = eqx.field(default=None)
+    innerLogs: Optional[Logs] = eqx.field(default=None)
+    innerOptState: Optional[optax.OptState] = eqx.field(default=None)
+    innerSgdParameter: Optional[SgdParameter] = eqx.field(default=None)
+    innerAdamParameter: Optional[AdamParameter] = eqx.field(default=None)
+
+    # Outer fields
+    outerInfluenceTensor: Optional[JACOBIAN] = eqx.field(default=None)
+    outerUoro: Optional[UORO_Param] = eqx.field(default=None)
+    outerLogs: Optional[Logs] = eqx.field(default=None)
+    outerOptState: Optional[optax.OptState] = eqx.field(default=None)
+    outerSgdParameter: Optional[SgdParameter] = eqx.field(default=None)
+    outerAdamParameter: Optional[AdamParameter] = eqx.field(default=None)
 
 
 @dataclass(frozen=True)
@@ -97,8 +98,8 @@ class GodConfig:
     inner_learner: Literal["rtrl", "uoro", "rflo", "identity"]
     outer_learner: Literal["rtrl", "uoro", "rflo", "identity"]
     lossFn: Literal["cross_entropy"]
-    inner_optimizer: Literal["sgd", "sgd_positive"]
-    outer_optimizer: Literal["sgd", "sgd_positive"]
+    inner_optimizer: Literal["sgd", "sgd_positive", "adam"]
+    outer_optimizer: Literal["sgd", "sgd_positive", "adam"]
     activation_fn: Literal["tanh", "relu"]
     architecture: Literal["rnn"]
     n_h: int
