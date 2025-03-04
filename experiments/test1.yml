@@ -1,20 +1,18 @@
-program: main.py
-name: exp1
-method: grid
+program: src/main.py
+name: test1
+method: random
 metric:
   name: test_loss
   goal: minimize
 parameters:
   inner_learning_rate:
-    values: [9.9999997e-5, 2.4341470e-4, 5.9250719e-4, 1.4422496e-3,
-             3.5106458e-3, 8.5454332e-3, 2.0800842e-2, 5.0632309e-2,
-             1.2324648e-1, 3.0000004e-1]
+    values: [0.1]
 
   outer_learning_rate:
-    value: 1.0e-4
+    values: [1.0e-5]
 
   ts:
-    values: [[0, 2], [1, 3], [2, 4], [3, 5], [4, 6], [5, 7], [6, 8], [7, 9], [8, 10], [9, 11], [10, 12], [11, 13], [12, 14], [13, 15], [14, 16], [15, 17], [16, 18], [17, 19], [18, 20], [19, 21]]
+    values: [[0, 2]]
 
   seed:
     values: [27077, 27312,  8264, 82365, 39715, 39923, 56240, 64671, 53365, 67611]
@@ -41,7 +39,7 @@ parameters:
     value: 5000
 
   inner_learner:
-    values: ["rtrl", "uoro", "rflo"]
+    values: ["rtrl"]
 
   outer_learner:
     value: "identity"

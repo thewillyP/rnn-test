@@ -47,8 +47,8 @@ class GodState(eqx.Module):
 class GodInterpreter:
     type LocalApp[X] = App[Self, GodState, X]
 
-    getReccurentState: LocalApp[REC_STATE]
-    putReccurentState: Callable[[REC_STATE], LocalApp[Unit]]
+    getRecurrentState: LocalApp[REC_STATE]
+    putRecurrentState: Callable[[REC_STATE], LocalApp[Unit]]
     getRecurrentParam: LocalApp[REC_PARAM]
     putRecurrentParam: Callable[[REC_PARAM], LocalApp[Unit]]
 
@@ -107,6 +107,7 @@ class GodConfig:
     inner_time_constant: float
     outer_time_constant: float
     logFlag: bool
+    tau_task: bool
 
 
 # def rnn_array(state: State) -> jax.Array:
