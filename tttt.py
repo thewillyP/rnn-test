@@ -1870,26 +1870,27 @@
 # print(jit_apply_functions(2.0))  # Should output 49 ((2 * 2) + 3) ** 2
 # print(jit_apply_functions(2.0))  # Should output 49 ((2 * 2) + 3) ** 2
 
-import jax
-import jax.numpy as jnp
-import equinox as eqx
+# import jax
+# import jax.numpy as jnp
+# import equinox as eqx
 
 
-# Define a PyTree with None values
-class MyTree(eqx.Module):
-    param1: jnp.ndarray | None
-    param2: jnp.ndarray | None
+# # Define a PyTree with None values
+# class MyTree(eqx.Module):
+#     param1: jnp.ndarray | None
+#     param2: jnp.ndarray | None
 
 
-tree = MyTree(param1=None, param2=None)
+# tree = MyTree(param1=None, param2=None)
 
-# Define actual arrays to update the tree
-new_values = MyTree(param1=jnp.array([1.0, 2.0, 3.0]), param2=jnp.array([[4.0, 5.0], [6.0, 7.0]]))
+# # Define actual arrays to update the tree
+# new_values = MyTree(param1=jnp.array([1.0, 2.0, 3.0]), param2=jnp.array([[4.0, 5.0], [6.0, 7.0]]))
 
-# Update param1 first
-updated_tree = eqx.tree_at(lambda t: t.param1, tree, new_values.param1, is_leaf=lambda x: x is None)
+# # Update param1 first
+# updated_tree = eqx.tree_at(lambda t: t.param1, tree, new_values.param1, is_leaf=lambda x: x is None)
 
-# Update param2 next
-updated_tree = eqx.tree_at(lambda t: t.param2, updated_tree, new_values.param2, is_leaf=lambda x: x is None)
+# # Update param2 next
+# updated_tree = eqx.tree_at(lambda t: t.param2, updated_tree, new_values.param2, is_leaf=lambda x: x is None)
 
-print(updated_tree)
+# print(updated_tree)
+

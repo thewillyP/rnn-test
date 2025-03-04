@@ -363,6 +363,9 @@ class RTRL(InfluenceTensorLearner):
         Protocol,
     ): ...
 
+    def __init__(self, use_fwd: bool):
+        self.immediateJacFn = eqx.filter_jacfwd if use_fwd else eqx.filter_jacrev
+
     @do()
     def getInfluenceTensor[Interpreter: _UpdateInfluence_Can[Env], Env](
         self, activationStep: Agent[Interpreter, Env, REC_STATE]
@@ -377,7 +380,7 @@ class RTRL(InfluenceTensorLearner):
         immediateJacobian__InfluenceTensor_product: Array = jacobian_matrix_product(wrtActvFn, actv0, influenceTensor)
         immediateInfluence: Array
         env: Env
-        immediateInfluence, env = eqx.filter_jacfwd(lambda p: rnnForward(actv0, p), has_aux=True)(param0)
+        immediateInfluence, env = self.immediateJacFn(lambda p: rnnForward(actv0, p), has_aux=True)(param0)
         newInfluenceTensor = Jacobian[REC_PARAM](immediateJacobian__InfluenceTensor_product + immediateInfluence)
 
         log_condition = yield from interpreter.getLogConfig.fmap(lambda x: x.doLog)

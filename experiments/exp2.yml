@@ -1,5 +1,5 @@
 program: src/main.py
-name: test3
+name: exp2
 method: grid
 metric:
   name: test_loss

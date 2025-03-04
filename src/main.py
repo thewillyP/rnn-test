@@ -29,127 +29,62 @@ import wandb
 # jax.config.update("jax_enable_x64", True)
 
 
-# def main():
-#     # Initialize a new wandb run
-#     with wandb.init(mode="offline") as run:
-#         # If called by wandb.agent, as below,
-#         # this config will be set by Sweep Controller
-#         # config: Config = wandb.config
-#         config = GodConfig(**wandb.config)
-#         prng = PRNG(jax.random.key(config.seed))
-#         test_prng = PRNG(jax.random.key(config.test_seed))
-#         env_prng, data_prng = jax.random.split(prng, 2)
-
-#         lossFn = getLossFn(config)
-#         env, innerInterpreter, outerInterpreter = create_env(config, env_prng)
-#         oho_set, test_set = create_datasets(config, data_prng, test_prng)
-
-#         all_logs, trained_env = train(oho_set, test_set, lossFn, env, innerInterpreter, outerInterpreter, config)
-
-#         logs = all_logs.value
-#         for i in range(logs.trainLoss.shape[0]):
-#             run.log(
-#                 {
-#                     "train_loss": jnp.real(logs.trainLoss[i]) if logs.trainLoss is not None else None,
-#                     "validation_loss": jnp.real(logs.validationLoss[i]) if logs.validationLoss is not None else None,
-#                     "test_loss": jnp.real(logs.testLoss[i]) if logs.testLoss is not None else None,
-#                     "parameter_norm": jnp.real(logs.parameterNorm[i]) if logs.parameterNorm is not None else None,
-#                     "oho_gradient": jnp.real(logs.ohoGradient[i]) if logs.ohoGradient is not None else None,
-#                     "train_gradient": jnp.real(logs.trainGradient[i]) if logs.trainGradient is not None else None,
-#                     "validation_gradient": jnp.real(logs.validationGradient[i])
-#                     if logs.validationGradient is not None
-#                     else None,
-#                     "immediate_influence_tensor_norm": jnp.real(logs.immediateInfluenceTensorNorm[i])
-#                     if logs.immediateInfluenceTensorNorm is not None
-#                     else None,
-#                     "influence_tensor_norm": jnp.real(logs.influenceTensorNorm[i])
-#                     if logs.influenceTensorNorm is not None
-#                     else None,
-#                     "hessian_eigenvalues": jnp.real(logs.hessian[i]) if logs.hessian is not None else None,
-#                     "hyperparameters": jnp.real(logs.hyperparameters[i]) if logs.hyperparameters is not None else None,
-#                 }
-#             )
-
-#         trained_env = copy.replace(trained_env, prng=jax.random.key_data(trained_env.prng))
-#         trained_env_path = "trained_env.eqx"
-#         eqx.tree_serialise_leaves(trained_env_path, trained_env)
-
-#         # Generate a unique artifact name using the W&B run ID
-#         artifact_name = f"trained_env"
-
-#         artifact = wandb.Artifact(name=artifact_name, type="environment")
-#         artifact.add_file(trained_env_path)
-#         run.log_artifact(artifact)
-
-#         run.finish()
-
-
-# def main():
-#     # Define hardcoded configuration
-#     config = GodConfig(
-#         activation_fn="tanh",
-#         architecture="rnn",
-#         inner_learner="rtrl",
-#         inner_learning_rate=0.0001,
-#         inner_optimizer="sgd",
-#         inner_time_constant=1,
-#         logFlag=True,
-#         lossFn="cross_entropy",
-#         n_h=32,
-#         n_in=2,
-#         n_out=2,
-#         numTe=5000,
-#         numTr=1000000,
-#         numVal=2000,
-#         outer_learner="identity",
-#         outer_learning_rate=1e-05,
-#         outer_optimizer="sgd_positive",
-#         outer_time_constant=1,
-#         seed=27077,
-#         tau_task=True,
-#         test_seed=12345,
-#         tr_avg_per=1,
-#         tr_examples_per_epoch=1,
-#         ts=(5, 9),
-#         vl_examples_per_epoch=2000,
-#     )
-
-#     # Initialize PRNGs
-#     prng = PRNG(jax.random.key(config.seed))
-#     test_prng = PRNG(jax.random.key(config.test_seed))
-#     env_prng, data_prng = jax.random.split(prng, 2)
-
-#     # Setup loss function, environment, and interpreters
-#     lossFn = getLossFn(config)
-#     env, innerInterpreter, outerInterpreter = create_env(config, env_prng)
-#     oho_set, test_set = create_datasets(config, data_prng, test_prng)
-
-#     # Train the model
-#     all_logs, trained_env = train(oho_set, test_set, lossFn, env, innerInterpreter, outerInterpreter, config)
-
-#     print(all_logs.value.trainLoss[-1])
-
-
-def get_memory_usage():
-    """Get current memory usage in MB"""
-    process = psutil.Process(os.getpid())
-    memory_info = process.memory_info()
-    return memory_info.rss / 1024**2  # Convert to MB
-
-
 def main():
-    N = 1000000 * 2000  # Example size
-    t_1 = 10
-    t_2 = 20
-    tau_task = 5
-    rng_key = jax.random.key(0)
+    # Initialize a new wandb run
+    with wandb.init(mode="offline") as run:
+        # If called by wandb.agent, as below,
+        # this config will be set by Sweep Controller
+        # config: Config = wandb.config
+        config = GodConfig(**wandb.config)
+        prng = PRNG(jax.random.key(config.seed))
+        test_prng = PRNG(jax.random.key(config.test_seed))
+        env_prng, data_prng = jax.random.split(prng, 2)
 
-    print("Memory usage before function call:", get_memory_usage(), "MB")
+        lossFn = getLossFn(config)
+        env, innerInterpreter, outerInterpreter = create_env(config, env_prng)
 
-    # Call the function
-    X, Y = generate_add_task_dataset(N, t_1, t_2, tau_task, rng_key)
+        rec_state, _ = outerInterpreter.getRecurrentState.func(outerInterpreter, env)
 
-    print("Memory usage after function call:", get_memory_usage(), "MB")
+        oho_set, test_set = create_datasets(config, data_prng, test_prng)
+
+        all_logs, trained_env = train(oho_set, test_set, lossFn, env, innerInterpreter, outerInterpreter, config)
+
+        logs = all_logs.value
+        for i in range(logs.trainLoss.shape[0]):
+            run.log(
+                {
+                    "train_loss": jnp.real(logs.trainLoss[i]) if logs.trainLoss is not None else None,
+                    "validation_loss": jnp.real(logs.validationLoss[i]) if logs.validationLoss is not None else None,
+                    "test_loss": jnp.real(logs.testLoss[i]) if logs.testLoss is not None else None,
+                    "parameter_norm": jnp.real(logs.parameterNorm[i]) if logs.parameterNorm is not None else None,
+                    "oho_gradient": jnp.real(logs.ohoGradient[i]) if logs.ohoGradient is not None else None,
+                    "train_gradient": jnp.real(logs.trainGradient[i]) if logs.trainGradient is not None else None,
+                    "validation_gradient": jnp.real(logs.validationGradient[i])
+                    if logs.validationGradient is not None
+                    else None,
+                    "immediate_influence_tensor_norm": jnp.real(logs.immediateInfluenceTensorNorm[i])
+                    if logs.immediateInfluenceTensorNorm is not None
+                    else None,
+                    "influence_tensor_norm": jnp.real(logs.influenceTensorNorm[i])
+                    if logs.influenceTensorNorm is not None
+                    else None,
+                    "hessian_eigenvalues": jnp.real(logs.hessian[i]) if logs.hessian is not None else None,
+                    "hyperparameters": jnp.real(logs.hyperparameters[i]) if logs.hyperparameters is not None else None,
+                }
+            )
+
+        trained_env = copy.replace(trained_env, prng=jax.random.key_data(trained_env.prng))
+        trained_env_path = "trained_env.eqx"
+        eqx.tree_serialise_leaves(trained_env_path, trained_env)
+
+        # Generate a unique artifact name using the W&B run ID
+        artifact_name = f"trained_env"
+
+        artifact = wandb.Artifact(name=artifact_name, type="environment")
+        artifact.add_file(trained_env_path)
+        run.log_artifact(artifact)
+
+        run.finish()
 
 
 def getLossFn(config: GodConfig) -> Callable[[jax.Array, jax.Array], LOSS]:
@@ -167,15 +102,15 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
     outer_states = [lambda s: s.rnnState.rnnParameter, lambda s: s.innerOptState]
     outer_params = [lambda s: s.innerSgdParameter, lambda s: s.innerAdamParameter]
 
-    def extract_attrbs(godState: GodState, attrbs: list[Callable[[GodState], Any]]) -> list[Any]:
-        return [attrb(godState) for attrb in attrbs if attrb(godState) is not None]
-
     def toArray(godState: GodState, attrbs: list[Callable[[GodState], Any]]) -> Array:
-        return toVector(endowVector(extract_attrbs(godState, attrbs)))
+        exact = [attrb(godState) for attrb in attrbs if attrb(godState) is not None]
+        return toVector(endowVector(exact))
 
     def fromArray(godState: GodState, attrbs: list[Callable[[GodState], Any]], value: Array) -> GodState:
-        xs = invmap(extract_attrbs(godState, attrbs), lambda _: value)
-        for x, f in zip(xs, attrbs):
+        fs = [attrb for attrb in attrbs if attrb(godState) is not None]
+        ys = [attrb(godState) for attrb in fs]
+        xs = invmap(ys, lambda _: value)
+        for x, f in zip(xs, fs):
             godState = eqx.tree_at(f, godState, x, is_leaf=lambda x: x is None)
         return godState
 
@@ -458,10 +393,10 @@ def generate_add_task_dataset(N, t_1, t_2, tau_task, rng_key):
     return X, Y
 
 
-def create_learner(learner: str) -> RTRL | RFLO | UORO | IdentityLearner:
+def create_learner(learner: str, rtrl_use_fwd: bool) -> RTRL | RFLO | UORO | IdentityLearner:
     match learner:
         case "rtrl":
-            return RTRL()
+            return RTRL(rtrl_use_fwd)
         case "rflo":
             return RFLO()
         case "uoro":
@@ -495,9 +430,9 @@ def train(
     outerInterpreter: GodInterpreter,
     config: GodConfig,
 ) -> tuple[Traversable[AllLogs], GodState]:
-    innerLearner = create_learner(config.inner_learner)
+    innerLearner = create_learner(config.inner_learner, False)
     innerLibrary = create_rnn_learner(innerLearner, lossFn)
-    outerLearner = create_learner(config.outer_learner)
+    outerLearner = create_learner(config.outer_learner, True)
 
     innerController = endowAveragedGradients(innerLibrary.modelGradient, config.tr_avg_per)
     innerController = logGradient(innerController)

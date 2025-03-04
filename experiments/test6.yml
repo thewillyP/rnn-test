@@ -1,5 +1,5 @@
 program: src/main.py
-name: test3
+name: test6
 method: grid
 metric:
   name: test_loss
@@ -33,13 +33,13 @@ parameters:
     value: 1
 
   numTr:
-    value: 1_000_000
+    values: [1_000, 10_000, 100_000]
 
   numTe:
     value: 5000
 
   inner_learner:
-    values: ["rtrl", "uoro", "rflo"]
+    values: ["rtrl"]
 
   outer_learner:
     value: "identity"

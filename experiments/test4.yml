@@ -1,12 +1,12 @@
 program: src/main.py
-name: test3
+name: test4
 method: grid
 metric:
   name: test_loss
   goal: minimize
 parameters:
   inner_learning_rate:
-    values: [1.0e-4]
+    values: [0.001]
 
   outer_learning_rate:
     values: [1.0e-5]
@@ -21,19 +21,19 @@ parameters:
     value: 12345
 
   tr_examples_per_epoch:
-    value: 1
+    value: 100
 
   vl_examples_per_epoch:
-    value: 1
+    value: 2000
 
   tr_avg_per:
     value: 1
 
   numVal:
-    value: 1
+    value: 2000
 
   numTr:
-    value: 1_000_000
+    value: 100_000
 
   numTe:
     value: 5000
@@ -48,7 +48,7 @@ parameters:
     value: "cross_entropy"
 
   inner_optimizer:
-    value: "sgd"
+    value: "adam"
 
   outer_optimizer:
     value: "sgd_positive"
