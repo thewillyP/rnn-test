@@ -1894,3 +1894,33 @@
 
 # print(updated_tree)
 
+
+import jax
+import jax.numpy as jnp
+import optax
+
+
+def normalized_sgd(learning_rate):
+    return optax.chain(
+        optax.normalize_by_update_norm(scale_factor=1.0),  # Normalize the gradient
+        optax.sgd(learning_rate),  # Apply learning rate scaling
+    )
+
+
+# Quick test
+def test_optimizer():
+    def loss_fn(x):
+        return jnp.sum(x**2)  # Simple quadratic loss
+
+    params = jnp.array([3.0, 4.0])  # Initial parameters
+    optimizer = normalized_sgd(learning_rate=0.1)
+    opt_state = optimizer.init(params)
+
+    for i in range(5):
+        grads = jax.grad(loss_fn)(params)  # Compute gradients
+        updates, opt_state = optimizer.update(grads, opt_state, params)
+        params = optax.apply_updates(params, updates)
+        print(f"Step {i + 1}, Params: {params}, Loss: {loss_fn(params):.6f}")
+
+
+test_optimizer()

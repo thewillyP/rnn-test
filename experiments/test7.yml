@@ -1,18 +1,18 @@
 program: src/main.py
-name: test3
+name: test7
 method: grid
 metric:
   name: test_loss
   goal: minimize
 parameters:
   inner_learning_rate:
-    values: [1.0e-4]
+    values: [0.1]
 
   outer_learning_rate:
-    values: [1.0e-5]
+    values: [1.0e-3]
 
   ts:
-    values: [[5, 9]]
+    values: [[15, 17]]
 
   seed:
     values: [27077]
@@ -21,34 +21,34 @@ parameters:
     value: 12345
 
   tr_examples_per_epoch:
-    value: 1
+    value: 100
 
   vl_examples_per_epoch:
-    value: 1
+    value: 2000
 
   tr_avg_per:
     value: 1
 
   numVal:
-    value: 1
+    value: 2000
 
   numTr:
-    value: 1_000_000
+    values: [100_000]
 
   numTe:
     value: 5000
 
   inner_learner:
-    values: ["rtrl", "uoro", "rflo"]
+    values: ["rtrl"]
 
   outer_learner:
-    value: "identity"
+    values: ["rtrl"]
 
   lossFn:
     value: "cross_entropy"
 
   inner_optimizer:
-    value: "sgd"
+    value: "sgd_normalized"
 
   outer_optimizer:
     value: "sgd_positive"

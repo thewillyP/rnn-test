@@ -76,8 +76,8 @@ parameters:
   outer_time_constant:
     value: 1.0
 
-  logFlag:
-    value: True
+  log_special:
+    value: False
 
   tau_task:
     value: True

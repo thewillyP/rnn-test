@@ -80,6 +80,13 @@ def doOptimizerStep[Interpreter: _Opt_Can[Env], Env](gr: Gradient[REC_PARAM]) ->
     return interpreter.putRecurrentParam(REC_PARAM(new_param))
 
 
+def normalized_sgd(learning_rate):
+    return optax.chain(
+        optax.normalize_by_update_norm(scale_factor=1.0),
+        optax.sgd(learning_rate),
+    )
+
+
 class _RnnActivation_Can[Env](
     GetActivation[Env],
     PutActivation[Env],
@@ -383,11 +390,11 @@ class RTRL(InfluenceTensorLearner):
         immediateInfluence, env = self.immediateJacFn(lambda p: rnnForward(actv0, p), has_aux=True)(param0)
         newInfluenceTensor = Jacobian[REC_PARAM](immediateJacobian__InfluenceTensor_product + immediateInfluence)
 
-        log_condition = yield from interpreter.getLogConfig.fmap(lambda x: x.doLog)
-        shape_info = jax.eval_shape(eqx.filter_jacrev(wrtActvFn), actv0)
+        log_condition = yield from interpreter.getLogConfig.fmap(lambda x: x.log_special)
+        shape_info = jax.eval_shape(eqx.filter_jacfwd(wrtActvFn), actv0)
         jacobian = jax.lax.cond(
             log_condition,
-            lambda _: eqx.filter_jacrev(wrtActvFn)(actv0),
+            lambda _: eqx.filter_jacfwd(wrtActvFn)(actv0),
             lambda _: jax.tree_map(lambda x: jnp.zeros(x.shape, dtype=x.dtype), shape_info),
             None,
         )

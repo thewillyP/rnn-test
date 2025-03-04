@@ -61,4 +61,4 @@ class AllLogs(eqx.Module):
 
 
 class LogConfig(eqx.Module):
-    doLog: bool = eqx.field(static=True)
+    log_special: bool = eqx.field(static=True)

@@ -125,7 +125,7 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
     prng1, prng2, prng3, prng4, prng5, prng6, prng7, prng8, prng9 = jax.random.split(prng, 9)
     env = GodState(
         prng=prng1,
-        logConfig=LogConfig(doLog=config.logFlag),
+        logConfig=LogConfig(log_special=config.log_special),
         innerTimeConstant=config.inner_time_constant,
         outerTimeConstant=config.outer_time_constant,
     )
@@ -183,6 +183,12 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
             env = putter(env, lambda s: s.innerSgdParameter, sgd)
             env = putter(env, lambda s: s.innerOptState, opt_state)
             get_inner_optimizer = lambda s: optax.sgd(s.innerSgdParameter.learning_rate)
+        case "sgd_normalized":
+            sgd = SgdParameter(learning_rate=config.inner_learning_rate)
+            opt_state = normalized_sgd(config.inner_learning_rate).init(jnp.empty((rec_param_n,)))
+            env = putter(env, lambda s: s.innerSgdParameter, sgd)
+            env = putter(env, lambda s: s.innerOptState, opt_state)
+            get_inner_optimizer = lambda s: normalized_sgd(s.innerSgdParameter.learning_rate)
         case "adam":
             adam = AdamParameter(learning_rate=config.inner_learning_rate)
             opt_state = optax.adam(config.inner_learning_rate).init(jnp.empty((rec_param_n,)))
@@ -205,6 +211,7 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
 
     innerLogs = Logs(
         gradient=jnp.zeros((rec_param_n,)),
+        validationGradient=None,
         influenceTensor=inner_influence_tensor,
         immediateInfluenceTensor=inner_influence_tensor,
         hessian=jnp.zeros((rec_state_n, rec_state_n)),
@@ -224,6 +231,12 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
             env = putter(env, lambda s: s.outerSgdParameter, sgd)
             env = putter(env, lambda s: s.outerOptState, opt_state)
             get_outer_optimizer = lambda s: optax.sgd(s.outerSgdParameter.learning_rate)
+        case "sgd_normalized":
+            sgd = SgdParameter(learning_rate=config.outer_learning_rate)
+            opt_state = normalized_sgd(config.outer_learning_rate).init(jnp.empty((outer_rec_param_n,)))
+            env = putter(env, lambda s: s.outerSgdParameter, sgd)
+            env = putter(env, lambda s: s.outerOptState, opt_state)
+            get_outer_optimizer = lambda s: normalized_sgd(s.outerSgdParameter.learning_rate)
         case "adam":
             adam = AdamParameter(learning_rate=config.outer_learning_rate)
             opt_state = optax.adam(config.outer_learning_rate).init(jnp.empty((outer_rec_param_n,)))
@@ -246,6 +259,7 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
 
     outerLogs = Logs(
         gradient=jnp.zeros((outer_rec_param_n,)),
+        validationGradient=jnp.zeros((rec_param_n,)),
         influenceTensor=outer_influence_tensor,
         immediateInfluenceTensor=outer_influence_tensor,
         hessian=jnp.zeros((outer_rec_state_n, outer_rec_state_n)),

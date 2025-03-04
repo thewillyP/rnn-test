@@ -97,8 +97,8 @@ class GodConfig:
     inner_learner: Literal["rtrl", "uoro", "rflo", "identity"]
     outer_learner: Literal["rtrl", "uoro", "rflo", "identity"]
     lossFn: Literal["cross_entropy"]
-    inner_optimizer: Literal["sgd", "sgd_positive", "adam"]
-    outer_optimizer: Literal["sgd", "sgd_positive", "adam"]
+    inner_optimizer: Literal["sgd", "sgd_positive", "adam", "sgd_normalized"]
+    outer_optimizer: Literal["sgd", "sgd_positive", "adam", "sgd_normalized"]
     activation_fn: Literal["tanh", "relu"]
     architecture: Literal["rnn"]
     n_h: int
@@ -106,7 +106,7 @@ class GodConfig:
     n_out: int
     inner_time_constant: float
     outer_time_constant: float
-    logFlag: bool
+    log_special: bool
     tau_task: bool
 
 
