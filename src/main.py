@@ -111,7 +111,7 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
     # These don't care how env is created, just tags all possible parameter/states and vectorizes them
     inner_states = [lambda s: s.rnnState.activation]
     inner_params = [lambda s: s.rnnState.rnnParameter]
-    outer_states = [lambda s: s.rnnState.rnnParameter, lambda s: s.innerOptState]
+    outer_states = inner_params + [lambda s: s.innerOptState]  # VERY IMPORTANT COMES FIRST
     outer_params = [lambda s: s.innerSgdParameter, lambda s: s.innerAdamParameter]
 
     def toArray(godState: GodState, attrbs: list[Callable[[GodState], Any]]) -> Array:
@@ -466,6 +466,10 @@ def train(
     innerController = logGradient(innerController)
     innerLibrary = innerLibrary._replace(modelGradient=innerController)
 
+    inner_param, _ = innerInterpreter.getRecurrentParam.func(innerInterpreter, initEnv)
+    outer_state, _ = outerInterpreter.getRecurrentState.func(outerInterpreter, initEnv)
+    pad_val_grad_by = jnp.maximum(0, jnp.size(outer_state) - jnp.size(inner_param))
+
     match outerLearner:
         case "bptt":
             raise NotImplementedError("BPTT is not implemented yet")
@@ -477,6 +481,7 @@ def train(
                 outerLearner,
                 lambda a, b: LOSS(jnp.mean(lossFn(a.value, b.validation.value.y))),
                 resetRnnActivation(initEnv.rnnState.activation),
+                pad_val_grad_by,
             )
 
     outerController = logGradient(outerLibrary.modelGradient)

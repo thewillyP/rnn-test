@@ -1,15 +1,15 @@
 program: src/main.py
-name: test9
-method: grid
+name: test10
+method: random
 metric:
   name: test_loss
   goal: minimize
 parameters:
   inner_learning_rate:
-    values: [0.1]
+    values: [1.0e-3]
 
   outer_learning_rate:
-    values: [1.0e-3]
+    values: [1.0e-5]
 
   ts:
     values: [[5, 9]]
@@ -33,7 +33,7 @@ parameters:
     value: 2000
 
   numTr:
-    values: [1_000, 10_000, 100_000]
+    values: [100_000]
 
   numTe:
     value: 5000
@@ -48,7 +48,7 @@ parameters:
     value: "cross_entropy"
 
   inner_optimizer:
-    value: "sgd"
+    values: ["adam"]
 
   outer_optimizer:
     value: "sgd_positive"

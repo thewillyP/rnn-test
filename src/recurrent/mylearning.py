@@ -349,6 +349,7 @@ class InfluenceTensorLearner(PastFacingLearn, ABC):
         def _creditAssignment() -> G[Agent[Interpreter, Env, Gradient[REC_PARAM]]]:
             interpreter = yield from ask(PX[Interpreter]())
             influenceTensor = yield from self.getInfluenceTensor(activationStep)
+
             _ = yield from interpreter.putInfluenceTensor(JACOBIAN(influenceTensor.value))
 
             signal = yield from recurrentError
@@ -403,8 +404,8 @@ class RTRL(InfluenceTensorLearner):
             v0 = jnp.array(jax.random.normal(subkey, actv0.shape))
             tridag = matfree.decomp.tridiag_sym(lanczos_iterations, custom_vjp=False)
             get_eig = matfree.eig.eigh_partial(tridag)
-            f = lambda v: jvp(lambda a: wrtActvFn(a), actv0, v)
-            eigvals, _ = get_eig(f, v0)
+            fn = lambda v: jvp(lambda a: wrtActvFn(a), actv0, v)
+            eigvals, _ = get_eig(fn, v0)
             return jnp.max(jnp.abs(eigvals))
 
         eig = jax.lax.cond(
@@ -571,9 +572,16 @@ def foldrLibrary[Data, Interpreter: GetRecurrentParam[Env], Env, Pred](
     )
 
 
+class _EndowBilevelOptimization_Can[Env](
+    GetRecurrentState[Env],
+    PutLogs[Env],
+    Protocol,
+): ...
+
+
 def endowBilevelOptimization[
-    OHO_Interpreter: PutLogs[Env],
-    TrainInterpreter: GetRecurrentParam[Env],
+    OHO_Interpreter: _EndowBilevelOptimization_Can[Env],
+    TrainInterpreter,
     Env,
     Data,
     Pred,
@@ -584,18 +592,20 @@ def endowBilevelOptimization[
     bilevelOptimizer: CreateLearner,
     computeLoss: LossFn[Pred, OhoData[Data]],
     resetEnvForValidation: Agent[TrainInterpreter, Env, Unit],
+    grad_add_pad_by: int,
 ) -> (
     Library[OhoData[Data], OHO_Interpreter, Env, Pred]
     | Library[Traversable[OhoData[Data]], OHO_Interpreter, Env, Traversable[Pred]]
 ):
     @do()
     def newActivationStep(oho_data: OhoData[Data]) -> G[Agent[OHO_Interpreter, Env, REC_PARAM]]:
-        @do()
-        def updateParameter() -> G[Agent[TrainInterpreter, Env, REC_PARAM]]:
-            interpreter = yield from ask(PX[TrainInterpreter]())
-            return library.modelGradient(oho_data.payload).flat_map(paramFn).then(interpreter.getRecurrentParam)
-
-        return updateParameter().switch_dl(trainInterpreter)
+        interpreter = yield from ask(PX[OHO_Interpreter]())
+        return (
+            library.modelGradient(oho_data.payload)
+            .flat_map(paramFn)
+            .switch_dl(trainInterpreter)
+            .then(interpreter.getRecurrentState)
+        )
 
     @do()
     def newPredictionStep(oho_data: OhoData[Data]) -> G[Agent[OHO_Interpreter, Env, Pred]]:
@@ -612,7 +622,11 @@ def endowBilevelOptimization[
         validation_log = Logs(validationGradient=recurrentGradient.value)
         interpreter = yield from ask(PX[OHO_Interpreter]())
         _ = yield from interpreter.putLogs(validation_log)
-        return pure(recurrentGradient, PX[tuple[OHO_Interpreter, Env]]())
+
+        # Pad the gradient to match the influence tensor size
+        # assumes first subsection corresponds to unilevel parameters
+        recGrad_pad = jnp.concatenate([recurrentGradient.value, jnp.zeros((grad_add_pad_by,))])
+        return pure(Gradient(recGrad_pad), PX[tuple[OHO_Interpreter, Env]]())
 
     return bilevelOptimizer.createLearner(newActivationStep, newPredictionStep, computeLoss, newRecurrentErrorStep)
 
