@@ -108,6 +108,10 @@ class GodConfig:
     outer_time_constant: float
     log_special: bool
     tau_task: bool
+    lanczos_iterations: int
+    inner_uoro_std: float
+    outer_uoro_std: float
+    initialization_std: float
 
 
 # def rnn_array(state: State) -> jax.Array:

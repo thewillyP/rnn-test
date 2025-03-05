@@ -1894,33 +1894,119 @@
 
 # print(updated_tree)
 
+# import matfree
+# import matfree.decomp
+# import matfree.eig
+# import jax
+# import jax.numpy as jnp
+# from jax import grad, jacfwd
 
+
+# def hvp(f, x, v):
+#     return grad(lambda x: jnp.vdot(grad(f)(x), v))(x)
+
+
+# # Example loss function (mean squared error)
+# def loss_fn(params, x, y):
+#     predictions = jnp.dot(x, params)
+#     return jnp.mean((predictions - y) ** 2)
+
+
+# x = jnp.array([1.0, 2.0])
+# y = jnp.array([3.0])
+# params = jnp.array([0.5, -0.5])
+
+# f = lambda v: hvp(lambda p: loss_fn(p, x, y), params, v)
+
+# v0 = jnp.array([0.0, 1.0])
+
+
+# tridag = matfree.decomp.tridiag_sym(2)
+# get_eig = matfree.eig.eigh_partial(tridag)
+
+# print(get_eig(f, v0))
+
+
+import matfree
+import matfree.decomp
+import matfree.eig
 import jax
 import jax.numpy as jnp
-import optax
+from jax import hessian, grad
+import time  # Import time module for timing
+import equinox as eqx
+
+# Define a large-scale problem
+n = 10000  # Number of features
+m = 100  # Number of data points
+num_eig = 5
+
+# Generate a random key using jax.random.PRNGKey
+key = jax.random.key(0)
+
+# Randomly generate large input data
+key, subkey = jax.random.split(key)  # Split the key for generating x
+x = jnp.array(jax.random.normal(subkey, (m, n)))  # m x n input matrix
+
+key, subkey = jax.random.split(key)  # Split the key for generating y
+y = jnp.array(jax.random.normal(subkey, (m,)))  # m-dimensional output
+
+key, subkey = jax.random.split(key)  # Split the key for generating params
+params = jnp.array(jax.random.normal(subkey, (n,)))  # n-dimensional parameters
 
 
-def normalized_sgd(learning_rate):
-    return optax.chain(
-        optax.normalize_by_update_norm(scale_factor=1.0),  # Normalize the gradient
-        optax.sgd(learning_rate),  # Apply learning rate scaling
-    )
+# Define the loss function (mean squared error)
+def loss_fn(params, x, y):
+    predictions = jnp.dot(x, params)
+    return jnp.mean((predictions - y) ** 2)
 
 
-# Quick test
-def test_optimizer():
-    def loss_fn(x):
-        return jnp.sum(x**2)  # Simple quadratic loss
+# Time the Hessian computation
+start_time = time.time()
 
-    params = jnp.array([3.0, 4.0])  # Initial parameters
-    optimizer = normalized_sgd(learning_rate=0.1)
-    opt_state = optimizer.init(params)
+# 1. Compute Hessian manually using JAX
+loss_hessian = hessian(lambda p: loss_fn(p, x, y))  # Hessian function
+H = loss_hessian(params)  # Evaluate the Hessian at the parameter values
 
-    for i in range(5):
-        grads = jax.grad(loss_fn)(params)  # Compute gradients
-        updates, opt_state = optimizer.update(grads, opt_state, params)
-        params = optax.apply_updates(params, updates)
-        print(f"Step {i + 1}, Params: {params}, Loss: {loss_fn(params):.6f}")
+# 2. Compute eigenvalues of the Hessian
+eigvals_hessian = jnp.linalg.eigvalsh(H)
+
+jax.block_until_ready(eigvals_hessian)
+
+hessian_time = time.time() - start_time
+print(f"Hessian computation time: {hessian_time:.2f} seconds")
 
 
-test_optimizer()
+# 3. Use matfree for matrix-free eigenvalue computation
+def hvp(f, x, v):
+    return grad(lambda x: jnp.vdot(grad(f)(x), v))(x)
+
+
+# Hessian-vector product (HVP) for the loss function
+f = lambda v: hvp(lambda p: loss_fn(p, x, y), params, v)
+
+# Initial guess for the eigenvector
+key, subkey = jax.random.split(key)  # Split the key for generating the initial vector v0
+v0 = jnp.array(jax.random.normal(subkey, (n,)))
+
+
+# 4. Using matfree's method for eigenvalue computation (tridiag size is set to 30)
+tridag = matfree.decomp.tridiag_sym(num_eig, custom_vjp=False)
+get_eig = matfree.eig.eigh_partial(tridag)  # Get the eigenvalue function
+
+g = eqx.filter_jit(get_eig).lower(f, v0).compile()
+
+# Time the matrix-free eigenvalue computation
+start_time = time.time()
+
+eigvals_matfree, _ = g(f, v0)  # Compute eigenvalues
+
+jax.block_until_ready(eigvals_matfree)
+
+matfree_time = time.time() - start_time
+print(f"Matrix-free eigenvalue computation time: {matfree_time} seconds")
+
+
+# Print results
+print("Eigenvalues from manually computed Hessian:", eigvals_hessian[-num_eig:])
+print("Eigenvalues from matfree:", eigvals_matfree)

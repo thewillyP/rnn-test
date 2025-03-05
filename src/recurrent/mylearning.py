@@ -8,6 +8,9 @@ import jax.numpy as jnp
 import equinox as eqx
 from operator import add
 
+import matfree
+import matfree.decomp
+import matfree.eig
 import optax
 
 from recurrent.monad import *
@@ -367,6 +370,7 @@ class RTRL(InfluenceTensorLearner):
         PutRecurrentParam[Env],
         PutLogs[Env],
         GetLogConfig[Env],
+        GetPRNG[Env],
         Protocol,
     ): ...
 
@@ -391,17 +395,28 @@ class RTRL(InfluenceTensorLearner):
         newInfluenceTensor = Jacobian[REC_PARAM](immediateJacobian__InfluenceTensor_product + immediateInfluence)
 
         log_condition = yield from interpreter.getLogConfig.fmap(lambda x: x.log_special)
-        shape_info = jax.eval_shape(eqx.filter_jacfwd(wrtActvFn), actv0)
-        jacobian = jax.lax.cond(
+        lanczos_iterations = yield from interpreter.getLogConfig.fmap(lambda x: x.lanczos_iterations)
+
+        subkey = yield from interpreter.updatePRNG()
+
+        def if_eigenvalue(_):
+            v0 = jnp.array(jax.random.normal(subkey, actv0.shape))
+            tridag = matfree.decomp.tridiag_sym(lanczos_iterations, custom_vjp=False)
+            get_eig = matfree.eig.eigh_partial(tridag)
+            f = lambda v: jvp(lambda a: wrtActvFn(a), actv0, v)
+            eigvals, _ = get_eig(f, v0)
+            return jnp.max(jnp.abs(eigvals))
+
+        eig = jax.lax.cond(
             log_condition,
-            lambda _: eqx.filter_jacfwd(wrtActvFn)(actv0),
-            lambda _: jax.tree_map(lambda x: jnp.zeros(x.shape, dtype=x.dtype), shape_info),
+            if_eigenvalue,
+            lambda _: 0.0,
             None,
         )
 
         _ = yield from put(env)
         _ = yield from interpreter.putLogs(Logs(immediateInfluenceTensor=immediateInfluence))
-        _ = yield from interpreter.putLogs(Logs(hessian=jacobian))
+        _ = yield from interpreter.putLogs(Logs(jac_eigenvalue=eig))
         return pure(newInfluenceTensor, PX[tuple[Interpreter, Env]]())
 
 
@@ -444,6 +459,8 @@ class UORO(PastFacingLearn):
         GetUoro[Env],
         PutUoro[Env],
         GetPRNG[Env],
+        PutLogs[Env],
+        GetLogConfig[Env],
         Protocol,
     ): ...
 
@@ -476,8 +493,8 @@ class UORO(PastFacingLearn):
             immediateInfluence__Random_projection: Array
             (immediateInfluence__Random_projection,) = vjp_func(randomVector)
 
-            assert isinstance(immediateJacobian__A_projection, Array)
-            assert isinstance(immediateInfluence__Random_projection, Array)
+            # assert isinstance(immediateJacobian__A_projection, Array)
+            # assert isinstance(immediateInfluence__Random_projection, Array)
 
             _ = yield from put(env)
             pair = (immediateJacobian__A_projection, immediateInfluence__Random_projection)
@@ -519,6 +536,17 @@ class UORO(PastFacingLearn):
             A_new = rho0 * immediateJacobian__A_projection + rho1 * randomVector
             B_new = B_prev / rho0 + immediateInfluence__Random_projection / rho1
             _ = yield from interpreter.putUoro(replace(uoro, A=A_new, B=B_new))
+
+            log_condition = yield from interpreter.getLogConfig.fmap(lambda x: x.log_special)
+            influenceTensor = jax.lax.cond(
+                log_condition,
+                lambda _: jnp.outer(A_new, B_new),
+                lambda _: jnp.zeros((A_new.shape, B_new.shape)),
+                None,
+            )
+
+            log_influence = Logs(influenceTensor=influenceTensor)
+            _ = yield from interpreter.putLogs(log_influence)
 
             return self.propagateRecurrentError(A_new, B_new, recurrentError)
 

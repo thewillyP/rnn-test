@@ -1,6 +1,6 @@
 program: src/main.py
-name: test2
-method: grid
+name: test8
+method: random
 metric:
   name: test_loss
   goal: minimize
@@ -9,7 +9,7 @@ parameters:
     values: [0.1]
 
   outer_learning_rate:
-    values: [1.0e-5]
+    values: [1.0e-3]
 
   ts:
     values: [[5, 9]]
@@ -39,10 +39,10 @@ parameters:
     value: 5000
 
   inner_learner:
-    values: ["rtrl", "uoro", "rflo"]
+    values: ["rtrl"]
 
   outer_learner:
-    value: "identity"
+    values: ["uoro"]
 
   lossFn:
     value: "cross_entropy"
@@ -82,7 +82,7 @@ parameters:
 
   lanczos_iterations:
     value: 10
-
+  
   inner_uoro_std:
     value: 1.0
 

@@ -81,3 +81,15 @@ parameters:
 
   tau_task:
     value: True
+
+  lanczos_iterations:
+    value: 10
+
+  inner_uoro_std:
+    value: 1.0
+
+  outer_uoro_std:
+    value: 1.0
+
+  initialization_std:
+    value: 1.0

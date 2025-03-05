@@ -43,7 +43,7 @@ class Logs(eqx.Module):
     validationGradient: Optional[jax.Array] = eqx.field(default=None)
     influenceTensor: Optional[jax.Array] = eqx.field(default=None)
     immediateInfluenceTensor: Optional[jax.Array] = eqx.field(default=None)
-    hessian: Optional[jax.Array] = eqx.field(default=None)
+    jac_eigenvalue: Optional[jax.Array] = eqx.field(default=None)
 
 
 class AllLogs(eqx.Module):
@@ -56,9 +56,12 @@ class AllLogs(eqx.Module):
     trainGradient: jax.Array
     validationGradient: jax.Array
     immediateInfluenceTensorNorm: jax.Array
-    influenceTensorNorm: jax.Array
-    hessian: jax.Array
+    outerInfluenceTensorNorm: jax.Array
+    innerInfluenceTensorNorm: jax.Array
+    largest_hessian_eigenvalue: jax.Array
+    largest_jacobian_eigenvalue: jax.Array
 
 
 class LogConfig(eqx.Module):
     log_special: bool = eqx.field(static=True)
+    lanczos_iterations: int = eqx.field(static=True)

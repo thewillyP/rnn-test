@@ -1,6 +1,7 @@
 import copy
 import os
 import pickle
+import time
 from typing import Any
 
 import jax.experimental
@@ -47,8 +48,11 @@ def main():
 
         oho_set, test_set = create_datasets(config, data_prng, test_prng)
 
+        start = time.time()
         all_logs, trained_env = train(oho_set, test_set, lossFn, env, innerInterpreter, outerInterpreter, config)
-
+        jax.block_until_ready(all_logs)
+        end = time.time()
+        print(f"Training time: {end - start} seconds")
         logs = all_logs.value
         for i in range(logs.trainLoss.shape[0]):
             run.log(
@@ -56,6 +60,7 @@ def main():
                     "train_loss": jnp.real(logs.trainLoss[i]) if logs.trainLoss is not None else None,
                     "validation_loss": jnp.real(logs.validationLoss[i]) if logs.validationLoss is not None else None,
                     "test_loss": jnp.real(logs.testLoss[i]) if logs.testLoss is not None else None,
+                    "hyperparameters": jnp.real(logs.hyperparameters[i]) if logs.hyperparameters is not None else None,
                     "parameter_norm": jnp.real(logs.parameterNorm[i]) if logs.parameterNorm is not None else None,
                     "oho_gradient": jnp.real(logs.ohoGradient[i]) if logs.ohoGradient is not None else None,
                     "train_gradient": jnp.real(logs.trainGradient[i]) if logs.trainGradient is not None else None,
@@ -65,11 +70,18 @@ def main():
                     "immediate_influence_tensor_norm": jnp.real(logs.immediateInfluenceTensorNorm[i])
                     if logs.immediateInfluenceTensorNorm is not None
                     else None,
-                    "influence_tensor_norm": jnp.real(logs.influenceTensorNorm[i])
-                    if logs.influenceTensorNorm is not None
+                    "inner_influence_tensor_norm": jnp.real(logs.innerInfluenceTensorNorm[i])
+                    if logs.innerInfluenceTensorNorm is not None
                     else None,
-                    "hessian_eigenvalues": jnp.real(logs.hessian[i]) if logs.hessian is not None else None,
-                    "hyperparameters": jnp.real(logs.hyperparameters[i]) if logs.hyperparameters is not None else None,
+                    "outer_influence_tensor_norm": jnp.real(logs.outerInfluenceTensorNorm[i])
+                    if logs.outerInfluenceTensorNorm is not None
+                    else None,
+                    "largest_jacobian_eigenvalue": jnp.real(logs.largest_jacobian_eigenvalue[i])
+                    if logs.largest_jacobian_eigenvalue is not None
+                    else None,
+                    "largest_hessian_eigenvalue": jnp.real(logs.largest_hessian_eigenvalue[i])
+                    if logs.largest_hessian_eigenvalue is not None
+                    else None,
                 }
             )
 
@@ -125,7 +137,7 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
     prng1, prng2, prng3, prng4, prng5, prng6, prng7, prng8, prng9 = jax.random.split(prng, 9)
     env = GodState(
         prng=prng1,
-        logConfig=LogConfig(log_special=config.log_special),
+        logConfig=LogConfig(log_special=config.log_special, lanczos_iterations=config.lanczos_iterations),
         innerTimeConstant=config.inner_time_constant,
         outerTimeConstant=config.outer_time_constant,
     )
@@ -141,9 +153,11 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
 
     match config.architecture:
         case "rnn":
-            W_in = jax.random.normal(prng2, (config.n_h, config.n_in)) * jnp.sqrt(1 / config.n_in)
-            W_rec, _ = jnp.linalg.qr(jax.random.normal(prng3, (config.n_h, config.n_h)))
-            W_out = jax.random.normal(prng4, (config.n_out, config.n_h)) * jnp.sqrt(1 / config.n_h)
+            i_std = config.initialization_std
+            W_in = jax.random.normal(prng2, (config.n_h, config.n_in)) * jnp.sqrt(1 / config.n_in) * i_std
+            W_rec = jnp.linalg.qr(jax.random.normal(prng3, (config.n_h, config.n_h)))[0] * i_std
+            W_out = jax.random.normal(prng4, (config.n_out, config.n_h)) * jnp.sqrt(1 / config.n_h) * i_std
+
             b_rec = jnp.zeros((config.n_h, 1))
             b_out = jnp.zeros((config.n_out, 1))
             w_rec = jnp.hstack([W_rec, W_in, b_rec])
@@ -214,7 +228,7 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
         validationGradient=None,
         influenceTensor=inner_influence_tensor,
         immediateInfluenceTensor=inner_influence_tensor,
-        hessian=jnp.zeros((rec_state_n, rec_state_n)),
+        jac_eigenvalue=0.0,
     )
     env = putter(env, lambda s: s.innerLogs, innerLogs)
 
@@ -262,7 +276,7 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
         validationGradient=jnp.zeros((rec_param_n,)),
         influenceTensor=outer_influence_tensor,
         immediateInfluenceTensor=outer_influence_tensor,
-        hessian=jnp.zeros((outer_rec_state_n, outer_rec_state_n)),
+        jac_eigenvalue=0.0,
     )
     env = putter(env, lambda s: s.outerLogs, outerLogs)
 
@@ -270,7 +284,7 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
         case "uoro":
             uoro = UORO_Param(
                 A=jax.random.normal(prng8, (outer_rec_state_n,)),
-                B=jax.random.normal(prng9, (outer_rec_state_n * outer_rec_param_n,)),
+                B=jax.random.normal(prng9, (outer_rec_param_n,)),
             )
             env = putter(env, lambda s: s.outerUoro, uoro)
         case _:
@@ -407,14 +421,14 @@ def generate_add_task_dataset(N, t_1, t_2, tau_task, rng_key):
     return X, Y
 
 
-def create_learner(learner: str, rtrl_use_fwd: bool) -> RTRL | RFLO | UORO | IdentityLearner:
+def create_learner(learner: str, rtrl_use_fwd: bool, uoro_std) -> RTRL | RFLO | UORO | IdentityLearner:
     match learner:
         case "rtrl":
             return RTRL(rtrl_use_fwd)
         case "rflo":
             return RFLO()
         case "uoro":
-            return UORO(lambda key, shape: jax.random.uniform(key, shape, minval=-1.0, maxval=1.0))
+            return UORO(lambda key, shape: jax.random.uniform(key, shape, minval=-uoro_std, maxval=uoro_std))
         case "identity":
             return IdentityLearner()
         case _:
@@ -444,9 +458,9 @@ def train(
     outerInterpreter: GodInterpreter,
     config: GodConfig,
 ) -> tuple[Traversable[AllLogs], GodState]:
-    innerLearner = create_learner(config.inner_learner, False)
+    innerLearner = create_learner(config.inner_learner, False, config.inner_uoro_std)
     innerLibrary = create_rnn_learner(innerLearner, lossFn)
-    outerLearner = create_learner(config.outer_learner, True)
+    outerLearner = create_learner(config.outer_learner, True, config.outer_uoro_std)
 
     innerController = endowAveragedGradients(innerLibrary.modelGradient, config.tr_avg_per)
     innerController = logGradient(innerController)
@@ -495,8 +509,10 @@ def train(
             trainGradient=env.innerLogs.gradient,
             validationGradient=env.outerLogs.validationGradient,
             immediateInfluenceTensorNorm=jnp.linalg.norm(jnp.ravel(env.outerLogs.immediateInfluenceTensor)),
-            influenceTensorNorm=jnp.linalg.norm(jnp.ravel(env.outerLogs.influenceTensor)),
-            hessian=jnp.linalg.eigvals(env.outerLogs.hessian),
+            outerInfluenceTensorNorm=jnp.linalg.norm(jnp.ravel(env.outerLogs.influenceTensor)),
+            innerInfluenceTensorNorm=jnp.linalg.norm(jnp.ravel(env.innerLogs.influenceTensor)),
+            largest_jacobian_eigenvalue=env.innerLogs.jac_eigenvalue,
+            largest_hessian_eigenvalue=env.outerLogs.jac_eigenvalue,
         )
         return pure(log, PX[tuple[GodInterpreter, GodState]]())
 
