@@ -1,5 +1,5 @@
 program: /rnn-test/src/main.py
-name: time_test
+name: time_test_baseline
 method: random
 metric:
   name: test_loss
