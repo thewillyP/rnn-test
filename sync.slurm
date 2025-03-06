@@ -2,7 +2,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --mem=8G
-#SBATCH --time=01:00:00
+#SBATCH --time=05:00:00
 #SBATCH --job-name=wandb_sync
 #SBATCH --cpus-per-task=4
 #SBATCH --output="/scratch/wlp9800/logs/wandb_sync_%j.out"   
@@ -15,8 +15,9 @@ USER=wlp9800
 IMAGE=devenv
 
 singularity exec --containall --no-home --cleanenv \
-    --bind /scratch/wlp9800/wandb:/wandb \
+    --bind /scratch/${USER}:/scratch \
+    --bind /home/${USER}/dev:/dev \
     --env WANDB_API_KEY=${WANDB_API_KEY} \
     /scratch/${USER}/images/${IMAGE}.sif bash -c \
-    "cd /wandb && wandb sync --sync-all"
+    "cd /dev && python wandb_syncp.py"
 
