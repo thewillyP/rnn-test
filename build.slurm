@@ -13,16 +13,19 @@
 # Dynamically pass user, image, and tag as environment variables
 USER=${USER:-"wlp9800"}  # Default to wlp9800 if not provided
 IMAGE=${IMAGE:-"rnn-test"}  # Default to rnn-test if not provided
-TAG=${TAG:-"master-1.0.40-gpu"}  # Default to master-1.0.39-gpu if not provided
+TAG=${TAG:-"master-1.0.40"}  # Default to master-1.0.39-gpu if not provided
 
 # Docker URL constructed dynamically with IMAGE and TAG
 DOCKER_URL="docker://thewillyp/${IMAGE}:${TAG}"
 SAVE_DIR="/scratch/${USER}/"
 
 # Build the Singularity image
-singularity build --force /scratch/${USER}/images/${IMAGE}.sif ${DOCKER_URL}
+singularity build --force /scratch/${USER}/images/${IMAGE}-cpu.sif ${DOCKER_URL}-cpu
+singularity build --force /scratch/${USER}/images/${IMAGE}-gpu.sif ${DOCKER_URL}-gpu
 
 # Create the overlay
-singularity overlay create --size 10240 /scratch/${USER}/images/${IMAGE}.sif
+singularity overlay create --size 5120 /scratch/${USER}/images/${IMAGE}-cpu.sif
+singularity overlay create --size 5120 /scratch/${USER}/images/${IMAGE}-gpu.sif
 
-# 10 GiB
+
+# 5 GiB
