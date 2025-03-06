@@ -15,6 +15,8 @@ append_if_not_exists() {
 # Define the path to the .bashrc
 USER_BASHRC="/home/${USER_NAME}/.bashrc"
 
+touch /home/$USER_NAME/.bashrc
+
 # Ensure the necessary environment variables and configurations are set in .bashrc
 
 # 1. Source the Docker-to-Singularity script if not already sourced
