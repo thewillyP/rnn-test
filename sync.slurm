@@ -7,6 +7,8 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --output=wandb_sync_%j.log   
 #SBATCH --error=wandb_sync_%j.err    
+#SBATCH --mail-type=END
+#SBATCH --mail-user=wlp9800@nyu.edu
 
 # Changes often
 USER=wlp9800
