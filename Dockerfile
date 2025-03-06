@@ -7,3 +7,13 @@ RUN git clone https://github.com/thewillyP/rnn-test.git
 WORKDIR /rnn-test
 
 RUN chmod -R 777 /rnn-test
+
+RUN mkdir -p /wandb_data
+
+RUN chmod -R 777 /wandb_data
+
+COPY entrypoint.sh entrypoint.sh
+
+RUN chmod +x entrypoint.sh
+
+ENTRYPOINT ["entrypoint.sh"]

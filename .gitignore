@@ -1,3 +1,8 @@
+*.npy
+*.eqx
+*.npz
+*.pkl
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -13,6 +18,7 @@ wandb/*
 *.err
 *.threads
 *.prof
+jax-trace/*
 
 # Distribution / packaging
 .Python
