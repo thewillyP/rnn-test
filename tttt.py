@@ -1927,86 +1927,146 @@
 # print(get_eig(f, v0))
 
 
-import matfree
-import matfree.decomp
-import matfree.eig
-import jax
+# import matfree
+# import matfree.decomp
+# import matfree.eig
+# import jax
+# import jax.numpy as jnp
+# from jax import hessian, grad
+# import time  # Import time module for timing
+# import equinox as eqx
+
+# # Define a large-scale problem
+# n = 10000  # Number of features
+# m = 100  # Number of data points
+# num_eig = 5
+
+# # Generate a random key using jax.random.PRNGKey
+# key = jax.random.key(0)
+
+# # Randomly generate large input data
+# key, subkey = jax.random.split(key)  # Split the key for generating x
+# x = jnp.array(jax.random.normal(subkey, (m, n)))  # m x n input matrix
+
+# key, subkey = jax.random.split(key)  # Split the key for generating y
+# y = jnp.array(jax.random.normal(subkey, (m,)))  # m-dimensional output
+
+# key, subkey = jax.random.split(key)  # Split the key for generating params
+# params = jnp.array(jax.random.normal(subkey, (n,)))  # n-dimensional parameters
+
+
+# # Define the loss function (mean squared error)
+# def loss_fn(params, x, y):
+#     predictions = jnp.dot(x, params)
+#     return jnp.mean((predictions - y) ** 2)
+
+
+# # Time the Hessian computation
+# start_time = time.time()
+
+# # 1. Compute Hessian manually using JAX
+# loss_hessian = hessian(lambda p: loss_fn(p, x, y))  # Hessian function
+# H = loss_hessian(params)  # Evaluate the Hessian at the parameter values
+
+# # 2. Compute eigenvalues of the Hessian
+# eigvals_hessian = jnp.linalg.eigvalsh(H)
+
+# jax.block_until_ready(eigvals_hessian)
+
+# hessian_time = time.time() - start_time
+# print(f"Hessian computation time: {hessian_time:.2f} seconds")
+
+
+# # 3. Use matfree for matrix-free eigenvalue computation
+# def hvp(f, x, v):
+#     return grad(lambda x: jnp.vdot(grad(f)(x), v))(x)
+
+
+# # Hessian-vector product (HVP) for the loss function
+# f = lambda v: hvp(lambda p: loss_fn(p, x, y), params, v)
+
+# # Initial guess for the eigenvector
+# key, subkey = jax.random.split(key)  # Split the key for generating the initial vector v0
+# v0 = jnp.array(jax.random.normal(subkey, (n,)))
+
+
+# # 4. Using matfree's method for eigenvalue computation (tridiag size is set to 30)
+# tridag = matfree.decomp.tridiag_sym(num_eig, custom_vjp=False)
+# get_eig = matfree.eig.eigh_partial(tridag)  # Get the eigenvalue function
+
+# g = eqx.filter_jit(get_eig).lower(f, v0).compile()
+
+# # Time the matrix-free eigenvalue computation
+# start_time = time.time()
+
+# eigvals_matfree, _ = g(f, v0)  # Compute eigenvalues
+
+# jax.block_until_ready(eigvals_matfree)
+
+# matfree_time = time.time() - start_time
+# print(f"Matrix-free eigenvalue computation time: {matfree_time} seconds")
+
+
+# # Print results
+# print("Eigenvalues from manually computed Hessian:", eigvals_hessian[-num_eig:])
+# print("Eigenvalues from matfree:", eigvals_matfree)
+
+import wandb
 import jax.numpy as jnp
-from jax import hessian, grad
-import time  # Import time module for timing
-import equinox as eqx
+import jax.random as random
+import jax
 
-# Define a large-scale problem
-n = 10000  # Number of features
-m = 100  # Number of data points
-num_eig = 5
-
-# Generate a random key using jax.random.PRNGKey
-key = jax.random.key(0)
-
-# Randomly generate large input data
-key, subkey = jax.random.split(key)  # Split the key for generating x
-x = jnp.array(jax.random.normal(subkey, (m, n)))  # m x n input matrix
-
-key, subkey = jax.random.split(key)  # Split the key for generating y
-y = jnp.array(jax.random.normal(subkey, (m,)))  # m-dimensional output
-
-key, subkey = jax.random.split(key)  # Split the key for generating params
-params = jnp.array(jax.random.normal(subkey, (n,)))  # n-dimensional parameters
+# Initialize W&B
+wandb.init(project="jax-logging")
 
 
-# Define the loss function (mean squared error)
-def loss_fn(params, x, y):
-    predictions = jnp.dot(x, params)
-    return jnp.mean((predictions - y) ** 2)
+# Define a simple function
+def loss_fn(x):
+    return jnp.sum(x**2)
 
 
-# Time the Hessian computation
-start_time = time.time()
+# Initialize random input
+key = random.PRNGKey(0)
+x = random.normal(key, (5,))
 
-# 1. Compute Hessian manually using JAX
-loss_hessian = hessian(lambda p: loss_fn(p, x, y))  # Hessian function
-H = loss_hessian(params)  # Evaluate the Hessian at the parameter values
+# Compute gradient
+grad_fn = jax.grad(loss_fn)
+grads = grad_fn(x)
+grads = jnp.array([grads])
 
-# 2. Compute eigenvalues of the Hessian
-eigvals_hessian = jnp.linalg.eigvalsh(H)
+# Log the first set of data
+wandb.log(
+    {
+        "logging_step": 0,
+        "gradients": wandb.Histogram(grads),
+        "scalar_as_histogram": jnp.array([5.0]),  # Not meaningful as a histogram
+        "scalar_value": 5.0,
+    },
+    commit=True,
+)
 
-jax.block_until_ready(eigvals_hessian)
+# Log the second set of data
+wandb.log(
+    {
+        "logging_step": 1,
+        "gradients": None,
+        "scalar_as_histogram": jnp.array([5.0]),
+        "scalar_value": 5.0,
+    },
+    commit=True,
+)
 
-hessian_time = time.time() - start_time
-print(f"Hessian computation time: {hessian_time:.2f} seconds")
+# Log the third set of data
+wandb.log(
+    {
+        "logging_step": 2,
+        "gradients": wandb.Histogram(grads),
+        "scalar_as_histogram": jnp.array([5.0]),
+        "scalar_value": 5.0,
+    },
+    commit=True,
+)
 
+print("Gradients:", grads)
 
-# 3. Use matfree for matrix-free eigenvalue computation
-def hvp(f, x, v):
-    return grad(lambda x: jnp.vdot(grad(f)(x), v))(x)
-
-
-# Hessian-vector product (HVP) for the loss function
-f = lambda v: hvp(lambda p: loss_fn(p, x, y), params, v)
-
-# Initial guess for the eigenvector
-key, subkey = jax.random.split(key)  # Split the key for generating the initial vector v0
-v0 = jnp.array(jax.random.normal(subkey, (n,)))
-
-
-# 4. Using matfree's method for eigenvalue computation (tridiag size is set to 30)
-tridag = matfree.decomp.tridiag_sym(num_eig, custom_vjp=False)
-get_eig = matfree.eig.eigh_partial(tridag)  # Get the eigenvalue function
-
-g = eqx.filter_jit(get_eig).lower(f, v0).compile()
-
-# Time the matrix-free eigenvalue computation
-start_time = time.time()
-
-eigvals_matfree, _ = g(f, v0)  # Compute eigenvalues
-
-jax.block_until_ready(eigvals_matfree)
-
-matfree_time = time.time() - start_time
-print(f"Matrix-free eigenvalue computation time: {matfree_time} seconds")
-
-
-# Print results
-print("Eigenvalues from manually computed Hessian:", eigvals_hessian[-num_eig:])
-print("Eigenvalues from matfree:", eigvals_matfree)
+wandb.finish()

@@ -43,9 +43,6 @@ def main():
 
         lossFn = getLossFn(config)
         env, innerInterpreter, outerInterpreter = create_env(config, env_prng)
-
-        rec_state, _ = outerInterpreter.getRecurrentState.func(outerInterpreter, env)
-
         oho_set, test_set = create_datasets(config, data_prng, test_prng)
 
         start = time.time()
@@ -54,34 +51,32 @@ def main():
         end = time.time()
         print(f"Training time: {end - start} seconds")
         logs = all_logs.value
+
+        def safe_real_array(value, i):
+            if value is None:
+                return None
+            value = value[i]
+            # Check if any element in the array is not finite
+            if not jnp.all(jnp.isfinite(value)):
+                return None
+            return jnp.real(value)
+
         for i in range(logs.trainLoss.shape[0]):
             run.log(
                 {
-                    "train_loss": jnp.real(logs.trainLoss[i]) if logs.trainLoss is not None else None,
-                    "validation_loss": jnp.real(logs.validationLoss[i]) if logs.validationLoss is not None else None,
-                    "test_loss": jnp.real(logs.testLoss[i]) if logs.testLoss is not None else None,
-                    "hyperparameters": jnp.real(logs.hyperparameters[i]) if logs.hyperparameters is not None else None,
-                    "parameter_norm": jnp.real(logs.parameterNorm[i]) if logs.parameterNorm is not None else None,
-                    "oho_gradient": jnp.real(logs.ohoGradient[i]) if logs.ohoGradient is not None else None,
-                    "train_gradient": jnp.real(logs.trainGradient[i]) if logs.trainGradient is not None else None,
-                    "validation_gradient": jnp.real(logs.validationGradient[i])
-                    if logs.validationGradient is not None
-                    else None,
-                    "immediate_influence_tensor_norm": jnp.real(logs.immediateInfluenceTensorNorm[i])
-                    if logs.immediateInfluenceTensorNorm is not None
-                    else None,
-                    "inner_influence_tensor_norm": jnp.real(logs.innerInfluenceTensorNorm[i])
-                    if logs.innerInfluenceTensorNorm is not None
-                    else None,
-                    "outer_influence_tensor_norm": jnp.real(logs.outerInfluenceTensorNorm[i])
-                    if logs.outerInfluenceTensorNorm is not None
-                    else None,
-                    "largest_jacobian_eigenvalue": jnp.real(logs.largest_jacobian_eigenvalue[i])
-                    if logs.largest_jacobian_eigenvalue is not None
-                    else None,
-                    "largest_hessian_eigenvalue": jnp.real(logs.largest_hessian_eigenvalue[i])
-                    if logs.largest_hessian_eigenvalue is not None
-                    else None,
+                    "train_loss": safe_real_array(logs.trainLoss, i),
+                    "validation_loss": safe_real_array(logs.validationLoss, i),
+                    "test_loss": safe_real_array(logs.testLoss, i),
+                    "hyperparameters": safe_real_array(logs.hyperparameters, i),
+                    "parameter_norm": safe_real_array(logs.parameterNorm, i),
+                    "oho_gradient": safe_real_array(logs.ohoGradient, i),
+                    "train_gradient": safe_real_array(logs.trainGradient, i),
+                    "validation_gradient": safe_real_array(logs.validationGradient, i),
+                    "immediate_influence_tensor_norm": safe_real_array(logs.immediateInfluenceTensorNorm, i),
+                    "inner_influence_tensor_norm": safe_real_array(logs.innerInfluenceTensorNorm, i),
+                    "outer_influence_tensor_norm": safe_real_array(logs.outerInfluenceTensorNorm, i),
+                    "largest_jacobian_eigenvalue": safe_real_array(logs.largest_jacobian_eigenvalue, i),
+                    "largest_influence_eigenvalue": safe_real_array(logs.largest_hessian_eigenvalue, i),
                 }
             )
 
