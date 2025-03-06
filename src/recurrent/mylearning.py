@@ -542,7 +542,7 @@ class UORO(PastFacingLearn):
             influenceTensor = jax.lax.cond(
                 log_condition,
                 lambda _: jnp.outer(A_new, B_new),
-                lambda _: jnp.zeros((A_new.shape, B_new.shape)),
+                lambda _: jnp.zeros((A_new.shape[0], B_new.shape[0])),
                 None,
             )
 
