@@ -1,4 +1,4 @@
-FROM thewillyp/devenv:master-1.0.23@sha256:4ad3c015a5809a914c10bb54576abfb4e200c1ae7a93dfaeb53e842921fd844e
+FROM thewillyp/devenv:master-1.0.28-gpu@sha256:12d8d4245f725d0576dc178df4fa4bbfa44a8e6cb3da9752feb9ae8590c24b4e
 
 WORKDIR /
 
