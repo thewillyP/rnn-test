@@ -6,7 +6,7 @@
 #SBATCH --job-name=oho_experiments
 #SBATCH --gres=gpu:0
 #SBATCH --cpus-per-task=4
-#SBATCH --array=1-1990
+#SBATCH --array=1
 #SBATCH --output="/scratch/wlp9800/logs/%x-%A-%a.out"
 #SBATCH --error="/scratch/wlp9800/logs/%x-%A-%a.err"
 
@@ -34,7 +34,7 @@ if [ -z "$WANDB_API_KEY" ]; then
     exit 1
 fi
 
-singularity run --nv --containall --no-home --cleanenv --writable-tmpfs \
+singularity run --nv --containall --cleanenv --writable-tmpfs \
   --env WANDB_API_KEY=${WANDB_API_KEY} \
   --env WANDB_DIR=/wandb_data \
   --bind /scratch/${USER}/wandb:/wandb_data \
