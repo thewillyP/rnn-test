@@ -1,0 +1,97 @@
+program: /rnn-test/src/main.py
+name: exp13
+method: grid
+metric:
+  name: test_loss
+  goal: minimize
+parameters:
+  inner_learning_rate:
+    values: [0.1, 0.01]
+
+  outer_learning_rate:
+    values: [9.9999997e-06, 1.2742752e-05, 1.6237773e-05, 2.0691368e-05,
+            2.6366528e-05, 3.3598175e-05, 4.2813321e-05, 5.4555952e-05,
+            6.9519301e-05, 8.8586719e-05, 1.1288386e-04, 1.4384503e-04,
+            1.8329815e-04, 2.3357228e-04, 2.9763521e-04, 3.7926895e-04,
+            4.8329329e-04, 6.1584869e-04, 7.8476028e-04, 1.0000000e-03]
+
+  ts:
+    values: [[5, 9], [15, 17]]
+
+  seed:
+    values: [27077, 27312,  8264, 82365, 39715, 39923, 56240, 64671, 53365, 67611]
+
+  test_seed:
+    value: 12345
+
+  tr_examples_per_epoch:
+    value: 100
+
+  vl_examples_per_epoch:
+    value: 2000
+
+  tr_avg_per:
+    value: 1
+
+  numVal:
+    value: 2000
+
+  numTr:
+    value: 100_000
+
+  numTe:
+    value: 5000
+
+  inner_learner:
+    values: ["rtrl", "uoro", "rflo"]
+
+  outer_learner:
+    values: ["rtrl"]
+
+  lossFn:
+    value: "cross_entropy"
+
+  inner_optimizer:
+    value: "sgd"
+
+  outer_optimizer:
+    value: "sgd_positive"
+
+  activation_fn:
+    value: "tanh"
+
+  architecture:
+    value: "rnn"
+
+  n_h:
+    value: 32
+
+  n_in:
+    value: 2
+
+  n_out:
+    value: 2
+
+  inner_time_constant:
+    value: 1.0
+
+  outer_time_constant:
+    value: 1.0
+
+  log_special:
+    value: True
+
+  tau_task:
+    value: True
+
+  lanczos_iterations:
+    value: 10
+
+  inner_uoro_std:
+    value: 1.0
+
+  outer_uoro_std:
+    value: 1.0
+
+  initialization_std:
+    value: 1.0
