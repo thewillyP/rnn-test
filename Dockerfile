@@ -8,4 +8,12 @@ WORKDIR /rnn-test
 
 RUN chmod -R 777 /rnn-test
 
-# eventually I just want to have my run command here, which will be a wandb sync
+RUN mkdir -p /wandb_data
+
+RUN chmod -R 777 /wandb_data
+
+COPY entrypoint.sh entrypoint.sh
+
+RUN chmod +x entrypoint.sh
+
+ENTRYPOINT ["entrypoint.sh"]
