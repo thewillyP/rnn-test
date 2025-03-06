@@ -8,8 +8,12 @@
 #SBATCH --output=wandb_sync_%j.log   
 #SBATCH --error=wandb_sync_%j.err    
 
-# Navigate to the working directory
-cd /scratch/wlp9800/wandb
+# Changes often
+USER=wlp9800
+IMAGE=devenv
 
-# Sync all wandb runs
-wandb sync --sync-all
+singularity exec --containall --no-home --cleanenv \
+--bind /scratch/wlp9800/wandb/wandb:/wandb \
+/scratch/${USER}/images/${IMAGE}.sif bash -c \
+"cd /wandb && wandb sync --sync-all"
+
