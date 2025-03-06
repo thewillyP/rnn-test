@@ -69,10 +69,10 @@ parameters:
     value: 2
 
   inner_time_constant:
-    value: [0.5, 0.9]
+    values: [0.5, 0.9]
 
   outer_time_constant:
-    value: [0.5, 0.9]
+    values: [0.5, 0.9]
 
   log_special:
     value: True
