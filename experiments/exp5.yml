@@ -75,7 +75,7 @@ parameters:
     value: 1.0
 
   log_special:
-    value: False
+    value: True
 
   tau_task:
     value: True
