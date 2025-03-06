@@ -42,7 +42,7 @@ parameters:
     values: ["uoro"]
 
   outer_learner:
-    values: ["rtrl", "uoro", "rflo"]
+    values: ["identity", "rtrl", "uoro", "rflo"]
 
   lossFn:
     value: "cross_entropy"
