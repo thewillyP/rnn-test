@@ -1,39 +1,39 @@
 program: /rnn-test/src/main.py
-name: exp2
+name: exp4
 method: grid
 metric:
   name: test_loss
   goal: minimize
 parameters:
   inner_learning_rate:
-    values: [1.0e-4]
+    values: [1.7491224e-1, 2.4055859e-1, 3.0740400e-4, 1.2539665e-3, 3.5600921e-3, 5.5077890e-5, 2.4478181e-4, 1.2214852e-2, 2.2047773e-2, 5.8297930e-5]
 
   outer_learning_rate:
-    values: [1.0e-5]
+    value: 1.0e-4
 
   ts:
-    values: [[5, 9]]
+    values: [[0, 2], [1, 3], [2, 4], [3, 5], [4, 6], [5, 7], [6, 8], [7, 9], [8, 10], [9, 11], [10, 12], [11, 13], [12, 14], [13, 15], [14, 16], [15, 17], [16, 18], [17, 19], [18, 20], [19, 21]]
 
   seed:
-    values: [27077]
+    values: [27077, 27312,  8264, 82365, 39715, 39923, 56240, 64671, 53365, 67611]
 
   test_seed:
     value: 12345
 
   tr_examples_per_epoch:
-    value: 1
+    value: 100
 
   vl_examples_per_epoch:
-    value: 1
+    value: 2000
 
   tr_avg_per:
     value: 1
 
   numVal:
-    value: 1
+    value: 2000
 
   numTr:
-    value: 1_000_000
+    value: 100_000
 
   numTe:
     value: 5000
