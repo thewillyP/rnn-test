@@ -15,7 +15,8 @@ USER=wlp9800
 IMAGE=devenv
 
 singularity exec --containall --no-home --cleanenv \
---bind /scratch/wlp9800/wandb/wandb:/wandb \
-/scratch/${USER}/images/${IMAGE}.sif bash -c \
-"cd /wandb && wandb sync --sync-all"
+    --bind /scratch/wlp9800/wandb/wandb:/wandb \
+    --env WANDB_API_KEY=${WANDB_API_KEY} \
+    /scratch/${USER}/images/${IMAGE}.sif bash -c \
+    "cd /wandb && wandb sync --sync-all"
 
