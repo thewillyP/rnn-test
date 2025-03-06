@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
   push:
     paths:
-        - Dockerfile 
-        - .github/workflows/** 
-        - src/**
+      - Dockerfile 
+      - .github/workflows/** 
+      - src/**
     branches:
       - 'master'
     tags:
@@ -14,10 +14,15 @@ on:
   pull_request:
     branches:
       - 'master'
+
 jobs:
   docker:
+    strategy:
+      matrix:
+        variant: [cpu, gpu] 
     uses: thewillyP/ReusableWorkflow/.github/workflows/main.yml@main
     with:
       image_name: rnn-test
-      tag: 1.0.${{ github.run_number }}
+      tag: 1.0.${{ github.run_number }}-${{ matrix.variant }}
+      build_args: VARIANT=${{ matrix.variant }} 
     secrets: inherit

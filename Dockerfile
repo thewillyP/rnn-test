@@ -1,4 +1,5 @@
-FROM thewillyp/devenv:master-1.0.28-gpu@sha256:12d8d4245f725d0576dc178df4fa4bbfa44a8e6cb3da9752feb9ae8590c24b4e
+ARG VARIANT=gpu  # Default to GPU if not provided
+FROM thewillyp/devenv:master-1.0.28-${VARIANT}
 
 WORKDIR /
 
