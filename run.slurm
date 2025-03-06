@@ -28,11 +28,14 @@ if [ -z "$WANDB_SWEEP_ID" ]; then
     exit 1
 fi
 
+# Ensure WANDB_API_KEY is set
+if [ -z "$WANDB_API_KEY" ]; then
+    echo "Error: WANDB_API_KEY environment variable must be set!"
+    exit 1
+fi
 
 singularity run --nv --containall --no-home --cleanenv --writable-tmpfs \
   --env WANDB_API_KEY=${WANDB_API_KEY} \
   --env WANDB_DIR=/wandb_data \
   --bind /scratch/${USER}/wandb:/wandb_data \
   /scratch/${USER}/images/${IMAGE}.sif ${WANDB_SWEEP_ID}
-
-
