@@ -2,11 +2,11 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --mem=8G
-#SBATCH --time=00:05:00
+#SBATCH --time=00:30:00
 #SBATCH --job-name=oho_experiments
 #SBATCH --gres=gpu:0
-#SBATCH --cpus-per-task=4
-#SBATCH --array=1-22
+#SBATCH --cpus-per-task=2
+#SBATCH --array=1-1418
 #SBATCH --output="/scratch/wlp9800/logs/%x-%A-%a.out"
 #SBATCH --error="/scratch/wlp9800/logs/%x-%A-%a.err"
 

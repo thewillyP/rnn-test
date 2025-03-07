@@ -13,7 +13,7 @@
 # Dynamically pass user, image, and tag as environment variables
 USER=${USER:-"wlp9800"}  # Default to wlp9800 if not provided
 IMAGE=${IMAGE:-"rnn-test"}  # Default to rnn-test if not provided
-TAG=${TAG:-"master-1.0.40"}  # Default to master-1.0.39-gpu if not provided
+TAG=${TAG:-"master-1.0.41"}  # Default to master-1.0.39-gpu if not provided
 
 # Docker URL constructed dynamically with IMAGE and TAG
 DOCKER_URL="docker://thewillyp/${IMAGE}:${TAG}"

@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --mem=8G
+#SBATCH --mem=12G
 #SBATCH --time=05:00:00
 #SBATCH --job-name=wandb_sync
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=6
 #SBATCH --output="/scratch/wlp9800/logs/wandb_sync_%j.out"   
 #SBATCH --error="/scratch/wlp9800/logs/wandb_sync_%j.err"    
 #SBATCH --mail-type=END
