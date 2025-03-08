@@ -81,7 +81,7 @@ parameters:
     value: True
 
   lanczos_iterations:
-    value: 20
+    value: 10
 
   inner_uoro_std:
     value: 1.0
