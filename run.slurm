@@ -34,6 +34,9 @@ if [ -z "$WANDB_API_KEY" ]; then
     exit 1
 fi
 
+# delay so that multiple jobs don't start at the same time, for rate limiting
+sleep $(shuf -i 0-10 -n 1)
+
 singularity run --nv --containall --cleanenv --writable-tmpfs \
   --env WANDB_API_KEY=${WANDB_API_KEY} \
   --env WANDB_DIR=/wandb_data \
