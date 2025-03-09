@@ -1,19 +1,15 @@
 import copy
-import os
-import pickle
 import time
 from typing import Any
 
 import jax.experimental
 import optax
-import psutil
 from recurrent.mylearning import *
 from recurrent.mylearning import RFLO, RTRL, UORO, IdentityLearner
 from recurrent.myrecords import GodConfig, GodInterpreter
 from recurrent.mytypes import *
 
 
-from matplotlib import pyplot as plt
 from recurrent.parameters import (
     RnnConfig,
     RnnParameter,
@@ -26,13 +22,22 @@ import jax.numpy as jnp
 import equinox as eqx
 import jax
 import wandb
+import uuid
+from datetime import datetime
+
 
 # jax.config.update("jax_enable_x64", True)
 
 
+def generate_unique_id():
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")  # Microsecond precision
+    short_uuid = uuid.uuid4().hex[:8]  # Random component
+    return f"{timestamp}_{short_uuid}"
+
+
 def main():
     # Initialize a new wandb run
-    with wandb.init(mode="offline") as run:
+    with wandb.init(mode="offline", id=generate_unique_id()) as run:
         # If called by wandb.agent, as below,
         # this config will be set by Sweep Controller
         # config: Config = wandb.config
