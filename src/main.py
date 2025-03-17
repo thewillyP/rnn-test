@@ -82,19 +82,23 @@ def main():
                     "outer_influence_tensor_norm": safe_real_array(logs.outerInfluenceTensorNorm, i),
                     "largest_jacobian_eigenvalue": safe_real_array(logs.largest_jacobian_eigenvalue, i),
                     "largest_influence_eigenvalue": safe_real_array(logs.largest_hessian_eigenvalue, i),
+                    "jacobian_eigenvalues": safe_real_array(logs.jacobian_eigenvalues, i),
+                    "hessian_eigenvalues": safe_real_array(logs.hessian_eigenvalues, i),
                 }
             )
 
-        trained_env = copy.replace(trained_env, prng=jax.random.key_data(trained_env.prng))
-        trained_env_path = "trained_env.eqx"
-        eqx.tree_serialise_leaves(trained_env_path, trained_env)
+        print(logs.hessian_eigenvalues[-1])
 
-        # Generate a unique artifact name using the W&B run ID
-        artifact_name = f"trained_env"
+        # trained_env = copy.replace(trained_env, prng=jax.random.key_data(trained_env.prng))
+        # trained_env_path = f"/wandb_data/artifacts/trained_env_{run.id}.eqx"
+        # eqx.tree_serialise_leaves(trained_env_path, trained_env)
 
-        artifact = wandb.Artifact(name=artifact_name, type="environment")
-        artifact.add_file(trained_env_path)
-        run.log_artifact(artifact)
+        # # Generate a unique artifact name using the W&B run ID
+        # artifact_name = f"trained_env_{run.id}"
+
+        # artifact = wandb.Artifact(name=artifact_name, type="environment")
+        # artifact.add_file(trained_env_path)
+        # run.log_artifact(artifact)
 
         run.finish()
 
@@ -137,7 +141,11 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
     prng1, prng2, prng3, prng4, prng5, prng6, prng7, prng8, prng9 = jax.random.split(prng, 9)
     env = GodState(
         prng=prng1,
-        logConfig=LogConfig(log_special=config.log_special, lanczos_iterations=config.lanczos_iterations),
+        logConfig=LogConfig(
+            log_special=config.log_special,
+            lanczos_iterations=config.lanczos_iterations,
+            log_expensive=config.log_expensive if config.log_expensive is not None else False,
+        ),
         innerTimeConstant=config.inner_time_constant,
         outerTimeConstant=config.outer_time_constant,
     )
@@ -229,6 +237,7 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
         influenceTensor=inner_influence_tensor,
         immediateInfluenceTensor=inner_influence_tensor,
         jac_eigenvalue=0.0,
+        hessian=jnp.zeros((rec_state_n, rec_state_n)),
     )
     env = putter(env, lambda s: s.innerLogs, innerLogs)
 
@@ -277,6 +286,7 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
         influenceTensor=outer_influence_tensor,
         immediateInfluenceTensor=outer_influence_tensor,
         jac_eigenvalue=0.0,
+        hessian=jnp.zeros((outer_rec_state_n, outer_rec_state_n)),
     )
     env = putter(env, lambda s: s.outerLogs, outerLogs)
 
@@ -502,6 +512,16 @@ def train(
         vl, _ = validation_model(oho_data.validation)(innerInterpreter, env)
         tr, _ = innerLibrary.modelLossFn(oho_data.payload).func(innerInterpreter, env)
 
+        def get_eigenvalues(_):
+            jac_e = jnp.linalg.eigvals(env.innerLogs.hessian)
+            hess_e = jnp.linalg.eigvals(env.outerLogs.hessian)
+            return jnp.real(jac_e), jnp.real(hess_e)
+
+        def no_eigenvalues(_):
+            return jnp.empty((env.innerLogs.hessian.shape[0],)), jnp.empty((env.outerLogs.hessian.shape[0],))
+
+        jac_e, hess_e = jax.lax.cond(env.logConfig.log_expensive, get_eigenvalues, no_eigenvalues, None)
+
         _ = yield from outerLibrary.modelGradient(oho_data).flat_map(doOptimizerStep)
 
         log = AllLogs(
@@ -518,6 +538,8 @@ def train(
             innerInfluenceTensorNorm=jnp.linalg.norm(jnp.ravel(env.innerLogs.influenceTensor)),
             largest_jacobian_eigenvalue=env.innerLogs.jac_eigenvalue,
             largest_hessian_eigenvalue=env.outerLogs.jac_eigenvalue,
+            jacobian_eigenvalues=jac_e,
+            hessian_eigenvalues=hess_e,
         )
         return pure(log, PX[tuple[GodInterpreter, GodState]]())
 

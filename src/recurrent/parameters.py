@@ -44,6 +44,7 @@ class Logs(eqx.Module):
     influenceTensor: Optional[jax.Array] = eqx.field(default=None)
     immediateInfluenceTensor: Optional[jax.Array] = eqx.field(default=None)
     jac_eigenvalue: Optional[jax.Array] = eqx.field(default=None)
+    hessian: Optional[jax.Array] = eqx.field(default=None)
 
 
 class AllLogs(eqx.Module):
@@ -60,8 +61,11 @@ class AllLogs(eqx.Module):
     innerInfluenceTensorNorm: jax.Array
     largest_hessian_eigenvalue: jax.Array
     largest_jacobian_eigenvalue: jax.Array
+    jacobian_eigenvalues: jax.Array
+    hessian_eigenvalues: jax.Array
 
 
 class LogConfig(eqx.Module):
     log_special: bool = eqx.field(static=True)
     lanczos_iterations: int = eqx.field(static=True)
+    log_expensive: bool = eqx.field(static=True)

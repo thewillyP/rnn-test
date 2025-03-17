@@ -15,7 +15,7 @@ USER=wlp9800
 IMAGE=devenv
 
 singularity exec --containall --no-home --cleanenv \
-    --bind /scratch/${USER}:/scratch \
+    --bind /scratch/${USER}/wandb:/wandb_data \
     --bind /home/${USER}/dev:/dev \
     --env WANDB_API_KEY=${WANDB_API_KEY} \
     /scratch/${USER}/images/${IMAGE}.sif bash -c \

@@ -112,6 +112,7 @@ class GodConfig:
     inner_uoro_std: float
     outer_uoro_std: float
     initialization_std: float
+    log_expensive: Optional[bool] = None
 
 
 # def rnn_array(state: State) -> jax.Array:
