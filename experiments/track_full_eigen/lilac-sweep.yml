@@ -1,0 +1,105 @@
+program: /rnn-test/src/main.py
+name: lilac
+method: grid
+metric:
+  name: test_loss
+  goal: minimize
+parameters:
+  inner_learning_rate:
+    values: [0.1]
+
+  outer_learning_rate:
+    values: [0.001]
+
+  ts:
+    values: [[5, 7]]
+
+  seed:
+    values: [27077]
+
+  test_seed:
+    value: 12345
+
+  tr_examples_per_epoch:
+    value: 100
+
+  vl_examples_per_epoch:
+    value: 2000
+
+  tr_avg_per:
+    value: 1
+
+  numVal:
+    value: 2000
+
+  numTr:
+    value: 100000
+
+  numTe:
+    value: 5000
+
+  inner_learner:
+    value: "rtrl"
+
+  outer_learner:
+    value: "rtrl"
+
+  lossFn:
+    value: "cross_entropy"
+
+  inner_optimizer:
+    value: "sgd"
+
+  outer_optimizer:
+    value: "sgd_positive"
+
+  activation_fn:
+    value: "tanh"
+
+  architecture:
+    value: "rnn"
+
+  n_h:
+    value: 32
+
+  n_in:
+    value: 2
+
+  n_out:
+    value: 2
+
+  inner_time_constant:
+    value: 1.0
+
+  outer_time_constant:
+    value: 1.0
+
+  tau_task:
+    value: True
+
+  inner_log_special:
+    value: False
+
+  outer_log_special:
+    value: False
+
+  inner_lanczos_iterations:
+    value: 10
+
+  outer_lanczos_iterations:
+    value: 10
+
+  inner_log_expensive:
+    value: False
+
+  outer_log_expensive:
+    value: True
+
+  inner_uoro_std:
+    value: 1.0
+
+  outer_uoro_std:
+    value: 1.0
+
+  initialization_std:
+    value: 1.0

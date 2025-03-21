@@ -87,16 +87,16 @@ def main():
                 }
             )
 
-        # trained_env = copy.replace(trained_env, prng=jax.random.key_data(trained_env.prng))
-        # trained_env_path = f"/wandb_data/artifacts/trained_env_{run.id}.eqx"
-        # eqx.tree_serialise_leaves(trained_env_path, trained_env)
+        trained_env = copy.replace(trained_env, prng=jax.random.key_data(trained_env.prng))
+        trained_env_path = f"/wandb_data/artifacts/trained_env_{run.id}.eqx"
+        eqx.tree_serialise_leaves(trained_env_path, trained_env)
 
-        # # Generate a unique artifact name using the W&B run ID
-        # artifact_name = f"trained_env_{run.id}"
+        # Generate a unique artifact name using the W&B run ID
+        artifact_name = f"trained_env_{run.id}"
 
-        # artifact = wandb.Artifact(name=artifact_name, type="environment")
-        # artifact.add_file(trained_env_path)
-        # run.log_artifact(artifact)
+        artifact = wandb.Artifact(name=artifact_name, type="environment")
+        artifact.add_file(trained_env_path)
+        run.log_artifact(artifact)
 
         run.finish()
 
