@@ -87,8 +87,6 @@ def main():
                 }
             )
 
-        print(logs.hessian_eigenvalues[-1])
-
         # trained_env = copy.replace(trained_env, prng=jax.random.key_data(trained_env.prng))
         # trained_env_path = f"/wandb_data/artifacts/trained_env_{run.id}.eqx"
         # eqx.tree_serialise_leaves(trained_env_path, trained_env)
@@ -145,12 +143,10 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
         outerTimeConstant=config.outer_time_constant,
     )
 
-    inner_log_config = (
-        LogConfig(
-            log_special=config.inner_log_special,
-            lanczos_iterations=config.inner_lanczos_iterations,
-            log_expensive=config.inner_log_expensive if config.inner_log_expensive is not None else False,
-        ),
+    inner_log_config = LogConfig(
+        log_special=config.inner_log_special,
+        lanczos_iterations=config.inner_lanczos_iterations,
+        log_expensive=config.inner_log_expensive if config.inner_log_expensive is not None else False,
     )
     env = putter(env, lambda s: s.innerLogConfig, inner_log_config)
 
@@ -248,12 +244,10 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
     # =============================
     # 3) Initialize outer state and parameters
 
-    outer_log_config = (
-        LogConfig(
-            log_special=config.outer_log_special,
-            lanczos_iterations=config.outer_lanczos_iterations,
-            log_expensive=config.outer_log_expensive if config.outer_log_expensive is not None else False,
-        ),
+    outer_log_config = LogConfig(
+        log_special=config.outer_log_special,
+        lanczos_iterations=config.outer_lanczos_iterations,
+        log_expensive=config.outer_log_expensive if config.outer_log_expensive is not None else False,
     )
     env = putter(env, lambda s: s.outerLogConfig, outer_log_config)
 
