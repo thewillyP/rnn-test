@@ -1,6 +1,6 @@
-program: src/main.py
-name: time_test_oho
-method: random
+program: /rnn-test/src/main.py
+name: visionary
+method: grid
 metric:
   name: test_loss
   goal: minimize
@@ -9,13 +9,13 @@ parameters:
     values: [0.1]
 
   outer_learning_rate:
-    values: [1.0e-5]
+    values: [0.001]
 
   ts:
-    values: [[5, 9]]
+    values: [[12, 14]]
 
   seed:
-    values: [27077, 27312,  8264, 82365, 39715, 39923, 56240, 64671, 53365, 67611]
+    values: [27077]
 
   test_seed:
     value: 12345
@@ -33,13 +33,13 @@ parameters:
     value: 2000
 
   numTr:
-    value: 1_000
+    value: 100_000
 
   numTe:
     value: 5000
 
   inner_learner:
-    values: ["rtrl"]
+    value: "rtrl"
 
   outer_learner:
     value: "rtrl"

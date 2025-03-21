@@ -3,7 +3,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Define the wandb directory path
-wandb_dir = Path("/scratch/wandb")
+wandb_dir = Path("/wandb_data")
 
 
 def sync_run(run_path):

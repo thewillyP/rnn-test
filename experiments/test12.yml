@@ -1,5 +1,5 @@
 program: src/main.py
-name: time_test_oho
+name: test1
 method: random
 metric:
   name: test_loss
@@ -12,10 +12,10 @@ parameters:
     values: [1.0e-5]
 
   ts:
-    values: [[5, 9]]
+    values: [[0, 2]]
 
   seed:
-    values: [27077, 27312,  8264, 82365, 39715, 39923, 56240, 64671, 53365, 67611]
+    values: [27077]
 
   test_seed:
     value: 12345
@@ -42,7 +42,7 @@ parameters:
     values: ["rtrl"]
 
   outer_learner:
-    value: "rtrl"
+    values: ["rtrl"]
 
   lossFn:
     value: "cross_entropy"
@@ -60,7 +60,7 @@ parameters:
     value: "rnn"
 
   n_h:
-    value: 32
+    value: 256
 
   n_in:
     value: 2
@@ -74,26 +74,17 @@ parameters:
   outer_time_constant:
     value: 1.0
 
+  log_special:
+    value: False
+
+  log_expensive:
+    value: False
+
   tau_task:
     value: True
 
-  inner_log_special:
-    value: False
-
-  outer_log_special:
-    value: False
-
-  inner_lanczos_iterations:
+  lanczos_iterations:
     value: 10
-
-  outer_lanczos_iterations:
-    value: 10
-
-  inner_log_expensive:
-    value: False
-
-  outer_log_expensive:
-    value: True
 
   inner_uoro_std:
     value: 1.0

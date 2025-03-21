@@ -397,6 +397,7 @@ class RTRL(InfluenceTensorLearner):
 
         log_condition = yield from interpreter.getLogConfig.fmap(lambda x: x.log_special)
         lanczos_iterations = yield from interpreter.getLogConfig.fmap(lambda x: x.lanczos_iterations)
+        log_expensive = yield from interpreter.getLogConfig.fmap(lambda x: x.log_expensive)
 
         subkey = yield from interpreter.updatePRNG()
 
@@ -415,9 +416,17 @@ class RTRL(InfluenceTensorLearner):
             None,
         )
 
+        jacobian = jax.lax.cond(
+            log_expensive,
+            lambda _: eqx.filter_jacrev(wrtActvFn)(actv0),
+            lambda _: jnp.zeros(jax.eval_shape(eqx.filter_jacrev(wrtActvFn), actv0).shape),
+            None,
+        )
+
         _ = yield from put(env)
         _ = yield from interpreter.putLogs(Logs(immediateInfluenceTensor=immediateInfluence))
         _ = yield from interpreter.putLogs(Logs(jac_eigenvalue=eig))
+        _ = yield from interpreter.putLogs(Logs(hessian=jacobian))
         return pure(newInfluenceTensor, PX[tuple[Interpreter, Env]]())
 
 
