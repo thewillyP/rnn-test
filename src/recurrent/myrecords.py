@@ -21,7 +21,6 @@ class OhoData[Data](eqx.Module):
 
 class GodState(eqx.Module):
     prng: PRNG
-    logConfig: LogConfig = eqx.field(static=True)
     innerTimeConstant: float = eqx.field(static=True)
     outerTimeConstant: float = eqx.field(static=True)
 
@@ -30,6 +29,7 @@ class GodState(eqx.Module):
     innerInfluenceTensor: Optional[JACOBIAN] = eqx.field(default=None)
     innerUoro: Optional[UORO_Param] = eqx.field(default=None)
     innerLogs: Optional[Logs] = eqx.field(default=None)
+    innerLogConfig: Optional[LogConfig] = eqx.field(default=None)
     innerOptState: Optional[optax.OptState] = eqx.field(default=None)
     innerSgdParameter: Optional[SgdParameter] = eqx.field(default=None)
     innerAdamParameter: Optional[AdamParameter] = eqx.field(default=None)
@@ -38,6 +38,7 @@ class GodState(eqx.Module):
     outerInfluenceTensor: Optional[JACOBIAN] = eqx.field(default=None)
     outerUoro: Optional[UORO_Param] = eqx.field(default=None)
     outerLogs: Optional[Logs] = eqx.field(default=None)
+    outerLogConfig: Optional[LogConfig] = eqx.field(default=None)
     outerOptState: Optional[optax.OptState] = eqx.field(default=None)
     outerSgdParameter: Optional[SgdParameter] = eqx.field(default=None)
     outerAdamParameter: Optional[AdamParameter] = eqx.field(default=None)
@@ -106,13 +107,16 @@ class GodConfig:
     n_out: int
     inner_time_constant: float
     outer_time_constant: float
-    log_special: bool
     tau_task: bool
-    lanczos_iterations: int
     inner_uoro_std: float
     outer_uoro_std: float
     initialization_std: float
-    log_expensive: Optional[bool] = None
+    inner_log_special: bool
+    outer_log_special: bool
+    inner_lanczos_iterations: int
+    outer_lanczos_iterations: int
+    inner_log_expensive: Optional[bool] = None
+    outer_log_expensive: Optional[bool] = None
 
 
 # def rnn_array(state: State) -> jax.Array:

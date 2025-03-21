@@ -141,14 +141,18 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
     prng1, prng2, prng3, prng4, prng5, prng6, prng7, prng8, prng9 = jax.random.split(prng, 9)
     env = GodState(
         prng=prng1,
-        logConfig=LogConfig(
-            log_special=config.log_special,
-            lanczos_iterations=config.lanczos_iterations,
-            log_expensive=config.log_expensive if config.log_expensive is not None else False,
-        ),
         innerTimeConstant=config.inner_time_constant,
         outerTimeConstant=config.outer_time_constant,
     )
+
+    inner_log_config = (
+        LogConfig(
+            log_special=config.inner_log_special,
+            lanczos_iterations=config.inner_lanczos_iterations,
+            log_expensive=config.inner_log_expensive if config.inner_log_expensive is not None else False,
+        ),
+    )
+    env = putter(env, lambda s: s.innerLogConfig, inner_log_config)
 
     # 1) Initialize inner state and parameters
     match config.activation_fn:
@@ -244,6 +248,15 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
     # =============================
     # 3) Initialize outer state and parameters
 
+    outer_log_config = (
+        LogConfig(
+            log_special=config.outer_log_special,
+            lanczos_iterations=config.outer_lanczos_iterations,
+            log_expensive=config.outer_log_expensive if config.outer_log_expensive is not None else False,
+        ),
+    )
+    env = putter(env, lambda s: s.outerLogConfig, outer_log_config)
+
     outer_rec_state_n = jnp.size(outer_state_get(env))
     outer_rec_param_n = jnp.size(outer_param_get(env))
 
@@ -321,7 +334,7 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
         putUoro=monadic_putter(lambda s: s.innerUoro),
         getRnnConfig=monadic_getter(lambda s: s.rnnState.rnnConfig),
         getTimeConstant=monadic_getter(lambda s: s.innerTimeConstant),
-        getLogConfig=monadic_getter(lambda s: s.logConfig),
+        getLogConfig=monadic_getter(lambda s: s.innerLogConfig),
         # putLogs=monadic_putter(lambda s: s.innerLogs),
         putLogs=lambda s: modifies(lambda e: eqx.tree_at(lambda t: t.innerLogs, e, eqx.combine(s, e.innerLogs))),
         getRnnParameter=monadic_getter(lambda s: s.rnnState.rnnParameter),
@@ -345,7 +358,7 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
         putUoro=monadic_putter(lambda s: s.outerUoro),
         getRnnConfig=pure(None, PX[tuple[GodInterpreter, GodState]]()),
         getTimeConstant=monadic_getter(lambda s: s.outerTimeConstant),
-        getLogConfig=monadic_getter(lambda s: s.logConfig),
+        getLogConfig=monadic_getter(lambda s: s.outerLogConfig),
         putLogs=lambda s: modifies(lambda e: eqx.tree_at(lambda t: t.outerLogs, e, eqx.combine(s, e.outerLogs))),
         getRnnParameter=pure(None, PX[tuple[GodInterpreter, GodState]]()),
         putRnnParameter=lambda x: pure(None, PX[tuple[GodInterpreter, GodState]]()),
@@ -512,15 +525,15 @@ def train(
         vl, _ = validation_model(oho_data.validation)(innerInterpreter, env)
         tr, _ = innerLibrary.modelLossFn(oho_data.payload).func(innerInterpreter, env)
 
-        def get_eigenvalues(_):
-            jac_e = jnp.linalg.eigvals(env.innerLogs.hessian)
-            hess_e = jnp.linalg.eigvals(env.outerLogs.hessian)
-            return jnp.real(jac_e), jnp.real(hess_e)
+        def get_eigenvalues(hessian):
+            hess = jnp.linalg.eigvals(hessian)
+            return jnp.real(hess)
 
-        def no_eigenvalues(_):
-            return jnp.empty((env.innerLogs.hessian.shape[0],)), jnp.empty((env.outerLogs.hessian.shape[0],))
+        def no_eigenvalues(hessian):
+            return jnp.empty((hessian.shape[0],))
 
-        jac_e, hess_e = jax.lax.cond(env.logConfig.log_expensive, get_eigenvalues, no_eigenvalues, None)
+        jac_e = jax.lax.cond(env.innerLogConfig.log_expensive, get_eigenvalues, no_eigenvalues, env.innerLogs.hessian)
+        hess_e = jax.lax.cond(env.outerLogConfig.log_expensive, get_eigenvalues, no_eigenvalues, env.outerLogs.hessian)
 
         _ = yield from outerLibrary.modelGradient(oho_data).flat_map(doOptimizerStep)
 

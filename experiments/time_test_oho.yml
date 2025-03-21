@@ -74,14 +74,26 @@ parameters:
   outer_time_constant:
     value: 1.0
 
-  log_special:
-    value: True
-
   tau_task:
     value: True
 
-  lanczos_iterations:
+  inner_log_special:
+    value: False
+
+  outer_log_special:
+    value: True
+
+  inner_lanczos_iterations:
     value: 10
+
+  outer_lanczos_iterations:
+    value: 10
+
+  inner_log_expensive:
+    value: False
+
+  outer_log_expensive:
+    value: True
 
   inner_uoro_std:
     value: 1.0
