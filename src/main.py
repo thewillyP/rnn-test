@@ -83,9 +83,15 @@ def main():
                     "largest_jacobian_eigenvalue": safe_real_array(logs.largest_jacobian_eigenvalue, i),
                     "largest_influence_eigenvalue": safe_real_array(logs.largest_hessian_eigenvalue, i),
                     "jacobian_eigenvalues": safe_real_array(logs.jacobian_eigenvalues, i),
-                    "hessian_eigenvalues": safe_real_array(logs.hessian_eigenvalues, i),
                 }
             )
+
+        columns = [str(i) for i in range(logs.hessian_eigenvalues.shape[1])]
+        run.log(
+            {
+                "hessian_eigenvalues": wandb.Table(columns=columns, data=jnp.real(logs.hessian_eigenvalues).tolist()),
+            }
+        )
 
         trained_env = copy.replace(trained_env, prng=jax.random.key_data(trained_env.prng))
         trained_env_path = f"/wandb_data/artifacts/trained_env_{run.id}.eqx"
