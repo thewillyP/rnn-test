@@ -5,6 +5,15 @@ metric:
   name: test_loss
   goal: minimize
 parameters:
+  data_load_size:
+    value: 1
+
+  num_retrain_loops:
+    value: 1
+  
+  checkpoint_interval:
+    value: 1
+
   inner_learning_rate:
     values: [0.1]
 
@@ -33,7 +42,7 @@ parameters:
     value: 2000
 
   numTr:
-    value: 1_000
+    value: 200
 
   numTe:
     value: 5000
