@@ -17,16 +17,25 @@ from recurrent.parameters import (
     UORO_Param,
 )
 
+from recurrent.pytree_dataset import PyTreeDataset, jax_collate_fn
 from recurrent.util import *
 import jax.numpy as jnp
 import equinox as eqx
 import jax
 import wandb
+from wandb import sdk as wandb_sdk
 import uuid
 from datetime import datetime
+from torch.utils.data import DataLoader
+import itertools
+import pickle
+import os
+import sys
 
 
 # jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_debug_nans", True)
+# jax.config.update("jax_disable_jit", True)
 
 
 def generate_unique_id():
@@ -35,76 +44,62 @@ def generate_unique_id():
     return f"{timestamp}_{short_uuid}"
 
 
-def main():
-    # Initialize a new wandb run
-    with wandb.init(mode="offline", id=generate_unique_id()) as run:
-        # If called by wandb.agent, as below,
-        # this config will be set by Sweep Controller
-        # config: Config = wandb.config
-        config = GodConfig(**wandb.config)
+def save_checkpoint(obj: Any, name: str, filename: str) -> None:
+    """Save a checkpoint as a W&B artifact with a passed-in filename."""
+    os.makedirs("checkpoints", exist_ok=True)
+    full_path: str = os.path.join("checkpoints", filename)
+
+    with open(full_path, "wb") as f:
+        pickle.dump(obj, f)
+
+    artifact: wandb.Artifact = wandb.Artifact(name, type="checkpoint")
+    artifact.add_file(full_path)
+    wandb.log_artifact(artifact)
+    print(f"Saved {name} as {filename}")
+
+
+def load_artifact(artifact_name: str, filename: str) -> Any:
+    api = wandb.Api()
+    model_artifact = api.artifact(artifact_name)
+    model_dir = model_artifact.download()
+    with open(os.path.join(model_dir, filename), "rb") as f:
+        return pickle.load(f)
+
+
+@dataclass
+class CommandLine:
+    run_id: str
+    entity: str
+    project: str
+
+
+def main(cmd: Optional[CommandLine]):
+    if cmd is not None:
+        artifact_name = f"{cmd.entity}/{cmd.project}/trained_env_{cmd.run_id}:latest"
+        env_artifact: GodState = load_artifact(artifact_name, "env.pkl")
+        env_artifact = copy.replace(env_artifact, prng=jax.random.wrap_key_data(env_artifact.prng))  # nonserializable
+        load_env = lambda _, __: env_artifact
+        wandb_init_kwargs = {"mode": "offline", "id": cmd.run_id, "resume": "must"}
+    else:
+        load_env = lambda config, prng: create_env(config, prng)[0]
+        wandb_init_kwargs = {"mode": "offline", "id": generate_unique_id()}
+
+    with wandb.init(**wandb_init_kwargs) as run:
+        config = GodConfig(**run.config)
         prng = PRNG(jax.random.key(config.seed))
         test_prng = PRNG(jax.random.key(config.test_seed))
         env_prng, data_prng = jax.random.split(prng, 2)
-
         lossFn = getLossFn(config)
-        env, innerInterpreter, outerInterpreter = create_env(config, env_prng)
+        checkpoint_fn = lambda env: save_checkpoint(env, f"trained_env_{run.id}", "env.pkl")
+
+        env = load_env(config, env_prng)
+        _, innerInterpreter, outerInterpreter = create_env(config, env_prng)
         oho_set, test_set = create_datasets(config, data_prng, test_prng)
 
         start = time.time()
-        all_logs, trained_env = train(oho_set, test_set, lossFn, env, innerInterpreter, outerInterpreter, config)
-        jax.block_until_ready(all_logs)
+        train_loop_IO(oho_set, test_set, lossFn, env, innerInterpreter, outerInterpreter, config, checkpoint_fn)
         end = time.time()
         print(f"Training time: {end - start} seconds")
-        logs = all_logs.value
-
-        def safe_real_array(value, i):
-            if value is None:
-                return None
-            value = value[i]
-            # Check if any element in the array is not finite
-            if not jnp.all(jnp.isfinite(value)):
-                return None
-            return jnp.real(value)
-
-        for i in range(logs.trainLoss.shape[0]):
-            run.log(
-                {
-                    "train_loss": safe_real_array(logs.trainLoss, i),
-                    "validation_loss": safe_real_array(logs.validationLoss, i),
-                    "test_loss": safe_real_array(logs.testLoss, i),
-                    "hyperparameters": safe_real_array(logs.hyperparameters, i),
-                    "parameter_norm": safe_real_array(logs.parameterNorm, i),
-                    "oho_gradient": safe_real_array(logs.ohoGradient, i),
-                    "train_gradient": safe_real_array(logs.trainGradient, i),
-                    "validation_gradient": safe_real_array(logs.validationGradient, i),
-                    "immediate_influence_tensor_norm": safe_real_array(logs.immediateInfluenceTensorNorm, i),
-                    "inner_influence_tensor_norm": safe_real_array(logs.innerInfluenceTensorNorm, i),
-                    "outer_influence_tensor_norm": safe_real_array(logs.outerInfluenceTensorNorm, i),
-                    "largest_jacobian_eigenvalue": safe_real_array(logs.largest_jacobian_eigenvalue, i),
-                    "largest_influence_eigenvalue": safe_real_array(logs.largest_hessian_eigenvalue, i),
-                    "jacobian_eigenvalues": safe_real_array(logs.jacobian_eigenvalues, i),
-                }
-            )
-
-        columns = [str(i) for i in range(logs.hessian_eigenvalues.shape[1])]
-        run.log(
-            {
-                "hessian_eigenvalues": wandb.Table(columns=columns, data=jnp.real(logs.hessian_eigenvalues).tolist()),
-            }
-        )
-
-        trained_env = copy.replace(trained_env, prng=jax.random.key_data(trained_env.prng))
-        trained_env_path = f"/wandb_data/artifacts/trained_env_{run.id}.eqx"
-        eqx.tree_serialise_leaves(trained_env_path, trained_env)
-
-        # Generate a unique artifact name using the W&B run ID
-        artifact_name = f"trained_env_{run.id}"
-
-        artifact = wandb.Artifact(name=artifact_name, type="environment")
-        artifact.add_file(trained_env_path)
-        run.log_artifact(artifact)
-
-        run.finish()
 
 
 def getLossFn(config: GodConfig) -> Callable[[jax.Array, jax.Array], LOSS]:
@@ -147,6 +142,8 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
         prng=prng1,
         innerTimeConstant=config.inner_time_constant,
         outerTimeConstant=config.outer_time_constant,
+        start_epoch=0,
+        start_batch=0,
     )
 
     inner_log_config = LogConfig(
@@ -157,13 +154,6 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
     env = putter(env, lambda s: s.innerLogConfig, inner_log_config)
 
     # 1) Initialize inner state and parameters
-    match config.activation_fn:
-        case "tanh":
-            activation_fn = jax.nn.tanh
-        case "relu":
-            activation_fn = jax.nn.relu
-        case _:
-            raise ValueError("Invalid activation function")
 
     match config.architecture:
         case "rnn":
@@ -177,7 +167,9 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
             w_rec = jnp.hstack([W_rec, W_in, b_rec])
             w_out = jnp.hstack([W_out, b_out])
             rnn_parameter = RnnParameter(w_rec=w_rec, w_out=w_out)
-            rnn_config = RnnConfig(n_h=config.n_h, n_in=config.n_in, n_out=config.n_out, activationFn=activation_fn)
+            rnn_config = RnnConfig(
+                n_h=config.n_h, n_in=config.n_in, n_out=config.n_out, activationFn=config.activation_fn
+            )
             activation = ACTIVATION(jax.random.normal(prng5, (config.n_h,)))
             rnn_state = RnnState(rnnConfig=rnn_config, activation=activation, rnnParameter=rnn_parameter)
 
@@ -472,6 +464,81 @@ def create_rnn_learner(learner: RTRL | RFLO | UORO | IdentityLearner, lossFn: Ca
             return foldrLibrary(library)
 
 
+def train_loop_IO(
+    dataset: Traversable[OhoData[Traversable[InputOutput]]],
+    test_dataset: Traversable[InputOutput],
+    lossFn: Callable[[jax.Array, jax.Array], LOSS],
+    initEnv: GodState,
+    innerInterpreter: GodInterpreter,
+    outerInterpreter: GodInterpreter,
+    config: GodConfig,
+    checkpoint_fn: Callable[[GodState], None],
+) -> tuple[Traversable[AllLogs], GodState]:
+    pytree_dataset = PyTreeDataset(dataset)
+    dataloader = DataLoader(pytree_dataset, batch_size=config.data_load_size, shuffle=True, collate_fn=jax_collate_fn)
+    env = initEnv
+    training_fn = lambda d, e: train(d, test_dataset, lossFn, e, innerInterpreter, outerInterpreter, config)
+
+    outer_rec_param_n = jnp.size(outerInterpreter.getRecurrentParam.func(outerInterpreter, initEnv)[0])
+    columns: list[str] = [str(i) for i in range(outer_rec_param_n)]
+    hessian_eigenv_table = wandb.Table(columns=columns)
+
+    for epoch in range(initEnv.start_epoch, config.num_retrain_loops):
+        for i, batch in enumerate(itertools.islice(dataloader, initEnv.start_batch, None)):
+            logs, env = training_fn(batch, env)
+            env = eqx.tree_at(lambda t: t.start_batch, env, env.start_batch + 1)
+
+            checkpoint_condition = (epoch - initEnv.start_epoch) * len(dataloader) + (initEnv.start_batch + i) + 1
+            if checkpoint_condition % config.checkpoint_interval == 0:
+                checkpoint_fn(copy.replace(env, prng=jax.random.key_data(env.prng)))
+
+            # log wandb stuff
+            logs = logs.value
+
+            def safe_real_array(value: jax.Array, index: int):
+                if value is None or not jnp.all(jnp.isfinite(value[index])):
+                    return None
+                return jnp.real(value[index])
+
+            def log_metrics(log_data: AllLogs, index: int):  # Changed from 'logs' to 'log_data'
+                metrics = {
+                    "train_loss": log_data.trainLoss,
+                    "validation_loss": log_data.validationLoss,
+                    "test_loss": log_data.testLoss,
+                    "hyperparameters": log_data.hyperparameters,
+                    "parameter_norm": log_data.parameterNorm,
+                    "oho_gradient": log_data.ohoGradient,
+                    "train_gradient": log_data.trainGradient,
+                    "validation_gradient": log_data.validationGradient,
+                    "immediate_influence_tensor_norm": log_data.immediateInfluenceTensorNorm,
+                    "inner_influence_tensor_norm": log_data.innerInfluenceTensorNorm,
+                    "outer_influence_tensor_norm": log_data.outerInfluenceTensorNorm,
+                    "largest_jacobian_eigenvalue": log_data.largest_jacobian_eigenvalue,
+                    "largest_influence_eigenvalue": log_data.largest_hessian_eigenvalue,
+                    "jacobian_eigenvalues": log_data.jacobian_eigenvalues,
+                }
+
+                log_dict = {key: safe_real_array(value, index) for key, value in metrics.items()}
+                wandb.log(log_dict)
+
+            for i in range(logs.trainLoss.shape[0]):
+                log_metrics(logs, i)
+
+            for row in jnp.real(logs.hessian_eigenvalues).tolist():
+                hessian_eigenv_table.add_data(row)
+
+        env = eqx.tree_at(lambda t: t.start_epoch, env, epoch + 1)
+        env = eqx.tree_at(lambda t: t.start_batch, env, 0)
+
+    wandb.log(
+        {
+            "hessian_eigenvalues": hessian_eigenv_table,
+        }
+    )
+
+    checkpoint_fn(copy.replace(env, prng=jax.random.key_data(env.prng)))
+
+
 def train(
     dataset: Traversable[OhoData[Traversable[InputOutput]]],
     test_dataset: Traversable[InputOutput],
@@ -515,7 +582,8 @@ def train(
         env = yield from get(PX[GodState]())
         interpreter = yield from ask(PX[GodInterpreter]())
         hyperparameters = yield from interpreter.getRecurrentParam
-        weights, _ = interpreter.getRecurrentParam.func(innerInterpreter, env)
+        # weights, _ = interpreter.getRecurrentParam.func(innerInterpreter, env)
+        weights, _ = innerInterpreter.getRecurrentParam.func(innerInterpreter, env)
 
         validation_model = (
             lambda ds: resetRnnActivation(initEnv.rnnState.activation).then(innerLibrary.modelLossFn(ds)).func
@@ -562,5 +630,16 @@ def train(
     return logs, trained_env
 
 
+def parse_args():
+    if "WANDB_SWEEP_ID" in os.environ:
+        return None
+
+    if len(sys.argv) == 3:
+        return CommandLine(run_id=sys.argv[1], entity="wlp9800-new-york-university", project=sys.argv[2])
+    else:
+        raise ValueError("When running manually, please provide run_id and project as arguments")
+
+
 if __name__ == "__main__":
-    main()
+    cmd = parse_args()
+    main(cmd)

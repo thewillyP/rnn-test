@@ -1,4 +1,4 @@
-from typing import Callable, Optional
+from typing import Literal, Optional
 
 import jax.flatten_util
 from recurrent.mytypes import *
@@ -24,7 +24,7 @@ class RnnConfig(eqx.Module):
     n_h: int
     n_in: int
     n_out: int
-    activationFn: Callable[[jax.Array], jax.Array]
+    activationFn: Literal["tanh", "relu"]
 
 
 class RnnState(eqx.Module):

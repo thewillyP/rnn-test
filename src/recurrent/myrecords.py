@@ -21,6 +21,8 @@ class OhoData[Data](eqx.Module):
 
 class GodState(eqx.Module):
     prng: PRNG
+    start_epoch: int
+    start_batch: int
     innerTimeConstant: float = eqx.field(static=True)
     outerTimeConstant: float = eqx.field(static=True)
 
@@ -84,6 +86,9 @@ test = "Hi"
 
 @dataclass(frozen=True)
 class GodConfig:
+    data_load_size: int
+    num_retrain_loops: int
+    checkpoint_interval: int
     inner_learning_rate: float
     outer_learning_rate: float
     ts: tuple[int, int]

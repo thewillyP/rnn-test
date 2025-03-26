@@ -59,6 +59,16 @@ def resetRnnActivation[Interpreter: PutActivation[Env], Env](resetActv: ACTIVATI
     return ask(PX[Interpreter]()).flat_map(lambda interpreter: interpreter.putActivation(resetActv))
 
 
+def map_activation_fn(actv_fn: str):
+    match actv_fn:
+        case "tanh":
+            return jax.nn.tanh
+        case "relu":
+            return jax.nn.relu
+        case _:
+            raise ValueError("Invalid activation function")
+
+
 class _Opt_Can[Env](
     GetRecurrentParam[Env],
     PutRecurrentParam[Env],
@@ -109,7 +119,7 @@ def doRnnStep[Interpreter: _RnnActivation_Can[Env], Env](data: InputOutput) -> G
     alpha = yield from interpreter.getTimeConstant
 
     a_rec = param.w_rec @ jnp.concat((a, data.x, jnp.asarray([1.0])))
-    a_new = ACTIVATION((1 - alpha) * a + alpha * cfg.activationFn(a_rec))
+    a_new = ACTIVATION((1 - alpha) * a + alpha * map_activation_fn(cfg.activationFn)(a_rec))
     return interpreter.putActivation(a_new)
 
 
