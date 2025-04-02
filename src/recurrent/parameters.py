@@ -58,11 +58,16 @@ class AllLogs(eqx.Module):
     validationGradient: jax.Array
     immediateInfluenceTensorNorm: jax.Array
     outerInfluenceTensorNorm: jax.Array
+    outerInfluenceTensor: jax.Array
     innerInfluenceTensorNorm: jax.Array
     largest_hessian_eigenvalue: jax.Array
     largest_jacobian_eigenvalue: jax.Array
     jacobian_eigenvalues: jax.Array
     hessian_eigenvalues: jax.Array
+    R_A: jax.Array
+    rnn_activation_norm: jax.Array
+    hessian: jax.Array
+    immediateInfluenceTensor: jax.Array
 
 
 class LogConfig(eqx.Module):

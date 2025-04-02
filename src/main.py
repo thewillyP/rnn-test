@@ -6,7 +6,7 @@ import jax.experimental
 import optax
 from recurrent.mylearning import *
 from recurrent.mylearning import RFLO, RTRL, UORO, IdentityLearner
-from recurrent.myrecords import GodConfig, GodInterpreter
+from recurrent.myrecords import GodConfig, GodInterpreter, GodState
 from recurrent.mytypes import *
 
 
@@ -31,10 +31,11 @@ import itertools
 import pickle
 import os
 import sys
-
+import seaborn as sns
+import numpy as np
 
 # jax.config.update("jax_enable_x64", True)
-jax.config.update("jax_debug_nans", True)
+# jax.config.update("jax_debug_nans", True)
 # jax.config.update("jax_disable_jit", True)
 
 
@@ -66,26 +67,42 @@ def load_artifact(artifact_name: str, filename: str) -> Any:
         return pickle.load(f)
 
 
+def log_jax_array(array: jax.Array, artifact_name: str):
+    filename = f"{artifact_name}.npy"
+    jnp.save(filename, array)
+    artifact = wandb.Artifact(artifact_name, type="checkpoint")
+    artifact.add_file(filename)
+    wandb.log_artifact(artifact)
+    os.remove(filename)
+
+
 @dataclass
 class CommandLine:
     run_id: str
     entity: str
     project: str
+    version: str
 
 
 def main(cmd: Optional[CommandLine]):
     if cmd is not None:
-        artifact_name = f"{cmd.entity}/{cmd.project}/trained_env_{cmd.run_id}:latest"
+        artifact_name = f"{cmd.entity}/{cmd.project}/trained_env_{cmd.run_id}:{cmd.version}"
         env_artifact: GodState = load_artifact(artifact_name, "env.pkl")
         env_artifact = copy.replace(env_artifact, prng=jax.random.wrap_key_data(env_artifact.prng))  # nonserializable
         load_env = lambda _, __: env_artifact
-        wandb_init_kwargs = {"mode": "offline", "id": cmd.run_id, "resume": "must"}
+
+        api = wandb.Api()
+        original_run = api.run(f"{cmd.entity}/{cmd.project}/{cmd.run_id}")
+        original_config = original_run.config
+        load_config = lambda _: original_config
+        wandb_kwargs = {"mode": "offline", "config": original_config}
     else:
         load_env = lambda config, prng: create_env(config, prng)[0]
-        wandb_init_kwargs = {"mode": "offline", "id": generate_unique_id()}
+        load_config = lambda run: run.config
+        wandb_kwargs = {"mode": "offline"}
 
-    with wandb.init(**wandb_init_kwargs) as run:
-        config = GodConfig(**run.config)
+    with wandb.init(**wandb_kwargs) as run:
+        config = GodConfig(**load_config(run))
         prng = PRNG(jax.random.key(config.seed))
         test_prng = PRNG(jax.random.key(config.test_seed))
         env_prng, data_prng = jax.random.split(prng, 2)
@@ -96,6 +113,7 @@ def main(cmd: Optional[CommandLine]):
         _, innerInterpreter, outerInterpreter = create_env(config, env_prng)
         oho_set, test_set = create_datasets(config, data_prng, test_prng)
 
+        checkpoint_fn(copy.replace(env, prng=jax.random.key_data(env.prng)))
         start = time.time()
         train_loop_IO(oho_set, test_set, lossFn, env, innerInterpreter, outerInterpreter, config, checkpoint_fn)
         end = time.time()
@@ -474,18 +492,113 @@ def train_loop_IO(
     config: GodConfig,
     checkpoint_fn: Callable[[GodState], None],
 ) -> tuple[Traversable[AllLogs], GodState]:
-    pytree_dataset = PyTreeDataset(dataset)
-    dataloader = DataLoader(pytree_dataset, batch_size=config.data_load_size, shuffle=True, collate_fn=jax_collate_fn)
-    env = initEnv
-    training_fn = lambda d, e: train(d, test_dataset, lossFn, e, innerInterpreter, outerInterpreter, config)
+    innerLearner = create_learner(config.inner_learner, False, config.inner_uoro_std)
+    innerLibrary = create_rnn_learner(innerLearner, lossFn)
+    outerLearner = create_learner(config.outer_learner, True, config.outer_uoro_std)
 
-    outer_rec_param_n = jnp.size(outerInterpreter.getRecurrentParam.func(outerInterpreter, initEnv)[0])
-    columns: list[str] = [str(i) for i in range(outer_rec_param_n)]
-    hessian_eigenv_table = wandb.Table(columns=columns)
+    innerController = endowAveragedGradients(innerLibrary.modelGradient, config.tr_avg_per)
+    innerController = logGradient(innerController)
+    innerLibrary = innerLibrary._replace(modelGradient=innerController)
+
+    inner_param, _ = innerInterpreter.getRecurrentParam.func(innerInterpreter, initEnv)
+    outer_state, _ = outerInterpreter.getRecurrentState.func(outerInterpreter, initEnv)
+    pad_val_grad_by = jnp.maximum(0, jnp.size(outer_state) - jnp.size(inner_param))
+
+    match outerLearner:
+        case "bptt":
+            raise NotImplementedError("BPTT is not implemented yet")
+        case _:
+            outerLibrary = endowBilevelOptimization(
+                innerLibrary,
+                doOptimizerStep,
+                innerInterpreter,
+                outerLearner,
+                lambda a, b: LOSS(jnp.mean(lossFn(a.value, b.validation.value.y))),
+                resetRnnActivation(initEnv.rnnState.activation),
+                pad_val_grad_by,
+            )
+
+    outerController = logGradient(outerLibrary.modelGradient)
+    outerLibrary = outerLibrary._replace(modelGradient=outerController)
+
+    @do()
+    def updateStep(oho_data: OhoData[Traversable[InputOutput]]):
+        print("recompiled")
+        env = yield from get(PX[GodState]())
+        interpreter = yield from ask(PX[GodInterpreter]())
+        hyperparameters = yield from interpreter.getRecurrentParam
+        # weights, _ = interpreter.getRecurrentParam.func(innerInterpreter, env)
+        weights, _ = innerInterpreter.getRecurrentParam.func(innerInterpreter, env)
+
+        validation_model = (
+            lambda ds: resetRnnActivation(initEnv.rnnState.activation).then(innerLibrary.modelLossFn(ds)).func
+        )
+
+        te, _ = validation_model(test_dataset)(innerInterpreter, env)
+        vl, _ = validation_model(oho_data.validation)(innerInterpreter, env)
+        tr, _ = innerLibrary.modelLossFn(oho_data.payload).func(innerInterpreter, env)
+
+        def get_eigenvalues(hessian):
+            hess = jnp.linalg.eigvals(hessian)
+            return jnp.real(hess)
+
+        def no_eigenvalues(hessian):
+            return jnp.empty((hessian.shape[0],))
+
+        jac_e = jax.lax.cond(env.innerLogConfig.log_expensive, get_eigenvalues, no_eigenvalues, env.innerLogs.hessian)
+        hess_e = jax.lax.cond(env.outerLogConfig.log_expensive, get_eigenvalues, no_eigenvalues, env.outerLogs.hessian)
+
+        _ = yield from outerLibrary.modelGradient(oho_data).flat_map(doOptimizerStep)
+
+        x = env.outerLogs.influenceTensor
+        A: jnp.Array | None = env.outerLogs.hessian
+        b: jnp.Array | None = env.outerLogs.immediateInfluenceTensor
+        R_A = jnp.linalg.norm(x @ x.T @ A + b @ x.T, "fro") / jnp.linalg.norm(A @ x + b)
+
+        log = AllLogs(
+            trainLoss=tr / config.tr_examples_per_epoch,
+            validationLoss=vl / config.vl_examples_per_epoch,
+            testLoss=te / config.numTe,
+            hyperparameters=hyperparameters,
+            parameterNorm=jnp.linalg.norm(weights),
+            ohoGradient=env.outerLogs.gradient,
+            trainGradient=env.innerLogs.gradient,
+            validationGradient=env.outerLogs.validationGradient,
+            immediateInfluenceTensorNorm=jnp.linalg.norm(jnp.ravel(env.outerLogs.immediateInfluenceTensor)),
+            outerInfluenceTensorNorm=jnp.linalg.norm(jnp.ravel(env.outerLogs.influenceTensor)),
+            outerInfluenceTensor=env.outerLogs.influenceTensor,
+            innerInfluenceTensorNorm=jnp.linalg.norm(jnp.ravel(env.innerLogs.influenceTensor)),
+            largest_jacobian_eigenvalue=env.innerLogs.jac_eigenvalue,
+            largest_hessian_eigenvalue=env.outerLogs.jac_eigenvalue,
+            jacobian_eigenvalues=jac_e,
+            hessian_eigenvalues=hess_e,
+            R_A=R_A,
+            rnn_activation_norm=jnp.linalg.norm(env.rnnState.activation),
+            hessian=env.outerLogs.hessian,
+            immediateInfluenceTensor=env.outerLogs.immediateInfluenceTensor,
+        )
+        return pure(log, PX[tuple[GodInterpreter, GodState]]())
+
+    model = eqx.filter_jit(lambda d, e: traverseM(updateStep)(d).func(outerInterpreter, e))
+    dummy_log, _ = eqx.filter_eval_shape(model, dataset, initEnv)
+
+    pytree_dataset = PyTreeDataset(dataset)
+    dataloader = DataLoader(pytree_dataset, batch_size=config.data_load_size, shuffle=False, collate_fn=jax_collate_fn)
+    env = initEnv
+
+    hessian_eigenv_columns: list[str] = [str(i) for i in range(dummy_log.value.hessian_eigenvalues.shape[1])]
+    hessian_eigenv_table = wandb.Table(columns=hessian_eigenv_columns)
+
+    influence_tensor_columns = [
+        str(i) for i in range(jnp.prod(jnp.array(dummy_log.value.outerInfluenceTensor.shape[1:])))
+    ]
+    influence_tensor_table = wandb.Table(columns=influence_tensor_columns)
+
+    immediate_influence_tensor_table = wandb.Table(columns=influence_tensor_columns)
 
     for epoch in range(initEnv.start_epoch, config.num_retrain_loops):
         for i, batch in enumerate(itertools.islice(dataloader, initEnv.start_batch, None)):
-            logs, env = training_fn(batch, env)
+            logs, env = model(batch, env)
             env = eqx.tree_at(lambda t: t.start_batch, env, env.start_batch + 1)
 
             checkpoint_condition = (epoch - initEnv.start_epoch) * len(dataloader) + (initEnv.start_batch + i) + 1
@@ -495,37 +608,44 @@ def train_loop_IO(
             # log wandb stuff
             logs = logs.value
 
-            def safe_real_array(value: jax.Array, index: int):
-                if value is None or not jnp.all(jnp.isfinite(value[index])):
-                    return None
-                return jnp.real(value[index])
-
-            def log_metrics(log_data: AllLogs, index: int):  # Changed from 'logs' to 'log_data'
-                metrics = {
-                    "train_loss": log_data.trainLoss,
-                    "validation_loss": log_data.validationLoss,
-                    "test_loss": log_data.testLoss,
-                    "hyperparameters": log_data.hyperparameters,
-                    "parameter_norm": log_data.parameterNorm,
-                    "oho_gradient": log_data.ohoGradient,
-                    "train_gradient": log_data.trainGradient,
-                    "validation_gradient": log_data.validationGradient,
-                    "immediate_influence_tensor_norm": log_data.immediateInfluenceTensorNorm,
-                    "inner_influence_tensor_norm": log_data.innerInfluenceTensorNorm,
-                    "outer_influence_tensor_norm": log_data.outerInfluenceTensorNorm,
-                    "largest_jacobian_eigenvalue": log_data.largest_jacobian_eigenvalue,
-                    "largest_influence_eigenvalue": log_data.largest_hessian_eigenvalue,
-                    "jacobian_eigenvalues": log_data.jacobian_eigenvalues,
-                }
-
-                log_dict = {key: safe_real_array(value, index) for key, value in metrics.items()}
-                wandb.log(log_dict)
-
-            for i in range(logs.trainLoss.shape[0]):
-                log_metrics(logs, i)
-
-            for row in jnp.real(logs.hessian_eigenvalues).tolist():
-                hessian_eigenv_table.add_data(row)
+            for log_tree_ in tree_unstack_lazy(logs):
+                log_data: AllLogs = jax.tree.map(
+                    lambda x: jnp.real(x) if x is not None and jnp.all(jnp.isfinite(x)) else None, log_tree_
+                )
+                wandb.log(
+                    {
+                        "train_loss": log_data.trainLoss,
+                        "validation_loss": log_data.validationLoss,
+                        "test_loss": log_data.testLoss,
+                        "hyperparameters": log_data.hyperparameters,
+                        "parameter_norm": log_data.parameterNorm,
+                        "oho_gradient": log_data.ohoGradient,
+                        "train_gradient": log_data.trainGradient,
+                        "validation_gradient": log_data.validationGradient,
+                        "immediate_influence_tensor_norm": log_data.immediateInfluenceTensorNorm,
+                        "inner_influence_tensor_norm": log_data.innerInfluenceTensorNorm,
+                        "outer_influence_tensor_norm": log_data.outerInfluenceTensorNorm,
+                        "largest_jacobian_eigenvalue": log_data.largest_jacobian_eigenvalue,
+                        "largest_influence_eigenvalue": log_data.largest_hessian_eigenvalue,
+                        "jacobian_eigenvalues": log_data.jacobian_eigenvalues,
+                        "R_A": log_data.R_A,
+                        "rnn_activation_norm": log_data.rnn_activation_norm,
+                        # "outer_influence_tensor": wandb.Image(np.array(log_data.outerInfluenceTensor)),
+                        # "outer_influence_tensor": wandb.Image(
+                        #     sns.heatmap(
+                        #         log_data.outerInfluenceTensor,
+                        #         annot=True,
+                        #         cmap="YlGnBu",
+                        #         fmt=".2f",
+                        #         cbar=True,
+                        #     )
+                        # ),
+                    }
+                )
+                log_jax_array(log_data.hessian, f"run-{wandb.run.id}-hessian")
+                hessian_eigenv_table.add_data(*log_data.hessian_eigenvalues.tolist())
+                influence_tensor_table.add_data(*log_data.outerInfluenceTensor.ravel().tolist())
+                immediate_influence_tensor_table.add_data(*log_data.immediateInfluenceTensor.ravel().tolist())
 
         env = eqx.tree_at(lambda t: t.start_epoch, env, epoch + 1)
         env = eqx.tree_at(lambda t: t.start_batch, env, 0)
@@ -533,6 +653,8 @@ def train_loop_IO(
     wandb.log(
         {
             "hessian_eigenvalues": hessian_eigenv_table,
+            "outer_influence_tensor": influence_tensor_table,
+            "immediate_influence_tensor": immediate_influence_tensor_table,
         }
     )
 
@@ -579,6 +701,7 @@ def train(
 
     @do()
     def updateStep(oho_data: OhoData[Traversable[InputOutput]]):
+        print("recompiled")
         env = yield from get(PX[GodState]())
         interpreter = yield from ask(PX[GodInterpreter]())
         hyperparameters = yield from interpreter.getRecurrentParam
@@ -624,7 +747,7 @@ def train(
         )
         return pure(log, PX[tuple[GodInterpreter, GodState]]())
 
-    model = eqx.filter_jit(traverseM(updateStep)(dataset).func).lower(outerInterpreter, initEnv).compile()
+    model = eqx.filter_jit(traverseM(updateStep)(dataset).func)  # .lower(outerInterpreter, initEnv).compile()
 
     logs, trained_env = model(outerInterpreter, initEnv)
     return logs, trained_env
@@ -634,8 +757,10 @@ def parse_args():
     if "WANDB_SWEEP_ID" in os.environ:
         return None
 
-    if len(sys.argv) == 3:
-        return CommandLine(run_id=sys.argv[1], entity="wlp9800-new-york-university", project=sys.argv[2])
+    if len(sys.argv) == 4:
+        return CommandLine(
+            run_id=sys.argv[1], entity="wlp9800-new-york-university", project=sys.argv[2], version=sys.argv[3]
+        )
     else:
         raise ValueError("When running manually, please provide run_id and project as arguments")
 
