@@ -100,6 +100,25 @@ def normalized_sgd(learning_rate):
     )
 
 
+def soft_clip_norm(threshold: float, sharpness: float):
+    def update_fn(updates, state, _):
+        grads_flat, unravel_fn = jax.flatten_util.ravel_pytree(updates)
+        grad_norm = jnp.linalg.norm(grads_flat)
+        clipped_norm = grad_norm - jax.nn.softplus(sharpness * (grad_norm - threshold)) / sharpness
+        scale = clipped_norm / (grad_norm + 1e-6)
+        updates_scaled = jax.tree_util.tree_map(lambda g: g * scale, updates)
+        return updates_scaled, state
+
+    return optax.GradientTransformation(lambda _: (), update_fn)
+
+
+def soft_clipped_sgd(learning_rate, threshold, sharpness):
+    return optax.chain(
+        soft_clip_norm(threshold, sharpness),
+        optax.sgd(learning_rate),
+    )
+
+
 class _RnnActivation_Can[Env](
     GetActivation[Env],
     PutActivation[Env],
@@ -408,6 +427,13 @@ class RTRL(InfluenceTensorLearner):
         log_condition = yield from interpreter.getLogConfig.fmap(lambda x: x.log_special)
         lanczos_iterations = yield from interpreter.getLogConfig.fmap(lambda x: x.lanczos_iterations)
         log_expensive = yield from interpreter.getLogConfig.fmap(lambda x: x.log_expensive)
+
+        # if log_condition:
+        #     v0 = jnp.array(jax.random.normal(subkey, actv0.shape))
+        #     tridag = matfree.decomp.tridiag_sym(lanczos_iterations, custom_vjp=False)
+        #     get_eig = matfree.eig.eigh_partial(tridag)
+        #     fn = lambda v: jvp(lambda a: wrtActvFn(a), actv0, v)
+        #     eigvals, _ = get_eig(fn, v0)
 
         subkey = yield from interpreter.updatePRNG()
 

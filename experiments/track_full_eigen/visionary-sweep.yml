@@ -7,7 +7,7 @@ metric:
 parameters:
 
   data_load_size:
-    value: 200
+    value: 110
 
   num_retrain_loops:
     value: 1

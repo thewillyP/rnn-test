@@ -21,35 +21,34 @@ parameters:
     value: 0.001
 
   ts:
-    values: [[15, 17]]
+    values: [[13, 15]]
 
   seed:
-    value: 56_240
-# 56,240
-# 67611
+    value: 27_077
+
   test_seed:
-    value: 12345
+    value: 12_345
 
   tr_examples_per_epoch:
     value: 100
 
   vl_examples_per_epoch:
-    value: 2000
+    value: 2_000
 
   tr_avg_per:
     value: 1
 
   numVal:
-    value: 2000
+    value: 2_000
 
   numTr:
-    value: 100_000
+    value: 40_000
 
   numTe:
-    value: 5000
+    value: 5_000
 
   inner_learner:
-    value: "rtrl" 
+    value: "rtrl"
 
   outer_learner:
     value: "rtrl"
@@ -70,7 +69,7 @@ parameters:
     value: "rnn"
 
   n_h:
-    value: 32
+    value: 256
 
   n_in:
     value: 2
@@ -113,3 +112,15 @@ parameters:
 
   initialization_std:
     value: 1.0
+
+  inner_clip:
+    value: 1.0
+  
+  inner_clip_sharpness:
+    value: 50.0
+  
+  outer_clip:
+    value: 1.0
+
+  outer_clip_sharpness:
+    value: 50.0

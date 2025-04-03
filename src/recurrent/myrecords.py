@@ -103,8 +103,8 @@ class GodConfig:
     inner_learner: Literal["rtrl", "uoro", "rflo", "identity"]
     outer_learner: Literal["rtrl", "uoro", "rflo", "identity"]
     lossFn: Literal["cross_entropy"]
-    inner_optimizer: Literal["sgd", "sgd_positive", "adam", "sgd_normalized"]
-    outer_optimizer: Literal["sgd", "sgd_positive", "adam", "sgd_normalized"]
+    inner_optimizer: Literal["sgd", "sgd_positive", "adam", "sgd_normalized", "sgd_clipped"]
+    outer_optimizer: Literal["sgd", "sgd_positive", "adam", "sgd_normalized", "sgd_clipped"]
     activation_fn: Literal["tanh", "relu"]
     architecture: Literal["rnn"]
     n_h: int
@@ -120,6 +120,10 @@ class GodConfig:
     outer_log_special: bool
     inner_lanczos_iterations: int
     outer_lanczos_iterations: int
+    inner_clip: float
+    inner_clip_sharpness: float
+    outer_clip: float
+    outer_clip_sharpness: float
     inner_log_expensive: Optional[bool] = None
     outer_log_expensive: Optional[bool] = None
 

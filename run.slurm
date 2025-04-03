@@ -40,5 +40,9 @@ sleep $(shuf -i 0-10 -n 1)
 singularity run --nv --containall --cleanenv --writable-tmpfs \
   --env WANDB_API_KEY=${WANDB_API_KEY} \
   --env WANDB_DIR=/wandb_data \
+  --env WANDB_CACHE_DIR=/wandb_data/.cache/wandb \
+  --env WANDB_CONFIG_DIR=/wandb_data/.config/wandb \
+  --env WANDB_DATA_DIR=/wandb_data/.cache/wandb-data/ \
+  --env WANDB_ARTIFACT_DIR=/wandb_data/.artifacts \
   --bind /scratch/${USER}/wandb:/wandb_data \
   /scratch/${USER}/images/${IMAGE}.sif ${WANDB_SWEEP_ID}

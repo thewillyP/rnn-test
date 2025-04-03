@@ -227,6 +227,16 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
             env = putter(env, lambda s: s.innerSgdParameter, sgd)
             env = putter(env, lambda s: s.innerOptState, opt_state)
             get_inner_optimizer = lambda s: normalized_sgd(s.innerSgdParameter.learning_rate)
+        case "sgd_clipped":
+            sgd = SgdParameter(learning_rate=config.inner_learning_rate)
+            opt_state = soft_clipped_sgd(
+                config.inner_learning_rate, config.inner_clip, config.inner_clip_sharpness
+            ).init(jnp.empty((rec_param_n,)))
+            env = putter(env, lambda s: s.innerSgdParameter, sgd)
+            env = putter(env, lambda s: s.innerOptState, opt_state)
+            get_inner_optimizer = lambda s: soft_clipped_sgd(
+                s.innerSgdParameter.learning_rate, config.inner_clip, config.inner_clip_sharpness
+            )
         case "adam":
             adam = AdamParameter(learning_rate=config.inner_learning_rate)
             opt_state = optax.adam(config.inner_learning_rate).init(jnp.empty((rec_param_n,)))
@@ -283,6 +293,16 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
             env = putter(env, lambda s: s.outerSgdParameter, sgd)
             env = putter(env, lambda s: s.outerOptState, opt_state)
             get_outer_optimizer = lambda s: normalized_sgd(s.outerSgdParameter.learning_rate)
+        case "sgd_clipped":
+            sgd = SgdParameter(learning_rate=config.outer_learning_rate)
+            opt_state = soft_clipped_sgd(
+                config.outer_learning_rate, config.outer_clip, config.outer_clip_sharpness
+            ).init(jnp.empty((outer_rec_param_n,)))
+            env = putter(env, lambda s: s.outerSgdParameter, sgd)
+            env = putter(env, lambda s: s.outerOptState, opt_state)
+            get_outer_optimizer = lambda s: soft_clipped_sgd(
+                s.outerSgdParameter.learning_rate, config.outer_clip, config.outer_clip_sharpness
+            )
         case "adam":
             adam = AdamParameter(learning_rate=config.outer_learning_rate)
             opt_state = optax.adam(config.outer_learning_rate).init(jnp.empty((outer_rec_param_n,)))
@@ -592,9 +612,9 @@ def train_loop_IO(
     influence_tensor_columns = [
         str(i) for i in range(jnp.prod(jnp.array(dummy_log.value.outerInfluenceTensor.shape[1:])))
     ]
-    influence_tensor_table = wandb.Table(columns=influence_tensor_columns)
+    # influence_tensor_table = wandb.Table(columns=influence_tensor_columns)
 
-    immediate_influence_tensor_table = wandb.Table(columns=influence_tensor_columns)
+    # immediate_influence_tensor_table = wandb.Table(columns=influence_tensor_columns)
 
     for epoch in range(initEnv.start_epoch, config.num_retrain_loops):
         for i, batch in enumerate(itertools.islice(dataloader, initEnv.start_batch, None)):
@@ -642,115 +662,21 @@ def train_loop_IO(
                         # ),
                     }
                 )
-                log_jax_array(log_data.hessian, f"run-{wandb.run.id}-hessian")
+                # log_jax_array(log_data.hessian, f"run-{wandb.run.id}-hessian")
                 hessian_eigenv_table.add_data(*log_data.hessian_eigenvalues.tolist())
-                influence_tensor_table.add_data(*log_data.outerInfluenceTensor.ravel().tolist())
-                immediate_influence_tensor_table.add_data(*log_data.immediateInfluenceTensor.ravel().tolist())
+                # influence_tensor_table.add_data(*log_data.outerInfluenceTensor.ravel().tolist())
+                # immediate_influence_tensor_table.add_data(*log_data.immediateInfluenceTensor.ravel().tolist())
 
         env = eqx.tree_at(lambda t: t.start_epoch, env, epoch + 1)
         env = eqx.tree_at(lambda t: t.start_batch, env, 0)
 
-    wandb.log(
-        {
-            "hessian_eigenvalues": hessian_eigenv_table,
-            "outer_influence_tensor": influence_tensor_table,
-            "immediate_influence_tensor": immediate_influence_tensor_table,
-        }
-    )
+    wandb.log({"hessian_eigenvalues": hessian_eigenv_table})
+
+    # wandb.log({"outer_influence_tensor": influence_tensor_table})
+
+    # wandb.log({"immediate_influence_tensor": immediate_influence_tensor_table})
 
     checkpoint_fn(copy.replace(env, prng=jax.random.key_data(env.prng)))
-
-
-def train(
-    dataset: Traversable[OhoData[Traversable[InputOutput]]],
-    test_dataset: Traversable[InputOutput],
-    lossFn: Callable[[jax.Array, jax.Array], LOSS],
-    initEnv: GodState,
-    innerInterpreter: GodInterpreter,
-    outerInterpreter: GodInterpreter,
-    config: GodConfig,
-) -> tuple[Traversable[AllLogs], GodState]:
-    innerLearner = create_learner(config.inner_learner, False, config.inner_uoro_std)
-    innerLibrary = create_rnn_learner(innerLearner, lossFn)
-    outerLearner = create_learner(config.outer_learner, True, config.outer_uoro_std)
-
-    innerController = endowAveragedGradients(innerLibrary.modelGradient, config.tr_avg_per)
-    innerController = logGradient(innerController)
-    innerLibrary = innerLibrary._replace(modelGradient=innerController)
-
-    inner_param, _ = innerInterpreter.getRecurrentParam.func(innerInterpreter, initEnv)
-    outer_state, _ = outerInterpreter.getRecurrentState.func(outerInterpreter, initEnv)
-    pad_val_grad_by = jnp.maximum(0, jnp.size(outer_state) - jnp.size(inner_param))
-
-    match outerLearner:
-        case "bptt":
-            raise NotImplementedError("BPTT is not implemented yet")
-        case _:
-            outerLibrary = endowBilevelOptimization(
-                innerLibrary,
-                doOptimizerStep,
-                innerInterpreter,
-                outerLearner,
-                lambda a, b: LOSS(jnp.mean(lossFn(a.value, b.validation.value.y))),
-                resetRnnActivation(initEnv.rnnState.activation),
-                pad_val_grad_by,
-            )
-
-    outerController = logGradient(outerLibrary.modelGradient)
-    outerLibrary = outerLibrary._replace(modelGradient=outerController)
-
-    @do()
-    def updateStep(oho_data: OhoData[Traversable[InputOutput]]):
-        print("recompiled")
-        env = yield from get(PX[GodState]())
-        interpreter = yield from ask(PX[GodInterpreter]())
-        hyperparameters = yield from interpreter.getRecurrentParam
-        # weights, _ = interpreter.getRecurrentParam.func(innerInterpreter, env)
-        weights, _ = innerInterpreter.getRecurrentParam.func(innerInterpreter, env)
-
-        validation_model = (
-            lambda ds: resetRnnActivation(initEnv.rnnState.activation).then(innerLibrary.modelLossFn(ds)).func
-        )
-
-        te, _ = validation_model(test_dataset)(innerInterpreter, env)
-        vl, _ = validation_model(oho_data.validation)(innerInterpreter, env)
-        tr, _ = innerLibrary.modelLossFn(oho_data.payload).func(innerInterpreter, env)
-
-        def get_eigenvalues(hessian):
-            hess = jnp.linalg.eigvals(hessian)
-            return jnp.real(hess)
-
-        def no_eigenvalues(hessian):
-            return jnp.empty((hessian.shape[0],))
-
-        jac_e = jax.lax.cond(env.innerLogConfig.log_expensive, get_eigenvalues, no_eigenvalues, env.innerLogs.hessian)
-        hess_e = jax.lax.cond(env.outerLogConfig.log_expensive, get_eigenvalues, no_eigenvalues, env.outerLogs.hessian)
-
-        _ = yield from outerLibrary.modelGradient(oho_data).flat_map(doOptimizerStep)
-
-        log = AllLogs(
-            trainLoss=tr / config.tr_examples_per_epoch,
-            validationLoss=vl / config.vl_examples_per_epoch,
-            testLoss=te / config.numTe,
-            hyperparameters=hyperparameters,
-            parameterNorm=jnp.linalg.norm(weights),
-            ohoGradient=env.outerLogs.gradient,
-            trainGradient=env.innerLogs.gradient,
-            validationGradient=env.outerLogs.validationGradient,
-            immediateInfluenceTensorNorm=jnp.linalg.norm(jnp.ravel(env.outerLogs.immediateInfluenceTensor)),
-            outerInfluenceTensorNorm=jnp.linalg.norm(jnp.ravel(env.outerLogs.influenceTensor)),
-            innerInfluenceTensorNorm=jnp.linalg.norm(jnp.ravel(env.innerLogs.influenceTensor)),
-            largest_jacobian_eigenvalue=env.innerLogs.jac_eigenvalue,
-            largest_hessian_eigenvalue=env.outerLogs.jac_eigenvalue,
-            jacobian_eigenvalues=jac_e,
-            hessian_eigenvalues=hess_e,
-        )
-        return pure(log, PX[tuple[GodInterpreter, GodState]]())
-
-    model = eqx.filter_jit(traverseM(updateStep)(dataset).func)  # .lower(outerInterpreter, initEnv).compile()
-
-    logs, trained_env = model(outerInterpreter, initEnv)
-    return logs, trained_env
 
 
 def parse_args():
