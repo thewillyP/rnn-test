@@ -15,17 +15,18 @@ parameters:
     value: 1
 
   inner_learning_rate:
-    values: [0.1]
+    value: 0.1
 
   outer_learning_rate:
-    values: [0.001]
+    value: 0.001
 
   ts:
     values: [[15, 17]]
 
   seed:
-    values: [67611]
-
+    value: 56_240
+# 56,240
+# 67611
   test_seed:
     value: 12345
 
@@ -48,7 +49,7 @@ parameters:
     value: 5000
 
   inner_learner:
-    values: ["rtrl"]
+    value: "rtrl" 
 
   outer_learner:
     value: "rtrl"
