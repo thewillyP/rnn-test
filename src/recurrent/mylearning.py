@@ -377,14 +377,18 @@ class InfluenceTensorLearner(PastFacingLearn, ABC):
         @do()
         def _creditAssignment() -> G[Agent[Interpreter, Env, Gradient[REC_PARAM]]]:
             interpreter = yield from ask(PX[Interpreter]())
-            influenceTensor = yield from self.getInfluenceTensor(activationStep)
+            infT = yield from self.getInfluenceTensor(activationStep)
+            stop_influence = yield from get(PX[Env]()).fmap(lambda e: e.stop_influence)
+            print(stop_influence)
+            # influenceTensor = Jacobian[REC_PARAM](prevInfluenceTensor) if condition else influenceTensor
+            if not stop_influence:
+                _ = yield from interpreter.putInfluenceTensor(JACOBIAN(infT.value))
 
-            _ = yield from interpreter.putInfluenceTensor(JACOBIAN(influenceTensor.value))
-
+            influenceTensor = yield from interpreter.getInfluenceTensor
             signal = yield from recurrentError
-            recurrentGradient = Gradient[REC_PARAM](signal.value @ influenceTensor.value)
+            recurrentGradient = Gradient[REC_PARAM](signal.value @ influenceTensor)
 
-            log_influence = Logs(influenceTensor=influenceTensor.value)
+            log_influence = Logs(influenceTensor=influenceTensor)
             _ = yield from interpreter.putLogs(log_influence)
             return pure(recurrentGradient, PX[tuple[Interpreter, Env]]())
 
@@ -427,42 +431,21 @@ class RTRL(InfluenceTensorLearner):
         log_condition = yield from interpreter.getLogConfig.fmap(lambda x: x.log_special)
         lanczos_iterations = yield from interpreter.getLogConfig.fmap(lambda x: x.lanczos_iterations)
         log_expensive = yield from interpreter.getLogConfig.fmap(lambda x: x.log_expensive)
-
-        # if log_condition:
-        #     v0 = jnp.array(jax.random.normal(subkey, actv0.shape))
-        #     tridag = matfree.decomp.tridiag_sym(lanczos_iterations, custom_vjp=False)
-        #     get_eig = matfree.eig.eigh_partial(tridag)
-        #     fn = lambda v: jvp(lambda a: wrtActvFn(a), actv0, v)
-        #     eigvals, _ = get_eig(fn, v0)
-
         subkey = yield from interpreter.updatePRNG()
 
-        def if_eigenvalue(_):
-            v0 = jnp.array(jax.random.normal(subkey, actv0.shape))
+        if log_condition:
+            v0: Array = jnp.array(jax.random.normal(subkey, actv0.shape))
             tridag = matfree.decomp.tridiag_sym(lanczos_iterations, custom_vjp=False)
             get_eig = matfree.eig.eigh_partial(tridag)
             fn = lambda v: jvp(lambda a: wrtActvFn(a), actv0, v)
             eigvals, _ = get_eig(fn, v0)
-            return jnp.max(jnp.abs(eigvals))
+            _ = yield from interpreter.putLogs(Logs(jac_eigenvalue=jnp.max(eigvals)))
 
-        eig = jax.lax.cond(
-            log_condition,
-            if_eigenvalue,
-            lambda _: 0.0,
-            None,
-        )
-
-        jacobian = jax.lax.cond(
-            log_expensive,
-            lambda _: eqx.filter_jacrev(wrtActvFn)(actv0),
-            lambda _: jnp.zeros(jax.eval_shape(eqx.filter_jacrev(wrtActvFn), actv0).shape),
-            None,
-        )
+        if log_expensive:
+            _ = yield from interpreter.putLogs(Logs(hessian=eqx.filter_jacrev(wrtActvFn)(actv0)))
 
         _ = yield from put(env)
         _ = yield from interpreter.putLogs(Logs(immediateInfluenceTensor=immediateInfluence))
-        _ = yield from interpreter.putLogs(Logs(jac_eigenvalue=eig))
-        _ = yield from interpreter.putLogs(Logs(hessian=jacobian))
         return pure(newInfluenceTensor, PX[tuple[Interpreter, Env]]())
 
 
@@ -584,15 +567,8 @@ class UORO(PastFacingLearn):
             _ = yield from interpreter.putUoro(replace(uoro, A=A_new, B=B_new))
 
             log_condition = yield from interpreter.getLogConfig.fmap(lambda x: x.log_special)
-            influenceTensor = jax.lax.cond(
-                log_condition,
-                lambda _: jnp.outer(A_new, B_new),
-                lambda _: jnp.zeros((A_new.shape[0], B_new.shape[0])),
-                None,
-            )
-
-            log_influence = Logs(influenceTensor=influenceTensor)
-            _ = yield from interpreter.putLogs(log_influence)
+            if log_condition:
+                _ = yield from interpreter.putLogs(Logs(influenceTensor=jnp.outer(A_new, B_new)))
 
             return self.propagateRecurrentError(A_new, B_new, recurrentError)
 

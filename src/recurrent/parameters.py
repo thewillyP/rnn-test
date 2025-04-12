@@ -1,10 +1,8 @@
 from typing import Literal, Optional
 
-import jax.flatten_util
 from recurrent.mytypes import *
 import jax
 import equinox as eqx
-import optax
 
 
 class SgdParameter(eqx.Module):
@@ -47,30 +45,11 @@ class Logs(eqx.Module):
     hessian: Optional[jax.Array] = eqx.field(default=None)
 
 
-class AllLogs(eqx.Module):
-    trainLoss: jax.Array
-    validationLoss: jax.Array
-    testLoss: jax.Array
-    hyperparameters: jax.Array
-    parameterNorm: jax.Array
-    ohoGradient: jax.Array
-    trainGradient: jax.Array
-    validationGradient: jax.Array
-    immediateInfluenceTensorNorm: jax.Array
-    outerInfluenceTensorNorm: jax.Array
-    outerInfluenceTensor: jax.Array
-    innerInfluenceTensorNorm: jax.Array
-    largest_hessian_eigenvalue: jax.Array
-    largest_jacobian_eigenvalue: jax.Array
-    jacobian_eigenvalues: jax.Array
-    hessian_eigenvalues: jax.Array
-    R_A: jax.Array
-    rnn_activation_norm: jax.Array
-    hessian: jax.Array
-    immediateInfluenceTensor: jax.Array
-
-
 class LogConfig(eqx.Module):
     log_special: bool = eqx.field(static=True)
     lanczos_iterations: int = eqx.field(static=True)
     log_expensive: bool = eqx.field(static=True)
+
+
+class GlobalLogConfig(eqx.Module):
+    stop_influence: bool = eqx.field(static=True, default=False)

@@ -1,6 +1,6 @@
 program: src/main.py
 name: time_test_oho
-method: random
+method: grid
 metric:
   name: test_loss
   goal: minimize
@@ -102,7 +102,7 @@ parameters:
     value: False
 
   outer_log_expensive:
-    value: True
+    value: False
 
   inner_uoro_std:
     value: 1.0
@@ -112,3 +112,15 @@ parameters:
 
   initialization_std:
     value: 1.0
+
+  inner_clip:
+    value: 1.0
+  
+  inner_clip_sharpness:
+    value: 50.0
+  
+  outer_clip:
+    value: 1.0
+
+  outer_clip_sharpness:
+    value: 50.0
