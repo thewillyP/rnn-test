@@ -53,3 +53,24 @@ class LogConfig(eqx.Module):
 
 class GlobalLogConfig(eqx.Module):
     stop_influence: bool = eqx.field(static=True, default=False)
+
+
+class AllLogs(eqx.Module):
+    train_loss: jax.Array | None
+    validation_loss: jax.Array | None
+    test_loss: jax.Array | None
+    hyperparameters: jax.Array | None
+    parameter_norm: jax.Array | None
+    oho_gradient: jax.Array | None
+    train_gradient: jax.Array | None
+    validation_gradient: jax.Array | None
+    immediate_influence_tensor_norm: jax.Array | None
+    outer_influence_tensor_norm: jax.Array | None
+    outer_influence_tensor: jax.Array | None
+    inner_influence_tensor_norm: jax.Array | None
+    largest_jacobian_eigenvalue: jax.Array | None
+    largest_hessian_eigenvalue: jax.Array | None
+    jacobian: jax.Array | None
+    hessian: jax.Array | None
+    rnn_activation_norm: jax.Array | None
+    immediate_influence_tensor: jax.Array | None

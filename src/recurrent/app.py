@@ -487,7 +487,7 @@ def train_loop_IO(
     outerInterpreter: GodInterpreter,
     config: GodConfig,
     checkpoint_fn: Callable[[GodState], None],
-) -> tuple[Traversable[AllLogs], GodState]:
+) -> None:
     innerLearner = create_learner(config.inner_learner, False, config.inner_uoro_std)
     innerLibrary = create_rnn_learner(innerLearner, lossFn)
     outerLearner = create_learner(config.outer_learner, True, config.outer_uoro_std)
@@ -535,26 +535,30 @@ def train_loop_IO(
 
         _ = yield from outerLibrary.modelGradient(oho_data).flat_map(doOptimizerStep)
 
-        log = {
-            "train_loss": tr / config.tr_examples_per_epoch,
-            "validation_loss": vl / config.vl_examples_per_epoch,
-            "test_loss": te / config.numTe,
-            "hyperparameters": hyperparameters,
-            "parameter_norm": jnp.linalg.norm(weights),
-            "oho_gradient": env.outerLogs.gradient,
-            "train_gradient": env.innerLogs.gradient,
-            "validation_gradient": env.outerLogs.validationGradient,
-            "immediate_influence_tensor_norm": jnp.linalg.norm(env.outerLogs.immediateInfluenceTensor),
-            "outer_influence_tensor_norm": jnp.linalg.norm(env.outerLogs.influenceTensor),
-            "outer_influence_tensor": env.outerLogs.influenceTensor,
-            "inner_influence_tensor_norm": jnp.linalg.norm(env.innerLogs.influenceTensor),
-            "largest_jacobian_eigenvalue": env.innerLogs.jac_eigenvalue,
-            "largest_hessian_eigenvalue": env.outerLogs.jac_eigenvalue,
-            "rnn_activation_norm": jnp.linalg.norm(env.rnnState.activation),
-            "jacobian": env.innerLogs.hessian,
-            "hessian": env.outerLogs.hessian,
-            "immediate_influence_tensor": env.outerLogs.immediateInfluenceTensor,
-        }
+        # code smell but what can you do, no maybe monad or elvis operator...
+        def safe_norm(x):
+            return jnp.linalg.norm(x) if x is not None else None
+
+        log = AllLogs(
+            train_loss=tr / config.tr_examples_per_epoch,
+            validation_loss=vl / config.vl_examples_per_epoch,
+            test_loss=te / config.numTe,
+            hyperparameters=hyperparameters,
+            parameter_norm=safe_norm(weights),
+            oho_gradient=env.outerLogs.gradient,
+            train_gradient=env.innerLogs.gradient,
+            validation_gradient=env.outerLogs.validationGradient,
+            immediate_influence_tensor_norm=safe_norm(env.outerLogs.immediateInfluenceTensor),
+            outer_influence_tensor_norm=safe_norm(env.outerLogs.influenceTensor),
+            outer_influence_tensor=env.outerLogs.influenceTensor,
+            inner_influence_tensor_norm=safe_norm(env.innerLogs.influenceTensor),
+            largest_jacobian_eigenvalue=env.innerLogs.jac_eigenvalue,
+            largest_hessian_eigenvalue=env.outerLogs.jac_eigenvalue,
+            jacobian=env.innerLogs.hessian,
+            hessian=env.outerLogs.hessian,
+            rnn_activation_norm=safe_norm(env.rnnState.activation),
+            immediate_influence_tensor=env.outerLogs.immediateInfluenceTensor,
+        )
         return pure(log, PX[tuple[GodInterpreter, GodState]]())
 
     model = eqx.filter_jit(lambda d, e: traverseM(updateStep)(d).func(outerInterpreter, e))
@@ -562,7 +566,7 @@ def train_loop_IO(
     env = initEnv
 
     num_batches_seen_so_far = 0
-    all_logs = []
+    all_logs: list[Traversable[AllLogs]] = []
     for epoch in range(initEnv.start_epoch, config.num_retrain_loops):
         batched_dataset = Subset(pytree_dataset, indices=range(env.start_example, len(pytree_dataset)))
         dataloader = DataLoader(
@@ -583,31 +587,31 @@ def train_loop_IO(
         env = eqx.tree_at(lambda t: t.start_example, env, 0)
         num_batches_seen_so_far += len(dataloader)
 
-    flat_trees = [jax.tree_flatten(tree)[0] for tree in all_logs]
-    total_logs = jax.tree.map(lambda *arrays: jnp.concatenate(arrays, axis=0), *flat_trees)
+    total_logs: Traversable[AllLogs] = jax.tree.map(lambda *xs: jnp.concatenate(xs), *all_logs)
 
     # log wandb partial metrics
-    for log_tree_ in tree_unstack_lazy(total_logs):
+    for log_tree_ in tree_unstack_lazy(total_logs.value):
         log_data: AllLogs = jax.tree.map(
             lambda x: jnp.real(x) if x is not None and jnp.all(jnp.isfinite(x)) else None, log_tree_
         )
         wandb.log(
             {
-                "train_loss": log_data.trainLoss,
-                "validation_loss": log_data.validationLoss,
-                "test_loss": log_data.testLoss,
+                "train_loss": log_data.train_loss,
+                "validation_loss": log_data.validation_loss,
+                "test_loss": log_data.test_loss,
                 "hyperparameters": log_data.hyperparameters,
-                "parameter_norm": log_data.parameterNorm,
-                "oho_gradient": log_data.ohoGradient,
-                "train_gradient": log_data.trainGradient,
-                "validation_gradient": log_data.validationGradient,
-                "immediate_influence_tensor_norm": log_data.immediateInfluenceTensorNorm,
-                "inner_influence_tensor_norm": log_data.innerInfluenceTensorNorm,
-                "outer_influence_tensor_norm": log_data.outerInfluenceTensorNorm,
+                "parameter_norm": log_data.parameter_norm,
+                "oho_gradient": log_data.oho_gradient,
+                "train_gradient": log_data.train_gradient,
+                "validation_gradient": log_data.validation_gradient,
+                "immediate_influence_tensor_norm": log_data.immediate_influence_tensor_norm,
+                "inner_influence_tensor_norm": log_data.inner_influence_tensor_norm,
+                "outer_influence_tensor_norm": log_data.outer_influence_tensor_norm,
                 "largest_jacobian_eigenvalue": log_data.largest_jacobian_eigenvalue,
                 "largest_influence_eigenvalue": log_data.largest_hessian_eigenvalue,
-                "jacobian_eigenvalues": log_data.jacobian_eigenvalues,
+                "jacobian_eigenvalues": log_data.jacobian,
                 "rnn_activation_norm": log_data.rnn_activation_norm,
+                "immediate_influence_tensor": log_data.immediate_influence_tensor,
             }
         )
 
