@@ -235,8 +235,8 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
         validationGradient=None,
         influenceTensor=inner_influence_tensor,
         immediateInfluenceTensor=inner_influence_tensor,
-        jac_eigenvalue=0.0,
-        hessian=jnp.zeros((rec_state_n, rec_state_n)),
+        jac_eigenvalue=0.0 if config.inner_log_special else None,
+        hessian=jnp.zeros((rec_state_n, rec_state_n)) if config.inner_log_expensive else None,
     )
     env = putter(env, lambda s: s.innerLogs, innerLogs)
 
@@ -301,8 +301,8 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
         validationGradient=jnp.zeros((rec_param_n,)),
         influenceTensor=outer_influence_tensor,
         immediateInfluenceTensor=outer_influence_tensor,
-        jac_eigenvalue=0.0,
-        hessian=jnp.zeros((outer_rec_state_n, outer_rec_state_n)),
+        jac_eigenvalue=0.0 if config.outer_log_special else None,
+        hessian=jnp.zeros((outer_rec_state_n, outer_rec_state_n)) if config.outer_log_expensive else None,
     )
     env = putter(env, lambda s: s.outerLogs, outerLogs)
 
