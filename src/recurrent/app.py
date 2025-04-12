@@ -38,7 +38,8 @@ def runApp(
         test_prng = PRNG(jax.random.key(config.test_seed))
         env_prng, data_prng = jax.random.split(prng, 2)
         lossFn = getLossFn(config)
-        checkpoint_fn = lambda env: save_checkpoint(env, f"trained_env_{run.id}", "env.pkl")
+        checkpoint_fn = lambda env: save_checkpoint(env, f"env_{run.id}", "env.pkl")
+        log_fn = lambda logs: save_object_as_wandb_artifact(logs, f"logs_{run.id}", "logs.pkl", "logs")
 
         env = load_env(config, env_prng)
         _, innerInterpreter, outerInterpreter = create_env(config, env_prng)
@@ -46,7 +47,7 @@ def runApp(
 
         checkpoint_fn(copy.replace(env, prng=jax.random.key_data(env.prng)))
         start = time.time()
-        train_loop_IO(oho_set, test_set, lossFn, env, innerInterpreter, outerInterpreter, config, checkpoint_fn)
+        train_loop_IO(oho_set, test_set, lossFn, env, innerInterpreter, outerInterpreter, config, checkpoint_fn, log_fn)
         end = time.time()
         print(f"Training time: {end - start} seconds")
 
@@ -487,6 +488,7 @@ def train_loop_IO(
     outerInterpreter: GodInterpreter,
     config: GodConfig,
     checkpoint_fn: Callable[[GodState], None],
+    log_fn: Callable[[AllLogs], None],
 ) -> None:
     innerLearner = create_learner(config.inner_learner, False, config.inner_uoro_std)
     innerLibrary = create_rnn_learner(innerLearner, lossFn)
@@ -614,5 +616,5 @@ def train_loop_IO(
                 "immediate_influence_tensor": log_data.immediate_influence_tensor,
             }
         )
-    save_object_as_wandb_artifact(total_logs.value, "logs", "logs.pkl", "logs")
+    log_fn(total_logs.value)
     checkpoint_fn(copy.replace(env, prng=jax.random.key_data(env.prng)))
