@@ -142,7 +142,7 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
         lanczos_iterations=config.inner_lanczos_iterations,
         log_expensive=config.inner_log_expensive if config.inner_log_expensive is not None else False,
     )
-    env = putter(env, lambda s: s.innerLogConfig, inner_log_config)
+    env = copy.replace(env, innerLogConfig=inner_log_config)
 
     # 1) Initialize inner state and parameters
 
@@ -248,7 +248,7 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
         lanczos_iterations=config.outer_lanczos_iterations,
         log_expensive=config.outer_log_expensive if config.outer_log_expensive is not None else False,
     )
-    env = putter(env, lambda s: s.outerLogConfig, outer_log_config)
+    env = copy.replace(env, outerLogConfig=outer_log_config)
 
     outer_rec_state_n = jnp.size(outer_state_get(env))
     outer_rec_param_n = jnp.size(outer_param_get(env))
@@ -614,6 +614,5 @@ def train_loop_IO(
                 "immediate_influence_tensor": log_data.immediate_influence_tensor,
             }
         )
-
-    save_object_as_wandb_artifact(total_logs, "logs", "logs.pkl", "logs")
+    save_object_as_wandb_artifact(total_logs.value, "logs", "logs.pkl", "logs")
     checkpoint_fn(copy.replace(env, prng=jax.random.key_data(env.prng)))

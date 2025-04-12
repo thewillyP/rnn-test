@@ -1,5 +1,5 @@
 from typing import Self
-from recurrent.myrecords import GodState
+import optax
 from recurrent.mytypes import *
 from recurrent.parameters import *
 from typing import Protocol
@@ -103,6 +103,11 @@ class PutLogs[Env](Protocol):
 class GetLogConfig[Env](Protocol):
     @property
     def getLogConfig(self) -> App[Self, Env, LogConfig]: ...
+
+
+class GetGlobalLogConfig[Env](Protocol):
+    @property
+    def getGlobalLogConfig(self) -> App[Self, Env, GlobalLogConfig]: ...
 
 
 class GetPRNG[Env](Protocol):

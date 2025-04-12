@@ -361,6 +361,7 @@ class InfluenceTensorLearner(PastFacingLearn, ABC):
         PutInfluenceTensor[Env],
         PastFacingLearn._PastFacingLearner_Can[Env],
         PutLogs[Env],
+        GetGlobalLogConfig[Env],
         Protocol,
     ): ...
 
@@ -378,9 +379,7 @@ class InfluenceTensorLearner(PastFacingLearn, ABC):
         def _creditAssignment() -> G[Agent[Interpreter, Env, Gradient[REC_PARAM]]]:
             interpreter = yield from ask(PX[Interpreter]())
             infT = yield from self.getInfluenceTensor(activationStep)
-            stop_influence = yield from get(PX[Env]()).fmap(lambda e: e.stop_influence)
-            print(stop_influence)
-            # influenceTensor = Jacobian[REC_PARAM](prevInfluenceTensor) if condition else influenceTensor
+            stop_influence = yield from interpreter.getGlobalLogConfig.fmap(lambda x: x.stop_influence)
             if not stop_influence:
                 _ = yield from interpreter.putInfluenceTensor(JACOBIAN(infT.value))
 
@@ -388,8 +387,7 @@ class InfluenceTensorLearner(PastFacingLearn, ABC):
             signal = yield from recurrentError
             recurrentGradient = Gradient[REC_PARAM](signal.value @ influenceTensor)
 
-            log_influence = Logs(influenceTensor=influenceTensor)
-            _ = yield from interpreter.putLogs(log_influence)
+            _ = yield from interpreter.putLogs(Logs(influenceTensor=influenceTensor))
             return pure(recurrentGradient, PX[tuple[Interpreter, Env]]())
 
         return _creditAssignment()
