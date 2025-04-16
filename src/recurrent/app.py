@@ -46,10 +46,7 @@ def runApp(
         oho_set, test_set = create_datasets(config, data_prng, test_prng)
 
         checkpoint_fn(copy.replace(env, prng=jax.random.key_data(env.prng)))
-        start = time.time()
         train_loop_IO(oho_set, test_set, lossFn, env, innerInterpreter, outerInterpreter, config, checkpoint_fn, log_fn)
-        end = time.time()
-        print(f"Training time: {end - start} seconds")
 
 
 def generate_unique_id():
@@ -128,7 +125,7 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
     def putter[T](env: GodState, f: Callable[[GodState], T], value: T) -> GodState:
         return eqx.tree_at(f, env, value, is_leaf=lambda x: x is None)
 
-    prng1, prng2, prng3, prng4, prng5, prng6, prng7, prng8, prng9 = jax.random.split(prng, 9)
+    prng1, prng2, prng3, prng4, prng5, prng6, prng7, prng8, prng9, prng10, prng11 = jax.random.split(prng, 11)
     env = GodState(
         prng=prng1,
         innerTimeConstant=config.inner_time_constant,
@@ -188,47 +185,88 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
     # ============================
     # 2) Initialize inner optimizer
 
-    match config.inner_optimizer:
-        case "sgd" | "sgd_positive":
-            sgd = SgdParameter(learning_rate=config.inner_learning_rate)
-            opt_state = optax.sgd(config.inner_learning_rate).init(jnp.empty((rec_param_n,)))
-            env = putter(env, lambda s: s.innerSgdParameter, sgd)
-            env = putter(env, lambda s: s.innerOptState, opt_state)
-            get_inner_optimizer = lambda s: optax.sgd(s.innerSgdParameter.learning_rate)
-        case "sgd_normalized":
-            sgd = SgdParameter(learning_rate=config.inner_learning_rate)
-            opt_state = normalized_sgd(config.inner_learning_rate).init(jnp.empty((rec_param_n,)))
-            env = putter(env, lambda s: s.innerSgdParameter, sgd)
-            env = putter(env, lambda s: s.innerOptState, opt_state)
-            get_inner_optimizer = lambda s: normalized_sgd(s.innerSgdParameter.learning_rate)
-        case "sgd_clipped":
-            sgd = SgdParameter(learning_rate=config.inner_learning_rate)
-            opt_state = soft_clipped_sgd(
-                config.inner_learning_rate, config.inner_clip, config.inner_clip_sharpness
-            ).init(jnp.empty((rec_param_n,)))
-            env = putter(env, lambda s: s.innerSgdParameter, sgd)
-            env = putter(env, lambda s: s.innerOptState, opt_state)
-            get_inner_optimizer = lambda s: soft_clipped_sgd(
-                s.innerSgdParameter.learning_rate, config.inner_clip, config.inner_clip_sharpness
-            )
-        case "adam":
-            adam = AdamParameter(learning_rate=config.inner_learning_rate)
-            opt_state = optax.adam(config.inner_learning_rate).init(jnp.empty((rec_param_n,)))
-            env = putter(env, lambda s: s.innerAdamParameter, adam)
-            env = putter(env, lambda s: s.innerOptState, opt_state)
-            get_inner_optimizer = lambda s: optax.adam(s.innerAdamParameter.learning_rate)
-        case _:
-            raise ValueError("Invalid inner optimizer")
+    class OptimizerConfig(eqx.Module):
+        optimizer: str
+        lr_reparam: str
+        learning_rate: float
+        clip: float
+        sharpness: float
+
+    def setup_optimizer(opt_config: OptimizerConfig, param_n: int, get_lr: Callable[[GodState, str], float]):
+        def lr_2_optimizer(lr: float):
+            match opt_config.optimizer:
+                case "sgd" | "sgd_positive":
+                    return optax.sgd(lr)
+                case "sgd_normalized":
+                    return normalized_sgd(lr)
+                case "sgd_clipped":
+                    return soft_clipped_sgd(lr, opt_config.clip, opt_config.sharpness)
+                case "adam":
+                    return optax.adam(lr)
+                case _:
+                    raise ValueError("Invalid optimizer")
+
+        match opt_config.lr_reparam:
+            case "identity":
+                reparam_fn = lambda lr: lr
+                reparam_inverse = lambda lr: lr
+            case "softplus":
+                reparam_fn = jax.nn.softplus
+                reparam_inverse = lambda y: jnp.log(jnp.expm1(y))
+            case _:
+                raise ValueError(f"Invalid learning rate reparametrization")
+
+        match opt_config.optimizer:
+            case "sgd" | "sgd_positive" | "sgd_normalized" | "sgd_clipped":
+                param = SgdParameter(learning_rate=reparam_inverse(opt_config.learning_rate))
+            case "adam":
+                param = AdamParameter(learning_rate=reparam_inverse(opt_config.learning_rate))
+            case _:
+                raise ValueError(f"Invalid optimizer")
+
+        optimizer_fn = lambda lr: lr_2_optimizer(reparam_fn(lr))
+
+        optimizer = optimizer_fn(reparam_inverse(opt_config.learning_rate))
+        opt_state = optimizer.init(jnp.empty((param_n,)))
+
+        return param, opt_state, lambda s: optimizer_fn(get_lr(s, opt_config.optimizer)), reparam_fn
+
+    def inner_get_lr(s: GodState, opt: str):
+        match opt:
+            case "sgd" | "sgd_positive" | "sgd_normalized" | "sgd_clipped":
+                return s.innerSgdParameter.learning_rate
+            case "adam":
+                return s.innerAdamParameter.learning_rate
+            case _:
+                raise ValueError("Invalid optimizer")
+
+    inner_param, inner_opt_state, get_inner_optimizer, inner_param_fn = setup_optimizer(
+        OptimizerConfig(
+            optimizer=config.inner_optimizer,
+            lr_reparam=config.inner_optimizer_parametrization,
+            learning_rate=config.inner_learning_rate,
+            clip=config.inner_clip,
+            sharpness=config.inner_clip_sharpness,
+        ),
+        rec_param_n,
+        inner_get_lr,
+    )
+    env = putter(env, lambda s: s.innerOptState, inner_opt_state)
+    match inner_param:
+        case SgdParameter():
+            env = putter(env, lambda s: s.innerSgdParameter, inner_param)
+        case AdamParameter():
+            env = putter(env, lambda s: s.innerAdamParameter, inner_param)
 
     match config.inner_optimizer:
         case "sgd_positive":
 
             def inner_updater(params: optax.Params, updates: optax.Updates):
-                return jax.tree.map(lambda p, u: jnp.maximum(p + u, 0), params, updates)
+                return jax.tree.map(lambda p, u: jnp.maximum(p + u, 1e-5), params, updates)
         case _:
             inner_updater = optax.apply_updates
 
-    inner_influence_tensor = JACOBIAN(jnp.zeros((rec_state_n, rec_param_n)))
+    inner_influence_tensor = JACOBIAN(jax.random.normal(prng10, (rec_state_n, rec_param_n)))
     env = putter(env, lambda s: s.innerInfluenceTensor, inner_influence_tensor)
 
     innerLogs = Logs(
@@ -254,47 +292,42 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
     outer_rec_state_n = jnp.size(outer_state_get(env))
     outer_rec_param_n = jnp.size(outer_param_get(env))
 
-    match config.outer_optimizer:
-        case "sgd" | "sgd_positive":
-            sgd = SgdParameter(learning_rate=config.outer_learning_rate)
-            opt_state = optax.sgd(config.outer_learning_rate).init(jnp.empty((outer_rec_param_n,)))
-            env = putter(env, lambda s: s.outerSgdParameter, sgd)
-            env = putter(env, lambda s: s.outerOptState, opt_state)
-            get_outer_optimizer = lambda s: optax.sgd(s.outerSgdParameter.learning_rate)
-        case "sgd_normalized":
-            sgd = SgdParameter(learning_rate=config.outer_learning_rate)
-            opt_state = normalized_sgd(config.outer_learning_rate).init(jnp.empty((outer_rec_param_n,)))
-            env = putter(env, lambda s: s.outerSgdParameter, sgd)
-            env = putter(env, lambda s: s.outerOptState, opt_state)
-            get_outer_optimizer = lambda s: normalized_sgd(s.outerSgdParameter.learning_rate)
-        case "sgd_clipped":
-            sgd = SgdParameter(learning_rate=config.outer_learning_rate)
-            opt_state = soft_clipped_sgd(
-                config.outer_learning_rate, config.outer_clip, config.outer_clip_sharpness
-            ).init(jnp.empty((outer_rec_param_n,)))
-            env = putter(env, lambda s: s.outerSgdParameter, sgd)
-            env = putter(env, lambda s: s.outerOptState, opt_state)
-            get_outer_optimizer = lambda s: soft_clipped_sgd(
-                s.outerSgdParameter.learning_rate, config.outer_clip, config.outer_clip_sharpness
-            )
-        case "adam":
-            adam = AdamParameter(learning_rate=config.outer_learning_rate)
-            opt_state = optax.adam(config.outer_learning_rate).init(jnp.empty((outer_rec_param_n,)))
-            env = putter(env, lambda s: s.outerAdamParameter, adam)
-            env = putter(env, lambda s: s.outerOptState, opt_state)
-            get_outer_optimizer = lambda s: optax.adam(s.outerAdamParameter.learning_rate)
-        case _:
-            raise ValueError("Invalid outer optimizer")
+    def outer_get_lr(s: GodState, opt: str):
+        match opt:
+            case "sgd" | "sgd_positive" | "sgd_normalized" | "sgd_clipped":
+                return s.outerSgdParameter.learning_rate
+            case "adam":
+                return s.outerAdamParameter.learning_rate
+            case _:
+                raise ValueError("Invalid optimizer")
+
+    outer_param, outer_opt_state, get_outer_optimizer, outer_param_fn = setup_optimizer(
+        OptimizerConfig(
+            optimizer=config.outer_optimizer,
+            lr_reparam=config.outer_optimizer_parametrization,
+            learning_rate=config.outer_learning_rate,
+            clip=config.outer_clip,
+            sharpness=config.outer_clip_sharpness,
+        ),
+        outer_rec_param_n,
+        outer_get_lr,
+    )
+    env = putter(env, lambda s: s.outerOptState, outer_opt_state)
+    match outer_param:
+        case SgdParameter():
+            env = putter(env, lambda s: s.outerSgdParameter, outer_param)
+        case AdamParameter():
+            env = putter(env, lambda s: s.outerAdamParameter, outer_param)
 
     match config.outer_optimizer:
         case "sgd_positive":
 
             def outer_updater(params: optax.Params, updates: optax.Updates):
-                return jax.tree.map(lambda p, u: jnp.maximum(p + u, 0), params, updates)
+                return jax.tree.map(lambda p, u: jnp.maximum(p + u, 1e-5), params, updates)
         case _:
             outer_updater = optax.apply_updates
 
-    outer_influence_tensor = JACOBIAN(jnp.zeros((outer_rec_state_n, outer_rec_param_n)))
+    outer_influence_tensor = JACOBIAN(jax.random.normal(prng11, (outer_rec_state_n, outer_rec_param_n)))
     env = putter(env, lambda s: s.outerInfluenceTensor, outer_influence_tensor)
 
     outerLogs = Logs(
@@ -348,6 +381,7 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
         putOptState=monadic_putter(lambda s: s.innerOptState),
         getOptimizer=monadic_getter(get_inner_optimizer),
         getUpdater=pure(inner_updater, PX[tuple[GodInterpreter, GodState]]()),
+        getLearningRate=lambda s: inner_param_fn(inner_get_lr(s, config.inner_optimizer)),
     )
 
     outerInterpreter = GodInterpreter(
@@ -372,6 +406,7 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
         putOptState=monadic_putter(lambda s: s.outerOptState),
         getOptimizer=monadic_getter(get_outer_optimizer),
         getUpdater=pure(outer_updater, PX[tuple[GodInterpreter, GodState]]()),
+        getLearningRate=lambda s: outer_param_fn(outer_get_lr(s, config.outer_optimizer)),
     )
 
     return env, innerInterpreter, outerInterpreter
@@ -546,6 +581,7 @@ def train_loop_IO(
             validation_loss=vl / config.vl_examples_per_epoch,
             test_loss=te / config.numTe,
             hyperparameters=hyperparameters,
+            inner_learning_rate=innerInterpreter.getLearningRate(env),
             parameter_norm=safe_norm(weights),
             oho_gradient=env.outerLogs.gradient,
             train_gradient=env.innerLogs.gradient,
@@ -567,6 +603,7 @@ def train_loop_IO(
     pytree_dataset = PyTreeDataset(dataset)
     env = initEnv
 
+    start = time.time()
     num_batches_seen_so_far = 0
     all_logs: list[Traversable[AllLogs]] = []
     for epoch in range(initEnv.start_epoch, config.num_retrain_loops):
@@ -589,7 +626,13 @@ def train_loop_IO(
         env = eqx.tree_at(lambda t: t.start_example, env, 0)
         num_batches_seen_so_far += len(dataloader)
 
+    end = time.time()
+    print(f"Training time: {end - start} seconds")
+
     total_logs: Traversable[AllLogs] = jax.tree.map(lambda *xs: jnp.concatenate(xs), *all_logs)
+
+    log_fn(total_logs.value)
+    checkpoint_fn(copy.replace(env, prng=jax.random.key_data(env.prng)))
 
     # log wandb partial metrics
     for log_tree_ in tree_unstack_lazy(total_logs.value):
@@ -602,6 +645,7 @@ def train_loop_IO(
                 "validation_loss": log_data.validation_loss,
                 "test_loss": log_data.test_loss,
                 "hyperparameters": log_data.hyperparameters,
+                "inner_learning_rate": log_data.inner_learning_rate,
                 "parameter_norm": log_data.parameter_norm,
                 "oho_gradient": log_data.oho_gradient,
                 "train_gradient": log_data.train_gradient,
@@ -613,8 +657,7 @@ def train_loop_IO(
                 "largest_influence_eigenvalue": log_data.largest_hessian_eigenvalue,
                 "jacobian_eigenvalues": log_data.jacobian,
                 "rnn_activation_norm": log_data.rnn_activation_norm,
-                "immediate_influence_tensor": log_data.immediate_influence_tensor,
+                "immediate_influence_tensor": jnp.ravel(log_data.immediate_influence_tensor),
+                "outer_influence_tensor": jnp.ravel(log_data.outer_influence_tensor),
             }
         )
-    log_fn(total_logs.value)
-    checkpoint_fn(copy.replace(env, prng=jax.random.key_data(env.prng)))

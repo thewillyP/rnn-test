@@ -75,6 +75,7 @@ class GodInterpreter:
     putOptState: Callable[[optax.OptState], LocalApp[Unit]]
     getOptimizer: LocalApp[optax.GradientTransformation]
     getUpdater: LocalApp[Callable[[optax.Params, optax.Updates], optax.Params]]
+    getLearningRate: Callable[[GodState], float]
 
     @do()
     def updatePRNG(self) -> G[LocalApp[PRNG]]:
@@ -104,6 +105,8 @@ class GodConfig:
     lossFn: Literal["cross_entropy"]
     inner_optimizer: Literal["sgd", "sgd_positive", "adam", "sgd_normalized", "sgd_clipped"]
     outer_optimizer: Literal["sgd", "sgd_positive", "adam", "sgd_normalized", "sgd_clipped"]
+    inner_optimizer_parametrization: Literal["identity", "softplus"]
+    outer_optimizer_parametrization: Literal["identity", "softplus"]
     activation_fn: Literal["tanh", "relu"]
     architecture: Literal["rnn"]
     n_h: int

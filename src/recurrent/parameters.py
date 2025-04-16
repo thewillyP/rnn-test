@@ -60,6 +60,7 @@ class AllLogs(eqx.Module):
     validation_loss: jax.Array | None
     test_loss: jax.Array | None
     hyperparameters: jax.Array | None
+    inner_learning_rate: jax.Array | None
     parameter_norm: jax.Array | None
     oho_gradient: jax.Array | None
     train_gradient: jax.Array | None

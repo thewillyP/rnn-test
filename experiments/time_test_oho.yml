@@ -6,7 +6,7 @@ metric:
   goal: minimize
 parameters:
   data_load_size:
-    value: 1
+    value: 186
 
   num_retrain_loops:
     value: 1
@@ -18,31 +18,31 @@ parameters:
     values: [0.1]
 
   outer_learning_rate:
-    values: [1.0e-5]
+    values: [1.0e-4]
 
   ts:
-    values: [[5, 9]]
+    values: [[12, 14]]
 
   seed:
-    values: [27077, 27312,  8264, 82365, 39715, 39923, 56240, 64671, 53365, 67611]
+    values: [27077]
 
   test_seed:
     value: 12345
 
   tr_examples_per_epoch:
-    value: 100
+    value: 1
 
   vl_examples_per_epoch:
-    value: 2000
+    value: 2_000
 
   tr_avg_per:
     value: 1
 
   numVal:
-    value: 2000
+    value: 2_000
 
   numTr:
-    value: 200
+    value: 1_000
 
   numTe:
     value: 5000
@@ -60,7 +60,7 @@ parameters:
     value: "sgd"
 
   outer_optimizer:
-    value: "sgd_positive"
+    value: "sgd"
 
   activation_fn:
     value: "tanh"
@@ -124,3 +124,9 @@ parameters:
 
   outer_clip_sharpness:
     value: 50.0
+
+  inner_optimizer_parametrization:
+    value: "softplus"
+  
+  outer_optimizer_parametrization:
+    value: "identity"
