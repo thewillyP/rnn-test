@@ -6,7 +6,7 @@ metric:
   goal: minimize
 parameters:
   data_load_size:
-    value: 186
+    value: 1_000_000
 
   num_retrain_loops:
     value: 1
@@ -18,7 +18,7 @@ parameters:
     values: [0.1]
 
   outer_learning_rate:
-    values: [1.0e-4]
+    values: [1.0e-3]
 
   ts:
     values: [[12, 14]]
@@ -30,7 +30,7 @@ parameters:
     value: 12345
 
   tr_examples_per_epoch:
-    value: 1
+    value: 100
 
   vl_examples_per_epoch:
     value: 2_000
@@ -42,7 +42,7 @@ parameters:
     value: 2_000
 
   numTr:
-    value: 1_000
+    value: 100_000
 
   numTe:
     value: 5000

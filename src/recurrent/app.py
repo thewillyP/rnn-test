@@ -537,6 +537,11 @@ def train_loop_IO(
     outer_state, _ = outerInterpreter.getRecurrentState.func(outerInterpreter, initEnv)
     pad_val_grad_by = jnp.maximum(0, jnp.size(outer_state) - jnp.size(inner_param))
 
+    def resetForValidation(env: GodState, prng: PRNG) -> GodState:
+        _rec_param, _ = innerInterpreter.getRecurrentParam.func(innerInterpreter, env)
+        _, reset_env = innerInterpreter.putRecurrentParam(_rec_param).func(innerInterpreter, initEnv)
+        return eqx.tree_at(lambda t: t.prng, reset_env, prng)
+
     match outerLearner:
         case "bptt":
             raise NotImplementedError("BPTT is not implemented yet")
@@ -547,7 +552,7 @@ def train_loop_IO(
                 innerInterpreter,
                 outerLearner,
                 lambda a, b: LOSS(jnp.mean(lossFn(a.value, b.validation.value.y))),
-                resetRnnActivation(initEnv.rnnState.activation),
+                resetForValidation,
                 pad_val_grad_by,
             )
 
@@ -562,12 +567,10 @@ def train_loop_IO(
         hyperparameters = yield from interpreter.getRecurrentParam
         weights, _ = innerInterpreter.getRecurrentParam.func(innerInterpreter, env)
 
-        validation_model = (
-            lambda ds: resetRnnActivation(initEnv.rnnState.activation).then(innerLibrary.modelLossFn(ds)).func
-        )
+        validation_model = lambda ds: innerLibrary.modelLossFn(ds).func
 
-        te, _ = validation_model(test_dataset)(innerInterpreter, env)
-        vl, _ = validation_model(oho_data.validation)(innerInterpreter, env)
+        te, _ = validation_model(test_dataset)(innerInterpreter, resetForValidation(env, env.prng))
+        vl, _ = validation_model(oho_data.validation)(innerInterpreter, resetForValidation(env, env.prng))
         tr, _ = innerLibrary.modelLossFn(oho_data.payload).func(innerInterpreter, env)
 
         _ = yield from outerLibrary.modelGradient(oho_data).flat_map(doOptimizerStep)

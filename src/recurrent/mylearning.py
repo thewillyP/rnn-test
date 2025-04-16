@@ -594,6 +594,7 @@ def foldrLibrary[Data, Interpreter: GetRecurrentParam[Env], Env, Pred](
 class _EndowBilevelOptimization_Can[Env](
     GetRecurrentState[Env],
     PutLogs[Env],
+    GetPRNG[Env],
     Protocol,
 ): ...
 
@@ -610,7 +611,7 @@ def endowBilevelOptimization[
     trainInterpreter: TrainInterpreter,
     bilevelOptimizer: CreateLearner,
     computeLoss: LossFn[Pred, OhoData[Data]],
-    resetEnvForValidation: Agent[TrainInterpreter, Env, Unit],
+    resetEnvForValidation: Callable[[Env, PRNG], Env],
     grad_add_pad_by: int,
 ) -> (
     Library[OhoData[Data], OHO_Interpreter, Env, Pred]
@@ -629,21 +630,26 @@ def endowBilevelOptimization[
     @do()
     def newPredictionStep(oho_data: OhoData[Data]) -> G[Agent[OHO_Interpreter, Env, Pred]]:
         env = yield from get(PX[Env]())
-        agentValPr = library.model(oho_data.validation)
-        predictions, _ = resetEnvForValidation.then(agentValPr).func(trainInterpreter, env)
+        interpreter = yield from ask(PX[OHO_Interpreter]())
+        prng = yield from interpreter.updatePRNG()
+
+        predictions, _ = library.model(oho_data.validation).func(trainInterpreter, resetEnvForValidation(env, prng))
         return pure(predictions, PX[tuple[OHO_Interpreter, Env]]())
 
     @do()
     def newRecurrentErrorStep(oho_data: OhoData[Data]) -> G[Agent[OHO_Interpreter, Env, Gradient[REC_PARAM]]]:
         env = yield from get(PX[Env]())
-        agentValGr = library.modelGradient(oho_data.validation)
-        recurrentGradient, _ = resetEnvForValidation.then(agentValGr).func(trainInterpreter, env)
-        validation_log = Logs(validationGradient=recurrentGradient.value)
         interpreter = yield from ask(PX[OHO_Interpreter]())
-        _ = yield from interpreter.putLogs(validation_log)
+        prng = yield from interpreter.updatePRNG()
+
+        agentValGr = library.modelGradient(oho_data.validation)
+        recurrentGradient, _ = agentValGr.func(trainInterpreter, resetEnvForValidation(env, prng))
+
+        _ = yield from interpreter.putLogs(Logs(validationGradient=recurrentGradient.value))
 
         # Pad the gradient to match the influence tensor size
         # assumes first subsection corresponds to unilevel parameters
+        # TODO: To not have to make this assumption, I need to be able to choose what I deriv wrt, instead of always just model parameters.
         recGrad_pad = jnp.concatenate([recurrentGradient.value, jnp.zeros((grad_add_pad_by,))])
         return pure(Gradient(recGrad_pad), PX[tuple[OHO_Interpreter, Env]]())
 
