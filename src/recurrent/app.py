@@ -262,7 +262,7 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
         case "sgd_positive":
 
             def inner_updater(params: optax.Params, updates: optax.Updates):
-                return jax.tree.map(lambda p, u: jnp.maximum(p + u, 1e-5), params, updates)
+                return jax.tree.map(lambda p, u: jnp.maximum(p + u, 1e-4), params, updates)
         case _:
             inner_updater = optax.apply_updates
 
@@ -323,7 +323,7 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
         case "sgd_positive":
 
             def outer_updater(params: optax.Params, updates: optax.Updates):
-                return jax.tree.map(lambda p, u: jnp.maximum(p + u, 1e-5), params, updates)
+                return jax.tree.map(lambda p, u: jnp.maximum(p + u, 1e-4), params, updates)
         case _:
             outer_updater = optax.apply_updates
 

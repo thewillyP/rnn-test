@@ -10,7 +10,7 @@ parameters:
 
   num_retrain_loops:
     value: 1
-  
+
   checkpoint_interval:
     value: 1
 
@@ -18,13 +18,13 @@ parameters:
     values: [0.1]
 
   outer_learning_rate:
-    values: [1.0e-3]
+    values: [1.0e-4]
 
   ts:
-    values: [[12, 14]]
+    values: [[14, 16]]
 
   seed:
-    values: [27077]
+    values: [67611]
 
   test_seed:
     value: 12345
@@ -57,10 +57,10 @@ parameters:
     value: "cross_entropy"
 
   inner_optimizer:
-    value: "sgd"
+    value: "sgd_normalized"
 
   outer_optimizer:
-    value: "sgd"
+    value: "sgd_positive"
 
   activation_fn:
     value: "tanh"
@@ -115,10 +115,10 @@ parameters:
 
   inner_clip:
     value: 1.0
-  
+
   inner_clip_sharpness:
     value: 50.0
-  
+
   outer_clip:
     value: 1.0
 
@@ -126,7 +126,7 @@ parameters:
     value: 50.0
 
   inner_optimizer_parametrization:
-    value: "softplus"
-  
+    value: "identity"
+
   outer_optimizer_parametrization:
     value: "identity"
