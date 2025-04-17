@@ -177,6 +177,24 @@ def doGradient[Interpreter, Env, Wrt: jax.Array](
     return pure(Gradient[Wrt](jnp.ravel(grad)), PX[tuple[Interpreter, Env]]())
 
 
+def aggregateBatchedGradients[Interpreter, Env, Data](
+    gradientFn: Controller[Data, Interpreter, Env, Gradient[REC_PARAM]],
+    get_axes: Callable[[Env], Env],
+) -> Controller[Traversable[Data], Interpreter, Env, Gradient[REC_PARAM]]:
+    @do()
+    def batch(data: Traversable[Data]):
+        i = yield from ask(PX[Interpreter]())
+        env = yield from get(PX[Env]())
+        axes = get_axes(env)
+        f = lambda d, e: gradientFn(d).func(i, e)
+        gr: Gradient[REC_PARAM]
+        gr = eqx.filter_vmap(f, in_axes=(0, axes), out_axes=(0, axes))(data.value, env)
+        gr = Gradient(jnp.mean(gr.value, axis=0))
+        return pure(gr, PX[tuple[Interpreter, Env]]())
+
+    return batch
+
+
 def endowAveragedGradients[Interpreter: GetRecurrentParam[Env], Env, Data](
     gradientFn: Controller[Traversable[Data], Interpreter, Env, Gradient[REC_PARAM]],
     trunc: int,
