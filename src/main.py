@@ -13,7 +13,7 @@ def main():
 
     load_env = lambda config, prng: create_env(config, prng)[0]
     load_config = lambda run: run.config
-    wandb_kwargs = {"mode": "offline", "group": sweep_config.name, "config": sweep_config.config}
+    wandb_kwargs = {"mode": "offline", "group": sweep_config.name, "config": sweep_config.config, "project": "oho_exps"}
 
     runApp(load_env, load_config, wandb_kwargs)
 
