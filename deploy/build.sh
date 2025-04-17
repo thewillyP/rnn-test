@@ -12,15 +12,16 @@
 
 
 IMAGE=rnn-test
-DOCKER_URL="docker://thewillyp/${IMAGE}:master-1.0.41"
+VERSION=1.0.48
+DOCKER_URL="docker://thewillyp/${IMAGE}:master-${VERSION}"
 
 # Build the Singularity image
-singularity build --force /scratch/${USER}/images/${IMAGE}-cpu.sif ${DOCKER_URL}-cpu
-singularity build --force /scratch/${USER}/images/${IMAGE}-gpu.sif ${DOCKER_URL}-gpu
+singularity build --force /scratch/${USER}/images/${IMAGE}-${VERSION}-cpu.sif ${DOCKER_URL}-cpu
+singularity build --force /scratch/${USER}/images/${IMAGE}-${VERSION}-gpu.sif ${DOCKER_URL}-gpu
 
 # Create the overlay
-singularity overlay create --size 5120 /scratch/${USER}/images/${IMAGE}-cpu.sif
-singularity overlay create --size 5120 /scratch/${USER}/images/${IMAGE}-gpu.sif
+singularity overlay create --size 5120 /scratch/${USER}/images/${IMAGE}-${VERSION}-cpu.sif
+singularity overlay create --size 5120 /scratch/${USER}/images/${IMAGE}-${VERSION}-gpu.sif
 
 
 # 5 GiB
