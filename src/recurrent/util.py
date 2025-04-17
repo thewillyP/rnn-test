@@ -8,6 +8,21 @@ import jax.numpy as jnp
 from recurrent.parameters import RnnParameter
 
 
+# https://gist.github.com/willwhitney/dd89cac6a5b771ccff18b06b33372c75
+def tree_stack(trees):
+    return jax.tree.map(lambda *v: jnp.stack(v), *trees)
+
+
+def tree_unstack(tree):
+    leaves, treedef = jax.tree.flatten(tree)
+    return [treedef.unflatten(leaf) for leaf in zip(*leaves, strict=True)]
+
+
+def tree_unstack_lazy(tree):
+    leaves, treedef = jax.tree.flatten(tree)
+    return (treedef.unflatten(leaf) for leaf in zip(*leaves, strict=True))
+
+
 @eqx.filter_jit
 def pytree_norm(tree):
     squared = jax.tree.map(lambda x: jnp.sum(x**2), tree)

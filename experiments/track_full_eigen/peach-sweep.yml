@@ -1,10 +1,21 @@
-program: /rnn-test/src/main.py
+program: src/main.py
 name: peach
 method: grid
 metric:
   name: test_loss
   goal: minimize
 parameters:
+
+  data_load_size:
+    value: 200
+
+  num_retrain_loops:
+    value: 1
+  
+  checkpoint_interval:
+    value: 200
+
+
   inner_learning_rate:
     values: [0.1]
 

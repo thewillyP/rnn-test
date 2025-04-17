@@ -21,15 +21,18 @@ class OhoData[Data](eqx.Module):
 
 class GodState(eqx.Module):
     prng: PRNG
+    start_epoch: int
+    start_example: int
     innerTimeConstant: float = eqx.field(static=True)
     outerTimeConstant: float = eqx.field(static=True)
+    globalLogConfig: GlobalLogConfig = eqx.field(static=True)
 
     # Inner fields
     rnnState: Optional[RnnState] = eqx.field(default=None)
     innerInfluenceTensor: Optional[JACOBIAN] = eqx.field(default=None)
     innerUoro: Optional[UORO_Param] = eqx.field(default=None)
     innerLogs: Optional[Logs] = eqx.field(default=None)
-    innerLogConfig: Optional[LogConfig] = eqx.field(default=None)
+    innerLogConfig: Optional[LogConfig] = eqx.field(default=None, static=True)
     innerOptState: Optional[optax.OptState] = eqx.field(default=None)
     innerSgdParameter: Optional[SgdParameter] = eqx.field(default=None)
     innerAdamParameter: Optional[AdamParameter] = eqx.field(default=None)
@@ -38,7 +41,7 @@ class GodState(eqx.Module):
     outerInfluenceTensor: Optional[JACOBIAN] = eqx.field(default=None)
     outerUoro: Optional[UORO_Param] = eqx.field(default=None)
     outerLogs: Optional[Logs] = eqx.field(default=None)
-    outerLogConfig: Optional[LogConfig] = eqx.field(default=None)
+    outerLogConfig: Optional[LogConfig] = eqx.field(default=None, static=True)
     outerOptState: Optional[optax.OptState] = eqx.field(default=None)
     outerSgdParameter: Optional[SgdParameter] = eqx.field(default=None)
     outerAdamParameter: Optional[AdamParameter] = eqx.field(default=None)
@@ -62,6 +65,7 @@ class GodInterpreter:
     getRnnConfig: LocalApp[RnnConfig]
     getTimeConstant: LocalApp[float]
     getLogConfig: LocalApp[LogConfig]
+    getGlobalLogConfig: LocalApp[GlobalLogConfig]
     putLogs: Callable[[Logs], LocalApp[Unit]]
 
     getRnnParameter: LocalApp[RnnParameter]
@@ -71,6 +75,7 @@ class GodInterpreter:
     putOptState: Callable[[optax.OptState], LocalApp[Unit]]
     getOptimizer: LocalApp[optax.GradientTransformation]
     getUpdater: LocalApp[Callable[[optax.Params, optax.Updates], optax.Params]]
+    getLearningRate: Callable[[GodState], float]
 
     @do()
     def updatePRNG(self) -> G[LocalApp[PRNG]]:
@@ -79,11 +84,11 @@ class GodInterpreter:
         return pure(prng, PX[tuple[Self, GodState]]())
 
 
-test = "Hi"
-
-
 @dataclass(frozen=True)
 class GodConfig:
+    data_load_size: int
+    num_retrain_loops: int
+    checkpoint_interval: int
     inner_learning_rate: float
     outer_learning_rate: float
     ts: tuple[int, int]
@@ -98,8 +103,10 @@ class GodConfig:
     inner_learner: Literal["rtrl", "uoro", "rflo", "identity"]
     outer_learner: Literal["rtrl", "uoro", "rflo", "identity"]
     lossFn: Literal["cross_entropy"]
-    inner_optimizer: Literal["sgd", "sgd_positive", "adam", "sgd_normalized"]
-    outer_optimizer: Literal["sgd", "sgd_positive", "adam", "sgd_normalized"]
+    inner_optimizer: Literal["sgd", "sgd_positive", "adam", "sgd_normalized", "sgd_clipped"]
+    outer_optimizer: Literal["sgd", "sgd_positive", "adam", "sgd_normalized", "sgd_clipped"]
+    inner_optimizer_parametrization: Literal["identity", "softplus"]
+    outer_optimizer_parametrization: Literal["identity", "softplus"]
     activation_fn: Literal["tanh", "relu"]
     architecture: Literal["rnn"]
     n_h: int
@@ -115,32 +122,9 @@ class GodConfig:
     outer_log_special: bool
     inner_lanczos_iterations: int
     outer_lanczos_iterations: int
+    inner_clip: float
+    inner_clip_sharpness: float
+    outer_clip: float
+    outer_clip_sharpness: float
     inner_log_expensive: Optional[bool] = None
     outer_log_expensive: Optional[bool] = None
-
-
-# def rnn_array(state: State) -> jax.Array:
-#     return toVector(endowVector(state.activation))
-
-
-# def to_rnn_array(state: State, rec_state: jax.Array) -> State:
-#     activation = invmap(state.activation, lambda _: rec_state)
-#     return eqx.tree_at(lambda t: t.activation, state, activation)
-
-
-# def parameter_array(state: State) -> jax.Array:
-#     return toVector(endowVector(state.rnnParameter))
-
-
-# def to_parameter_array(state: State, rec_param: jax.Array) -> State:
-#     rnnParameter = invmap(state.rnnParameter, lambda _: rec_param)
-#     return eqx.tree_at(lambda t: t.rnnParameter, state, rnnParameter)
-
-
-# def sgd_array(state: State) -> jax.Array:
-#     return toVector(endowVector(state.sgdParameter))
-
-
-# def to_sgd_array(state: State, sgd_param: jax.Array) -> State:
-#     sgdParameter = invmap(state.sgdParameter, lambda _: sgd_param)
-#     return eqx.tree_at(lambda t: t.sgdParameter, state, sgdParameter)

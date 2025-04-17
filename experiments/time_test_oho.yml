@@ -1,18 +1,27 @@
-program: src/main.py
+program: /rnn-test/src/main.py
 name: time_test_oho
-method: random
+method: grid
 metric:
   name: test_loss
   goal: minimize
 parameters:
+  data_load_size:
+    value: 1_000_000
+
+  num_retrain_loops:
+    value: 1
+
+  checkpoint_interval:
+    value: 1
+
   inner_learning_rate:
     values: [0.1]
 
   outer_learning_rate:
-    values: [1.0e-5]
+    values: [1.0e-4]
 
   ts:
-    values: [[5, 9]]
+    values: [[14, 16]]
 
   seed:
     values: [27077, 27312,  8264, 82365, 39715, 39923, 56240, 64671, 53365, 67611]
@@ -24,16 +33,16 @@ parameters:
     value: 100
 
   vl_examples_per_epoch:
-    value: 2000
+    value: 2_000
 
   tr_avg_per:
     value: 1
 
   numVal:
-    value: 2000
+    value: 2_000
 
   numTr:
-    value: 1_000
+    value: 100_000
 
   numTe:
     value: 5000
@@ -93,7 +102,7 @@ parameters:
     value: False
 
   outer_log_expensive:
-    value: True
+    value: False
 
   inner_uoro_std:
     value: 1.0
@@ -103,3 +112,21 @@ parameters:
 
   initialization_std:
     value: 1.0
+
+  inner_clip:
+    value: 1.0
+
+  inner_clip_sharpness:
+    value: 50.0
+
+  outer_clip:
+    value: 1.0
+
+  outer_clip_sharpness:
+    value: 50.0
+
+  inner_optimizer_parametrization:
+    value: "identity"
+
+  outer_optimizer_parametrization:
+    value: "identity"

@@ -1,10 +1,8 @@
-from typing import Callable, Optional
+from typing import Literal, Optional
 
-import jax.flatten_util
 from recurrent.mytypes import *
 import jax
 import equinox as eqx
-import optax
 
 
 class SgdParameter(eqx.Module):
@@ -24,7 +22,7 @@ class RnnConfig(eqx.Module):
     n_h: int
     n_in: int
     n_out: int
-    activationFn: Callable[[jax.Array], jax.Array]
+    activationFn: Literal["tanh", "relu"]
 
 
 class RnnState(eqx.Module):
@@ -47,25 +45,33 @@ class Logs(eqx.Module):
     hessian: Optional[jax.Array] = eqx.field(default=None)
 
 
-class AllLogs(eqx.Module):
-    trainLoss: jax.Array
-    validationLoss: jax.Array
-    testLoss: jax.Array
-    hyperparameters: jax.Array
-    parameterNorm: jax.Array
-    ohoGradient: jax.Array
-    trainGradient: jax.Array
-    validationGradient: jax.Array
-    immediateInfluenceTensorNorm: jax.Array
-    outerInfluenceTensorNorm: jax.Array
-    innerInfluenceTensorNorm: jax.Array
-    largest_hessian_eigenvalue: jax.Array
-    largest_jacobian_eigenvalue: jax.Array
-    jacobian_eigenvalues: jax.Array
-    hessian_eigenvalues: jax.Array
-
-
 class LogConfig(eqx.Module):
     log_special: bool = eqx.field(static=True)
     lanczos_iterations: int = eqx.field(static=True)
     log_expensive: bool = eqx.field(static=True)
+
+
+class GlobalLogConfig(eqx.Module):
+    stop_influence: bool = eqx.field(static=True, default=False)
+
+
+class AllLogs(eqx.Module):
+    train_loss: jax.Array | None
+    validation_loss: jax.Array | None
+    test_loss: jax.Array | None
+    hyperparameters: jax.Array | None
+    inner_learning_rate: jax.Array | None
+    parameter_norm: jax.Array | None
+    oho_gradient: jax.Array | None
+    train_gradient: jax.Array | None
+    validation_gradient: jax.Array | None
+    immediate_influence_tensor_norm: jax.Array | None
+    outer_influence_tensor_norm: jax.Array | None
+    outer_influence_tensor: jax.Array | None
+    inner_influence_tensor_norm: jax.Array | None
+    largest_jacobian_eigenvalue: jax.Array | None
+    largest_hessian_eigenvalue: jax.Array | None
+    jacobian: jax.Array | None
+    hessian: jax.Array | None
+    rnn_activation_norm: jax.Array | None
+    immediate_influence_tensor: jax.Array | None

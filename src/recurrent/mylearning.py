@@ -59,6 +59,16 @@ def resetRnnActivation[Interpreter: PutActivation[Env], Env](resetActv: ACTIVATI
     return ask(PX[Interpreter]()).flat_map(lambda interpreter: interpreter.putActivation(resetActv))
 
 
+def map_activation_fn(actv_fn: str):
+    match actv_fn:
+        case "tanh":
+            return jax.nn.tanh
+        case "relu":
+            return jax.nn.relu
+        case _:
+            raise ValueError("Invalid activation function")
+
+
 class _Opt_Can[Env](
     GetRecurrentParam[Env],
     PutRecurrentParam[Env],
@@ -90,6 +100,25 @@ def normalized_sgd(learning_rate):
     )
 
 
+def soft_clip_norm(threshold: float, sharpness: float):
+    def update_fn(updates, state, _):
+        grads_flat, unravel_fn = jax.flatten_util.ravel_pytree(updates)
+        grad_norm = jnp.linalg.norm(grads_flat)
+        clipped_norm = grad_norm - jax.nn.softplus(sharpness * (grad_norm - threshold)) / sharpness
+        scale = clipped_norm / (grad_norm + 1e-6)
+        updates_scaled = jax.tree_util.tree_map(lambda g: g * scale, updates)
+        return updates_scaled, state
+
+    return optax.GradientTransformation(lambda _: (), update_fn)
+
+
+def soft_clipped_sgd(learning_rate, threshold, sharpness):
+    return optax.chain(
+        soft_clip_norm(threshold, sharpness),
+        optax.sgd(learning_rate),
+    )
+
+
 class _RnnActivation_Can[Env](
     GetActivation[Env],
     PutActivation[Env],
@@ -109,7 +138,7 @@ def doRnnStep[Interpreter: _RnnActivation_Can[Env], Env](data: InputOutput) -> G
     alpha = yield from interpreter.getTimeConstant
 
     a_rec = param.w_rec @ jnp.concat((a, data.x, jnp.asarray([1.0])))
-    a_new = ACTIVATION((1 - alpha) * a + alpha * cfg.activationFn(a_rec))
+    a_new = ACTIVATION((1 - alpha) * a + alpha * map_activation_fn(cfg.activationFn)(a_rec))
     return interpreter.putActivation(a_new)
 
 
@@ -146,6 +175,24 @@ def doGradient[Interpreter, Env, Wrt: jax.Array](
     grad, new_env = eqx.filter_jacrev(parametrized, has_aux=True)(param)
     _ = yield from put(new_env)
     return pure(Gradient[Wrt](jnp.ravel(grad)), PX[tuple[Interpreter, Env]]())
+
+
+def aggregateBatchedGradients[Interpreter, Env, Data](
+    gradientFn: Controller[Data, Interpreter, Env, Gradient[REC_PARAM]],
+    get_axes: Callable[[Env], Env],
+) -> Controller[Traversable[Data], Interpreter, Env, Gradient[REC_PARAM]]:
+    @do()
+    def batch(data: Traversable[Data]):
+        i = yield from ask(PX[Interpreter]())
+        env = yield from get(PX[Env]())
+        axes = get_axes(env)
+        f = lambda d, e: gradientFn(d).func(i, e)
+        gr: Gradient[REC_PARAM]
+        gr = eqx.filter_vmap(f, in_axes=(0, axes), out_axes=(0, axes))(data.value, env)
+        gr = Gradient(jnp.mean(gr.value, axis=0))
+        return pure(gr, PX[tuple[Interpreter, Env]]())
+
+    return batch
 
 
 def endowAveragedGradients[Interpreter: GetRecurrentParam[Env], Env, Data](
@@ -332,6 +379,7 @@ class InfluenceTensorLearner(PastFacingLearn, ABC):
         PutInfluenceTensor[Env],
         PastFacingLearn._PastFacingLearner_Can[Env],
         PutLogs[Env],
+        GetGlobalLogConfig[Env],
         Protocol,
     ): ...
 
@@ -348,15 +396,16 @@ class InfluenceTensorLearner(PastFacingLearn, ABC):
         @do()
         def _creditAssignment() -> G[Agent[Interpreter, Env, Gradient[REC_PARAM]]]:
             interpreter = yield from ask(PX[Interpreter]())
-            influenceTensor = yield from self.getInfluenceTensor(activationStep)
+            infT = yield from self.getInfluenceTensor(activationStep)
+            stop_influence = yield from interpreter.getGlobalLogConfig.fmap(lambda x: x.stop_influence)
+            if not stop_influence:
+                _ = yield from interpreter.putInfluenceTensor(JACOBIAN(infT.value))
 
-            _ = yield from interpreter.putInfluenceTensor(JACOBIAN(influenceTensor.value))
-
+            influenceTensor = yield from interpreter.getInfluenceTensor
             signal = yield from recurrentError
-            recurrentGradient = Gradient[REC_PARAM](signal.value @ influenceTensor.value)
+            recurrentGradient = Gradient[REC_PARAM](signal.value @ influenceTensor)
 
-            log_influence = Logs(influenceTensor=influenceTensor.value)
-            _ = yield from interpreter.putLogs(log_influence)
+            _ = yield from interpreter.putLogs(Logs(influenceTensor=influenceTensor))
             return pure(recurrentGradient, PX[tuple[Interpreter, Env]]())
 
         return _creditAssignment()
@@ -398,35 +447,21 @@ class RTRL(InfluenceTensorLearner):
         log_condition = yield from interpreter.getLogConfig.fmap(lambda x: x.log_special)
         lanczos_iterations = yield from interpreter.getLogConfig.fmap(lambda x: x.lanczos_iterations)
         log_expensive = yield from interpreter.getLogConfig.fmap(lambda x: x.log_expensive)
-
         subkey = yield from interpreter.updatePRNG()
 
-        def if_eigenvalue(_):
-            v0 = jnp.array(jax.random.normal(subkey, actv0.shape))
+        if log_condition:
+            v0: Array = jnp.array(jax.random.normal(subkey, actv0.shape))
             tridag = matfree.decomp.tridiag_sym(lanczos_iterations, custom_vjp=False)
             get_eig = matfree.eig.eigh_partial(tridag)
             fn = lambda v: jvp(lambda a: wrtActvFn(a), actv0, v)
             eigvals, _ = get_eig(fn, v0)
-            return jnp.max(jnp.abs(eigvals))
+            _ = yield from interpreter.putLogs(Logs(jac_eigenvalue=jnp.max(eigvals)))
 
-        eig = jax.lax.cond(
-            log_condition,
-            if_eigenvalue,
-            lambda _: 0.0,
-            None,
-        )
-
-        jacobian = jax.lax.cond(
-            log_expensive,
-            lambda _: eqx.filter_jacrev(wrtActvFn)(actv0),
-            lambda _: jnp.zeros(jax.eval_shape(eqx.filter_jacrev(wrtActvFn), actv0).shape),
-            None,
-        )
+        if log_expensive:
+            _ = yield from interpreter.putLogs(Logs(hessian=eqx.filter_jacrev(wrtActvFn)(actv0)))
 
         _ = yield from put(env)
         _ = yield from interpreter.putLogs(Logs(immediateInfluenceTensor=immediateInfluence))
-        _ = yield from interpreter.putLogs(Logs(jac_eigenvalue=eig))
-        _ = yield from interpreter.putLogs(Logs(hessian=jacobian))
         return pure(newInfluenceTensor, PX[tuple[Interpreter, Env]]())
 
 
@@ -548,15 +583,8 @@ class UORO(PastFacingLearn):
             _ = yield from interpreter.putUoro(replace(uoro, A=A_new, B=B_new))
 
             log_condition = yield from interpreter.getLogConfig.fmap(lambda x: x.log_special)
-            influenceTensor = jax.lax.cond(
-                log_condition,
-                lambda _: jnp.outer(A_new, B_new),
-                lambda _: jnp.zeros((A_new.shape[0], B_new.shape[0])),
-                None,
-            )
-
-            log_influence = Logs(influenceTensor=influenceTensor)
-            _ = yield from interpreter.putLogs(log_influence)
+            if log_condition:
+                _ = yield from interpreter.putLogs(Logs(influenceTensor=jnp.outer(A_new, B_new)))
 
             return self.propagateRecurrentError(A_new, B_new, recurrentError)
 
@@ -584,6 +612,7 @@ def foldrLibrary[Data, Interpreter: GetRecurrentParam[Env], Env, Pred](
 class _EndowBilevelOptimization_Can[Env](
     GetRecurrentState[Env],
     PutLogs[Env],
+    GetPRNG[Env],
     Protocol,
 ): ...
 
@@ -600,7 +629,7 @@ def endowBilevelOptimization[
     trainInterpreter: TrainInterpreter,
     bilevelOptimizer: CreateLearner,
     computeLoss: LossFn[Pred, OhoData[Data]],
-    resetEnvForValidation: Agent[TrainInterpreter, Env, Unit],
+    resetEnvForValidation: Callable[[Env, PRNG], Env],
     grad_add_pad_by: int,
 ) -> (
     Library[OhoData[Data], OHO_Interpreter, Env, Pred]
@@ -619,21 +648,26 @@ def endowBilevelOptimization[
     @do()
     def newPredictionStep(oho_data: OhoData[Data]) -> G[Agent[OHO_Interpreter, Env, Pred]]:
         env = yield from get(PX[Env]())
-        agentValPr = library.model(oho_data.validation)
-        predictions, _ = resetEnvForValidation.then(agentValPr).func(trainInterpreter, env)
+        interpreter = yield from ask(PX[OHO_Interpreter]())
+        prng = yield from interpreter.updatePRNG()
+
+        predictions, _ = library.model(oho_data.validation).func(trainInterpreter, resetEnvForValidation(env, prng))
         return pure(predictions, PX[tuple[OHO_Interpreter, Env]]())
 
     @do()
     def newRecurrentErrorStep(oho_data: OhoData[Data]) -> G[Agent[OHO_Interpreter, Env, Gradient[REC_PARAM]]]:
         env = yield from get(PX[Env]())
-        agentValGr = library.modelGradient(oho_data.validation)
-        recurrentGradient, _ = resetEnvForValidation.then(agentValGr).func(trainInterpreter, env)
-        validation_log = Logs(validationGradient=recurrentGradient.value)
         interpreter = yield from ask(PX[OHO_Interpreter]())
-        _ = yield from interpreter.putLogs(validation_log)
+        prng = yield from interpreter.updatePRNG()
+
+        agentValGr = library.modelGradient(oho_data.validation)
+        recurrentGradient, _ = agentValGr.func(trainInterpreter, resetEnvForValidation(env, prng))
+
+        _ = yield from interpreter.putLogs(Logs(validationGradient=recurrentGradient.value))
 
         # Pad the gradient to match the influence tensor size
         # assumes first subsection corresponds to unilevel parameters
+        # TODO: To not have to make this assumption, I need to be able to choose what I deriv wrt, instead of always just model parameters.
         recGrad_pad = jnp.concatenate([recurrentGradient.value, jnp.zeros((grad_add_pad_by,))])
         return pure(Gradient(recGrad_pad), PX[tuple[OHO_Interpreter, Env]]())
 

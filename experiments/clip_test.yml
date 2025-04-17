@@ -1,13 +1,12 @@
 program: src/main.py
-name: visionary
-method: grid
+name: time_test_oho
+method: random
 metric:
   name: test_loss
   goal: minimize
 parameters:
-
   data_load_size:
-    value: 770
+    value: 1_000
 
   num_retrain_loops:
     value: 1
@@ -16,37 +15,37 @@ parameters:
     value: 1
 
   inner_learning_rate:
-    values: [0.1, 0.2]
+    value: 0.1
 
   outer_learning_rate:
-    values: [0.001]
+    value: 0.001
 
   ts:
-    values: [[12, 14]]
+    values: [[13, 15]]
 
   seed:
-    values: [27077]
+    value: 27_077
 
   test_seed:
-    value: 12345
+    value: 12_345
 
   tr_examples_per_epoch:
     value: 100
 
   vl_examples_per_epoch:
-    value: 2000
+    value: 2_000
 
   tr_avg_per:
     value: 1
 
   numVal:
-    value: 2000
+    value: 2_000
 
   numTr:
-    value: 100_000
+    value: 40_000
 
   numTe:
-    value: 5000
+    value: 5_000
 
   inner_learner:
     value: "rtrl"
@@ -58,7 +57,7 @@ parameters:
     value: "cross_entropy"
 
   inner_optimizer:
-    value: "sgd"
+    value: "sgd_clipped"
 
   outer_optimizer:
     value: "sgd_positive"
@@ -70,7 +69,7 @@ parameters:
     value: "rnn"
 
   n_h:
-    value: 32
+    value: 256
 
   n_in:
     value: 2

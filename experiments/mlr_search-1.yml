@@ -1,31 +1,31 @@
-program: src/main.py
-name: visionary
+program: /rnn-test/src/main.py
+name: mlr_search-1
 method: grid
 metric:
   name: test_loss
   goal: minimize
-parameters:
 
+parameters:
   data_load_size:
-    value: 770
+    value: 1_000_000
 
   num_retrain_loops:
     value: 1
-  
+
   checkpoint_interval:
     value: 1
 
   inner_learning_rate:
-    values: [0.1, 0.2]
+    values: [0.3, 0.1, 0.01]
 
   outer_learning_rate:
-    values: [0.001]
+    values: [1.0000011e-5, 1.6681028e-5, 2.7825608e-5, 4.6415924e-5, 7.7426361e-5, 1.2915506e-4, 2.1544355e-4, 3.5938137e-4, 5.9948408e-4, 1.0000000e-3]
 
   ts:
-    values: [[12, 14]]
+    values: [[0, 2], [1, 3], [2, 4], [3, 5], [4, 6], [5, 7], [6, 8], [7, 9], [8, 10], [9, 11], [10, 12], [11, 13], [12, 14], [13, 15], [14, 16], [15, 17], [16, 18], [17, 19], [18, 20], [19, 21]]
 
   seed:
-    values: [27077]
+    values: [31327077, 89727312, 349724617, 1554082365, 957939715, 512339923, 538756240, 501781024, 408053365, 2076283964]
 
   test_seed:
     value: 12345
@@ -34,22 +34,22 @@ parameters:
     value: 100
 
   vl_examples_per_epoch:
-    value: 2000
+    value: 2_000
 
   tr_avg_per:
     value: 1
 
   numVal:
-    value: 2000
+    value: 2_000
 
   numTr:
     value: 100_000
 
   numTe:
-    value: 5000
+    value: 5_000
 
   inner_learner:
-    value: "rtrl"
+    values: ["rtrl"]
 
   outer_learner:
     value: "rtrl"
@@ -58,7 +58,7 @@ parameters:
     value: "cross_entropy"
 
   inner_optimizer:
-    value: "sgd"
+    values: ["sgd", "sgd_normalized"]
 
   outer_optimizer:
     value: "sgd_positive"
@@ -116,12 +116,18 @@ parameters:
 
   inner_clip:
     value: 1.0
-  
+
   inner_clip_sharpness:
     value: 50.0
-  
+
   outer_clip:
     value: 1.0
 
   outer_clip_sharpness:
     value: 50.0
+
+  inner_optimizer_parametrization:
+    value: "identity"
+
+  outer_optimizer_parametrization:
+    value: "identity"
