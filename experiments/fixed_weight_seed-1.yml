@@ -16,19 +16,19 @@ parameters:
     value: 1
 
   inner_learning_rate:
-    values: [0.1]
+    values: [0.01]
 
   outer_learning_rate:
-    values: [1.0e-3]
+    values: [0.000077426361]
 
   ts:
-    values: [[14, 16]]
+    values: [[10, 19]]
 
   data_seed:
-    values: [27077, 27312,  8264]
+    values: [27077, 27312,  8264, 23, 70, 62, 43, 90, 17, 74]
 
   parameter_seed:
-    values: [39923, 56240, 64671]
+    values: [39923, 56240, 64671, 81]
 
   test_seed:
     value: 12345
