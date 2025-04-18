@@ -1,6 +1,7 @@
-program: src/main.py
-name: time_test_baseline
+program: /rnn-test/src/main.py
+name: fixed_weight_seed-1
 method: grid
+version: 1.0.50
 metric:
   name: test_loss
   goal: minimize
@@ -18,10 +19,10 @@ parameters:
     values: [0.1]
 
   outer_learning_rate:
-    values: [0.0]
+    values: [1.0e-3]
 
   ts:
-    values: [[5, 9]]
+    values: [[14, 16]]
 
   data_seed:
     values: [27077, 27312,  8264]
@@ -45,7 +46,7 @@ parameters:
     value: 2_000
 
   numTr:
-    value: 1_000
+    value: 100_000
 
   numTe:
     value: 5000
@@ -54,7 +55,7 @@ parameters:
     values: ["rtrl"]
 
   outer_learner:
-    value: "identity"
+    value: "rtrl"
 
   lossFn:
     value: "cross_entropy"

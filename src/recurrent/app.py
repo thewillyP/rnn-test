@@ -34,9 +34,9 @@ def runApp(
 ):
     with wandb.init(**wandb_kwargs) as run:
         config = GodConfig(**load_config(run))
-        prng = PRNG(jax.random.key(config.seed))
+        data_prng = PRNG(jax.random.key(config.data_seed))
+        env_prng = PRNG(jax.random.key(config.parameter_seed))
         test_prng = PRNG(jax.random.key(config.test_seed))
-        env_prng, data_prng = jax.random.split(prng, 2)
         lossFn = getLossFn(config)
         checkpoint_fn = lambda env: save_checkpoint(env, f"env_{run.id}", "env.pkl")
         log_fn = lambda logs: save_object_as_wandb_artifact(logs, f"logs_{run.id}", "logs.pkl", "logs")
