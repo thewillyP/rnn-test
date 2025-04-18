@@ -92,7 +92,8 @@ class GodConfig:
     inner_learning_rate: float
     outer_learning_rate: float
     ts: tuple[int, int]
-    seed: int
+    data_seed: int
+    parameter_seed: int
     test_seed: int
     tr_examples_per_epoch: int
     vl_examples_per_epoch: int
