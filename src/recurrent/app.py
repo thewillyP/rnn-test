@@ -12,6 +12,8 @@ from torch.utils.data import DataLoader, Subset
 import pickle
 import os
 import optax
+import lzma
+import joblib
 
 from recurrent.mylearning import *
 from recurrent.mylearning import RFLO, RTRL, UORO, IdentityLearner
@@ -39,7 +41,7 @@ def runApp(
         test_prng = PRNG(jax.random.key(config.test_seed))
         lossFn = getLossFn(config)
         checkpoint_fn = lambda env: save_checkpoint(env, f"env_{run.id}", "env.pkl")
-        log_fn = lambda logs: save_object_as_wandb_artifact(logs, f"logs_{run.id}", "logs.pkl", "logs")
+        log_fn = lambda logs: save_object_as_wandb_artifact(logs, f"logs_{run.id}", "logs.pkl", "logs", to_float16=True)
 
         env = load_env(config, env_prng)
         _, innerInterpreter, outerInterpreter = create_env(config, env_prng)
@@ -55,30 +57,82 @@ def generate_unique_id():
     return f"{timestamp}_{short_uuid}"
 
 
-def save_object_as_wandb_artifact(obj: Any, artifact_name: str, filename: str, artifact_type: str) -> None:
-    """Pickle an arbitrary object and save it as a W&B artifact."""
+def save_object_as_wandb_artifact(
+    obj: Any, artifact_name: str, filename: str, artifact_type: str, to_float16: bool
+) -> None:
+    """Serialize with joblib, compress with lzma (max compression), save as a W&B artifact, and print its size."""
     os.makedirs("artifacts", exist_ok=True)
+
+    # Ensure filename ends with .pkl.xz
+    if not filename.endswith(".pkl.xz"):
+        if filename.endswith(".pkl"):
+            filename = filename + ".xz"
+        else:
+            filename = filename + ".pkl.xz"
+
     full_path = os.path.join("artifacts", filename)
 
-    with open(full_path, "wb") as f:
-        pickle.dump(obj, f)
+    # Reduce precision of JAX arrays if to_float16 is True
+    if to_float16:
+        obj = jax.tree.map(lambda x: x.astype(jnp.float16) if isinstance(x, jax.Array) else x, obj)
+
+    # Serialize with joblib to a temporary file
+    temp_path = full_path + ".tmp"
+    joblib.dump(obj, temp_path, compress=3)  # Use joblib's internal compression for arrays
+
+    # Read serialized data and compress with lzma
+    with open(temp_path, "rb") as f:
+        serialized_data = f.read()
+
+    with lzma.open(full_path, "wb", preset=9) as f:  # preset=9 for max compression
+        f.write(serialized_data)
+
+    os.remove(temp_path)  # Clean up temporary file
+
+    # Calculate and print the size of the compressed file
+    file_size = os.path.getsize(full_path)
+    if file_size < 1024 * 1024:  # Less than 1 MB
+        size_str = f"{file_size / 1024:.2f} KB"
+    else:
+        size_str = f"{file_size / (1024 * 1024):.2f} MB"
+    print(f"Saved {artifact_name} as {filename} (Size: {size_str})")
 
     artifact = wandb.Artifact(artifact_name, type=artifact_type)
     artifact.add_file(full_path)
     wandb.log_artifact(artifact)
-    print(f"Saved {artifact_name} as {filename}")
 
 
 def save_checkpoint(obj: Any, name: str, filename: str) -> None:
-    return save_object_as_wandb_artifact(obj, name, filename, "checkpoint")
+    """Save a checkpoint with joblib and lzma compression."""
+    return save_object_as_wandb_artifact(obj, name, filename, "checkpoint", to_float16=False)
 
 
 def load_artifact(artifact_name: str, filename: str) -> Any:
+    """Load and decompress a W&B artifact serialized with joblib and lzma."""
     api = wandb.Api()
     model_artifact = api.artifact(artifact_name)
     model_dir = model_artifact.download()
-    with open(os.path.join(model_dir, filename), "rb") as f:
-        return pickle.load(f)
+
+    # Ensure filename ends with .pkl.xz
+    if not filename.endswith(".pkl.xz"):
+        if filename.endswith(".pkl"):
+            filename = filename + ".xz"
+        else:
+            filename = filename + ".pkl.xz"
+
+    full_path = os.path.join(model_dir, filename)
+
+    # Decompress with lzma and load with joblib
+    with lzma.open(full_path, "rb") as f:
+        decompressed_data = f.read()
+
+    temp_path = full_path + ".tmp"
+    with open(temp_path, "wb") as f:
+        f.write(decompressed_data)
+
+    obj = joblib.load(temp_path)
+    os.remove(temp_path)  # Clean up
+    return obj
 
 
 def log_jax_array(array: jax.Array, artifact_name: str):
