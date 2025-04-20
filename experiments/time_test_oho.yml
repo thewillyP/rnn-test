@@ -1,10 +1,15 @@
 program: src/main.py
 name: time_test_oho
 method: grid
+version: 1.0.51
 metric:
   name: test_loss
   goal: minimize
 parameters:
+
+  log_to_float16:
+    value: True
+
   data_load_size:
     value: 1_000_000
 
