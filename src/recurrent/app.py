@@ -690,7 +690,11 @@ def train_loop_IO(
                 "largest_influence_eigenvalue": log_data.largest_hessian_eigenvalue,
                 "jacobian_eigenvalues": log_data.jacobian,
                 "rnn_activation_norm": log_data.rnn_activation_norm,
-                "immediate_influence_tensor": jnp.ravel(log_data.immediate_influence_tensor),
-                "outer_influence_tensor": jnp.ravel(log_data.outer_influence_tensor),
+                "immediate_influence_tensor": jnp.ravel(log_data.immediate_influence_tensor)
+                if log_data.immediate_influence_tensor is not None
+                else None,
+                "outer_influence_tensor": jnp.ravel(log_data.outer_influence_tensor)
+                if log_data.outer_influence_tensor is not None
+                else None,
             }
         )
