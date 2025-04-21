@@ -7,8 +7,8 @@
 #SBATCH --gres=gpu:0
 #SBATCH --cpus-per-task=2
 #SBATCH --array=1-2000
-#SBATCH --output="/scratch/wlp9800/logs/%x-%A-%a.out"
-#SBATCH --error="/scratch/wlp9800/logs/%x-%A-%a.err"
+#SBATCH --output="/vast/wlp9800/logs/%x-%A-%a.out"
+#SBATCH --error="/vast/wlp9800/logs/%x-%A-%a.err"
 
 set -e
 
