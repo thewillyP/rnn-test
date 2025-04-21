@@ -86,6 +86,7 @@ class GodInterpreter:
 
 @dataclass(frozen=True)
 class GodConfig:
+    log_to_float16: bool
     data_load_size: int
     num_retrain_loops: int
     checkpoint_interval: int

@@ -1,10 +1,15 @@
-program: /rnn-test/src/main.py
+program: src/main.py
 name: time_test_oho
 method: grid
+version: 1.0.51
 metric:
   name: test_loss
   goal: minimize
 parameters:
+
+  log_to_float16:
+    value: True
+
   data_load_size:
     value: 1_000_000
 
@@ -18,13 +23,16 @@ parameters:
     values: [0.1]
 
   outer_learning_rate:
-    values: [1.0e-3]
+    values: [1.0e-4]
 
   ts:
-    values: [[14, 16]]
+    values: [[15, 17]]
 
-  seed:
-    values: [27077, 27312,  8264, 82365, 39715, 39923, 56240, 64671, 53365, 67611]
+  data_seed:
+    values: [27077, 27312,  8264]
+
+  parameter_seed:
+    values: [39923, 56240, 64671]
 
   test_seed:
     value: 12345

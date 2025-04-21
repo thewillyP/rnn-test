@@ -61,7 +61,7 @@ parameters:
     values: ["sgd"]
 
   outer_optimizer:
-    value: "sgd_positive"
+    value: "sgd"
 
   activation_fn:
     value: "tanh"

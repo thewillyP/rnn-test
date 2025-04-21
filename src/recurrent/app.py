@@ -9,9 +9,9 @@ from wandb import sdk as wandb_sdk
 import uuid
 from datetime import datetime
 from torch.utils.data import DataLoader, Subset
-import pickle
 import os
 import optax
+import joblib
 
 from recurrent.mylearning import *
 from recurrent.mylearning import RFLO, RTRL, UORO, IdentityLearner
@@ -39,7 +39,9 @@ def runApp(
         test_prng = PRNG(jax.random.key(config.test_seed))
         lossFn = getLossFn(config)
         checkpoint_fn = lambda env: save_checkpoint(env, f"env_{run.id}", "env.pkl")
-        log_fn = lambda logs: save_object_as_wandb_artifact(logs, f"logs_{run.id}", "logs.pkl", "logs")
+        log_fn = lambda logs: save_object_as_wandb_artifact(
+            logs, f"logs_{run.id}", "logs.pkl", "logs", to_float16=config.log_to_float16
+        )
 
         env = load_env(config, env_prng)
         _, innerInterpreter, outerInterpreter = create_env(config, env_prng)
@@ -55,30 +57,44 @@ def generate_unique_id():
     return f"{timestamp}_{short_uuid}"
 
 
-def save_object_as_wandb_artifact(obj: Any, artifact_name: str, filename: str, artifact_type: str) -> None:
-    """Pickle an arbitrary object and save it as a W&B artifact."""
+def save_object_as_wandb_artifact(
+    obj: Any, artifact_name: str, filename: str, artifact_type: str, to_float16: bool
+) -> None:
     os.makedirs("artifacts", exist_ok=True)
+
+    # Ensure filename ends with .pkl
+    if not filename.endswith(".pkl"):
+        filename = filename + ".pkl"
+
     full_path = os.path.join("artifacts", filename)
 
-    with open(full_path, "wb") as f:
-        pickle.dump(obj, f)
+    # Reduce precision of JAX arrays if to_float16 is True
+    if to_float16:
+        obj = jax.tree.map(lambda x: x.astype(jnp.float16) if isinstance(x, jax.Array) else x, obj)
+
+    joblib.dump(obj, full_path, compress=0)
 
     artifact = wandb.Artifact(artifact_name, type=artifact_type)
     artifact.add_file(full_path)
     wandb.log_artifact(artifact)
-    print(f"Saved {artifact_name} as {filename}")
 
 
 def save_checkpoint(obj: Any, name: str, filename: str) -> None:
-    return save_object_as_wandb_artifact(obj, name, filename, "checkpoint")
+    save_object_as_wandb_artifact(obj, name, filename, "checkpoint", False)
 
 
 def load_artifact(artifact_name: str, filename: str) -> Any:
     api = wandb.Api()
     model_artifact = api.artifact(artifact_name)
     model_dir = model_artifact.download()
-    with open(os.path.join(model_dir, filename), "rb") as f:
-        return pickle.load(f)
+
+    # Ensure filename ends with .pkl
+    if not filename.endswith(".pkl"):
+        filename = filename + ".pkl"
+
+    full_path = os.path.join(model_dir, filename)
+
+    return joblib.load(full_path)
 
 
 def log_jax_array(array: jax.Array, artifact_name: str):
@@ -102,7 +118,12 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
     # These don't care how env is created, just tags all possible parameter/states and vectorizes them
     inner_states = [lambda s: s.rnnState.activation]
     inner_params = [lambda s: s.rnnState.rnnParameter]
-    outer_states = inner_params + [lambda s: s.innerOptState]  # VERY IMPORTANT COMES FIRST
+    outer_states = inner_params + [
+        lambda s: s.innerOptState,
+        lambda s: s.innerInfluenceTensor,
+        lambda s: s.innerUoro,
+        lambda s: s.rnnState.activation,
+    ]  # VERY IMPORTANT COMES FIRST
     outer_params = [lambda s: s.innerSgdParameter, lambda s: s.innerAdamParameter]
 
     def toArray(godState: GodState, attrbs: list[Callable[[GodState], Any]]) -> Array:
