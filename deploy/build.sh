@@ -12,7 +12,7 @@
 
 
 IMAGE=rnn-test
-VERSION=1.0.52
+VERSION=1.0.53
 DOCKER_URL="docker://thewillyp/${IMAGE}:master-${VERSION}"
 
 # Build the Singularity image
