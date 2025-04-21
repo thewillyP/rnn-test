@@ -1,18 +1,20 @@
-# test.py
-from sweep_agent.agent import get_sweep_config
+import random
+import json
 
 
-def main():
-    sweep_config = get_sweep_config()
-    if sweep_config:
-        print(f"Running sweep {sweep_config.sweep_id}")
-        print(f"Program: {sweep_config.program}")
-        print(f"Experiment name: {sweep_config.name}")
-        print(f"Hyperparameters: {sweep_config.config}")
-        # Your training logic here using sweep_config.config for hyperparameters
-    else:
-        print("No sweep config received")
+def generate_seeds(num_entries=3, test_seed=12345):
+    seeds = []
+    for _ in range(num_entries):
+        entry = {
+            "data_seed": random.randint(0, 99999),
+            "parameter_seed": random.randint(0, 99999),
+            "test_seed": test_seed,
+        }
+        seeds.append(entry)
+    return seeds
 
 
+# Example usage
 if __name__ == "__main__":
-    main()
+    seed_list = generate_seeds(num_entries=10)
+    print(json.dumps(seed_list, indent=2))
