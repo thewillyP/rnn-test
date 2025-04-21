@@ -1,7 +1,7 @@
 program: /rnn-test/src/main.py
 name: fixed_search-3
 method: grid
-version: 1.0.52
+version: 1.0.53
 metric:
   name: test_loss
   goal: minimize

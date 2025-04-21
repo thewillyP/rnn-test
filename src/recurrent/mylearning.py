@@ -106,7 +106,7 @@ def soft_clip_norm(threshold: float, sharpness: float):
         grad_norm = jnp.linalg.norm(grads_flat)
         clipped_norm = grad_norm - jax.nn.softplus(sharpness * (grad_norm - threshold)) / sharpness
         scale = clipped_norm / (grad_norm + 1e-6)
-        updates_scaled = jax.tree_util.tree_map(lambda g: g * scale, updates)
+        updates_scaled = jax.tree.map(lambda g: g * scale, updates)
         return updates_scaled, state
 
     return optax.GradientTransformation(lambda _: (), update_fn)

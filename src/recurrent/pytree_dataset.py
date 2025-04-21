@@ -19,4 +19,4 @@ class PyTreeDataset(Dataset):
 
 
 def jax_collate_fn(batch):
-    return jax.tree_map(lambda *xs: jnp.stack(xs), *batch)
+    return jax.tree.map(lambda *xs: jnp.stack(xs), *batch)
