@@ -398,6 +398,7 @@ class InfluenceTensorLearner(PastFacingLearn, ABC):
             interpreter = yield from ask(PX[Interpreter]())
             infT = yield from self.getInfluenceTensor(activationStep)
             stop_influence = yield from interpreter.getGlobalLogConfig.fmap(lambda x: x.stop_influence)
+            log_influence = yield from interpreter.getGlobalLogConfig.fmap(lambda x: x.log_influence)
             if not stop_influence:
                 _ = yield from interpreter.putInfluenceTensor(JACOBIAN(infT.value))
 
@@ -405,7 +406,8 @@ class InfluenceTensorLearner(PastFacingLearn, ABC):
             signal = yield from recurrentError
             recurrentGradient = Gradient[REC_PARAM](signal.value @ influenceTensor)
 
-            _ = yield from interpreter.putLogs(Logs(influenceTensor=influenceTensor))
+            if log_influence:
+                _ = yield from interpreter.putLogs(Logs(influenceTensor=influenceTensor))
             return pure(recurrentGradient, PX[tuple[Interpreter, Env]]())
 
         return _creditAssignment()
@@ -420,6 +422,7 @@ class RTRL(InfluenceTensorLearner):
         PutRecurrentParam[Env],
         PutLogs[Env],
         GetLogConfig[Env],
+        GetGlobalLogConfig[Env],
         GetPRNG[Env],
         Protocol,
     ): ...
@@ -447,6 +450,7 @@ class RTRL(InfluenceTensorLearner):
         log_condition = yield from interpreter.getLogConfig.fmap(lambda x: x.log_special)
         lanczos_iterations = yield from interpreter.getLogConfig.fmap(lambda x: x.lanczos_iterations)
         log_expensive = yield from interpreter.getLogConfig.fmap(lambda x: x.log_expensive)
+        log_influence = yield from interpreter.getGlobalLogConfig.fmap(lambda x: x.log_influence)
         subkey = yield from interpreter.updatePRNG()
 
         if log_condition:
@@ -461,7 +465,8 @@ class RTRL(InfluenceTensorLearner):
             _ = yield from interpreter.putLogs(Logs(hessian=eqx.filter_jacrev(wrtActvFn)(actv0)))
 
         _ = yield from put(env)
-        _ = yield from interpreter.putLogs(Logs(immediateInfluenceTensor=immediateInfluence))
+        if log_influence:
+            _ = yield from interpreter.putLogs(Logs(immediateInfluenceTensor=immediateInfluence))
         return pure(newInfluenceTensor, PX[tuple[Interpreter, Env]]())
 
 
@@ -474,6 +479,7 @@ class RFLO(InfluenceTensorLearner):
         GetRecurrentParam[Env],
         PutRecurrentParam[Env],
         PutLogs[Env],
+        GetGlobalLogConfig[Env],
         Protocol,
     ): ...
 
@@ -494,7 +500,9 @@ class RFLO(InfluenceTensorLearner):
         newInfluenceTensor = Jacobian[REC_PARAM]((1 - alpha) * influenceTensor + alpha * immediateInfluence)
 
         _ = yield from put(env)
-        _ = yield from interpreter.putLogs(Logs(immediateInfluenceTensor=immediateInfluence))
+        log_influence = yield from interpreter.getGlobalLogConfig.fmap(lambda x: x.log_influence)
+        if log_influence:
+            _ = yield from interpreter.putLogs(Logs(immediateInfluenceTensor=immediateInfluence))
         return pure(newInfluenceTensor, PX[tuple[Interpreter, Env]]())
 
 
@@ -505,7 +513,7 @@ class UORO(PastFacingLearn):
         PutUoro[Env],
         GetPRNG[Env],
         PutLogs[Env],
-        GetLogConfig[Env],
+        GetGlobalLogConfig[Env],
         Protocol,
     ): ...
 
@@ -582,8 +590,8 @@ class UORO(PastFacingLearn):
             B_new = B_prev / rho0 + immediateInfluence__Random_projection / rho1
             _ = yield from interpreter.putUoro(replace(uoro, A=A_new, B=B_new))
 
-            log_condition = yield from interpreter.getLogConfig.fmap(lambda x: x.log_special)
-            if log_condition:
+            log_influence = yield from interpreter.getGlobalLogConfig.fmap(lambda x: x.log_influence)
+            if log_influence:
                 _ = yield from interpreter.putLogs(Logs(influenceTensor=jnp.outer(A_new, B_new)))
 
             return self.propagateRecurrentError(A_new, B_new, recurrentError)

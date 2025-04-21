@@ -53,6 +53,8 @@ class LogConfig(eqx.Module):
 
 class GlobalLogConfig(eqx.Module):
     stop_influence: bool = eqx.field(static=True, default=False)
+    log_influence: bool = eqx.field(static=True, default=False)
+    log_accumulate_influence: bool = eqx.field(static=True, default=False)
 
 
 class AllLogs(eqx.Module):

@@ -7,6 +7,12 @@ metric:
   goal: minimize
 parameters:
 
+  log_influence:
+    value: True
+
+  log_accumulate_influence:
+    value: False
+
   log_to_float16:
     value: True
 

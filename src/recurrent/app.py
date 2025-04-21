@@ -156,7 +156,11 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
         outerTimeConstant=config.outer_time_constant,
         start_epoch=0,
         start_example=0,
-        globalLogConfig=GlobalLogConfig(stop_influence=False),
+        globalLogConfig=GlobalLogConfig(
+            stop_influence=False,
+            log_influence=config.log_influence,
+            log_accumulate_influence=config.log_accumulate_influence,
+        ),
     )
 
     inner_log_config = LogConfig(
@@ -296,8 +300,8 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
     innerLogs = Logs(
         gradient=jnp.zeros((rec_param_n,)),
         validationGradient=None,
-        influenceTensor=inner_influence_tensor,
-        immediateInfluenceTensor=inner_influence_tensor,
+        influenceTensor=inner_influence_tensor if config.log_influence else None,
+        immediateInfluenceTensor=inner_influence_tensor if config.log_influence else None,
         jac_eigenvalue=0.0 if config.inner_log_special else None,
         hessian=jnp.zeros((rec_state_n, rec_state_n)) if config.inner_log_expensive else None,
     )
@@ -357,8 +361,8 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
     outerLogs = Logs(
         gradient=jnp.zeros((outer_rec_param_n,)),
         validationGradient=jnp.zeros((rec_param_n,)),
-        influenceTensor=outer_influence_tensor,
-        immediateInfluenceTensor=outer_influence_tensor,
+        influenceTensor=outer_influence_tensor if config.log_influence else None,
+        immediateInfluenceTensor=outer_influence_tensor if config.log_influence else None,
         jac_eigenvalue=0.0 if config.outer_log_special else None,
         hessian=jnp.zeros((outer_rec_state_n, outer_rec_state_n)) if config.outer_log_expensive else None,
     )
@@ -615,14 +619,16 @@ def train_loop_IO(
             validation_gradient=env.outerLogs.validationGradient,
             immediate_influence_tensor_norm=safe_norm(env.outerLogs.immediateInfluenceTensor),
             outer_influence_tensor_norm=safe_norm(env.outerLogs.influenceTensor),
-            outer_influence_tensor=env.outerLogs.influenceTensor,
+            outer_influence_tensor=env.outerLogs.influenceTensor if config.log_accumulate_influence else None,
             inner_influence_tensor_norm=safe_norm(env.innerLogs.influenceTensor),
             largest_jacobian_eigenvalue=env.innerLogs.jac_eigenvalue,
             largest_hessian_eigenvalue=env.outerLogs.jac_eigenvalue,
             jacobian=env.innerLogs.hessian,
             hessian=env.outerLogs.hessian,
             rnn_activation_norm=safe_norm(env.rnnState.activation),
-            immediate_influence_tensor=env.outerLogs.immediateInfluenceTensor,
+            immediate_influence_tensor=env.outerLogs.immediateInfluenceTensor
+            if config.log_accumulate_influence
+            else None,
         )
         return pure(log, PX[tuple[GodInterpreter, GodState]]())
 

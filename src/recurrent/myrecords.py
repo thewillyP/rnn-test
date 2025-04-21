@@ -94,6 +94,8 @@ class SeedConfig:
 @dataclass(frozen=True)
 class GodConfig:
     log_to_float16: bool
+    log_influence: bool
+    log_accumulate_influence: bool
     data_load_size: int
     num_retrain_loops: int
     checkpoint_interval: int
