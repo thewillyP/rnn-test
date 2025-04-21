@@ -1,5 +1,5 @@
 ARG VARIANT=gpu  # Default to GPU if not provided
-FROM thewillyp/devenv:master-1.0.30-${VARIANT}
+FROM thewillyp/devenv:master-1.0.31-${VARIANT}
 
 WORKDIR /
 

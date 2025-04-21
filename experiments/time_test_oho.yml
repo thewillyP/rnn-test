@@ -28,14 +28,20 @@ parameters:
   ts:
     values: [[15, 17]]
 
-  data_seed:
-    values: [27077, 27312,  8264]
-
-  parameter_seed:
-    values: [39923, 56240, 64671]
-
-  test_seed:
-    value: 12345
+  seed:
+    values: [{
+      "data_seed": 27077,
+      "parameter_seed": 39923,
+      "test_seed": 12345
+    }, {
+      "data_seed": 27312,
+      "parameter_seed": 56240,
+      "test_seed": 12345
+    }, {
+      "data_seed": 8264,
+      "parameter_seed": 64671,
+      "test_seed": 12345
+    }]
 
   tr_examples_per_epoch:
     value: 100
@@ -50,7 +56,7 @@ parameters:
     value: 2_000
 
   numTr:
-    value: 100_000
+    value: 1_000
 
   numTe:
     value: 5000

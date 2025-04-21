@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader, Subset
 import os
 import optax
 import joblib
+from dacite import from_dict, Config
 
 from recurrent.mylearning import *
 from recurrent.mylearning import RFLO, RTRL, UORO, IdentityLearner
@@ -33,10 +34,12 @@ def runApp(
     wandb_kwargs: dict[str, Any],
 ):
     with wandb.init(**wandb_kwargs) as run:
-        config = GodConfig(**load_config(run))
-        data_prng = PRNG(jax.random.key(config.data_seed))
-        env_prng = PRNG(jax.random.key(config.parameter_seed))
-        test_prng = PRNG(jax.random.key(config.test_seed))
+        config = from_dict(
+            data_class=GodConfig, data=load_config(run), config=Config(type_hooks={tuple[int, int]: tuple})
+        )
+        data_prng = PRNG(jax.random.key(config.seed.data_seed))
+        env_prng = PRNG(jax.random.key(config.seed.parameter_seed))
+        test_prng = PRNG(jax.random.key(config.seed.test_seed))
         lossFn = getLossFn(config)
         checkpoint_fn = lambda env: save_checkpoint(env, f"env_{run.id}", "env.pkl")
         log_fn = lambda logs: save_object_as_wandb_artifact(

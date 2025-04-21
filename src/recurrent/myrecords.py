@@ -85,6 +85,13 @@ class GodInterpreter:
 
 
 @dataclass(frozen=True)
+class SeedConfig:
+    data_seed: int
+    parameter_seed: int
+    test_seed: int
+
+
+@dataclass(frozen=True)
 class GodConfig:
     log_to_float16: bool
     data_load_size: int
@@ -93,9 +100,7 @@ class GodConfig:
     inner_learning_rate: float
     outer_learning_rate: float
     ts: tuple[int, int]
-    data_seed: int
-    parameter_seed: int
-    test_seed: int
+    seed: SeedConfig
     tr_examples_per_epoch: int
     vl_examples_per_epoch: int
     tr_avg_per: int
