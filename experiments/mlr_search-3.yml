@@ -6,6 +6,7 @@ metric:
   name: test_loss
   goal: minimize
 parameters:
+
   log_to_float16:
     value: True
 
@@ -94,7 +95,7 @@ parameters:
     value: 2_000
 
   numTr:
-    value: 100_000
+    value: 200_000
 
   numTe:
     value: 5_000

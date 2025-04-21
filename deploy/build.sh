@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --mem=14G
+#SBATCH --mem=16G
 #SBATCH --time=00:15:00
 #SBATCH --job-name=build
 #SBATCH --error=_build.err
@@ -20,8 +20,8 @@ singularity build --force /scratch/${USER}/images/${IMAGE}-${VERSION}-cpu.sif ${
 singularity build --force /scratch/${USER}/images/${IMAGE}-${VERSION}-gpu.sif ${DOCKER_URL}-gpu
 
 # Create the overlay
-singularity overlay create --size 5120 /scratch/${USER}/images/${IMAGE}-${VERSION}-cpu.sif
-singularity overlay create --size 5120 /scratch/${USER}/images/${IMAGE}-${VERSION}-gpu.sif
+singularity overlay create --size 10240 /scratch/${USER}/images/${IMAGE}-${VERSION}-cpu.sif
+singularity overlay create --size 10240 /scratch/${USER}/images/${IMAGE}-${VERSION}-gpu.sif
 
 
 # 5 GiB
