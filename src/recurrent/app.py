@@ -118,7 +118,12 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
     # These don't care how env is created, just tags all possible parameter/states and vectorizes them
     inner_states = [lambda s: s.rnnState.activation]
     inner_params = [lambda s: s.rnnState.rnnParameter]
-    outer_states = inner_params + [lambda s: s.innerOptState]  # VERY IMPORTANT COMES FIRST
+    outer_states = inner_params + [
+        lambda s: s.innerOptState,
+        lambda s: s.innerInfluenceTensor,
+        lambda s: s.innerUoro,
+        lambda s: s.rnnState.activation,
+    ]  # VERY IMPORTANT COMES FIRST
     outer_params = [lambda s: s.innerSgdParameter, lambda s: s.innerAdamParameter]
 
     def toArray(godState: GodState, attrbs: list[Callable[[GodState], Any]]) -> Array:
