@@ -1,7 +1,7 @@
 program: /rnn-test/src/main.py
 name: time_test_oho
 method: grid
-version: 1.0.53
+version: 1.0.54
 metric:
   name: test_loss
   goal: minimize
