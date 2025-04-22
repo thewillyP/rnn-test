@@ -1,0 +1,191 @@
+program: /rnn-test/src/main.py
+name: fixed_search-4
+method: grid
+version: 1.0.55
+metric:
+  name: test_loss
+  goal: minimize
+parameters:
+
+  log_influence:
+    value: True
+
+  log_accumulate_influence:
+    value: False
+
+  log_to_float16:
+    value: True
+
+  data_load_size:
+    value: 1_000_000
+
+  num_retrain_loops:
+    value: 1
+
+  checkpoint_interval:
+    value: 1
+
+  inner_learning_rate:
+    values: [9.9999997e-5, 2.4341470e-4, 5.9250719e-4, 1.4422496e-3, 3.5106458e-3, 8.5454332e-3, 2.0800842e-2, 5.0632309e-2, 1.2324648e-1, 0.3]
+
+  outer_learning_rate:
+    values: [0.0]
+
+  ts:
+    values: [[0, 2], [1, 3], [2, 4], [3, 5], [4, 6], [5, 7], [6, 8], [7, 9], [8, 10], [9, 11], [10, 12], [11, 13], [12, 14], [13, 15], [14, 16], [15, 17], [16, 18], [17, 19], [18, 20], [19, 21]]
+
+  seed:
+    values: [
+    {
+      "data_seed": 74274,
+      "parameter_seed": 25223,
+      "test_seed": 12345
+    },
+    {
+      "data_seed": 41030,
+      "parameter_seed": 17164,
+      "test_seed": 12345
+    },
+    {
+      "data_seed": 21471,
+      "parameter_seed": 76771,
+      "test_seed": 12345
+    },
+    {
+      "data_seed": 43250,
+      "parameter_seed": 39069,
+      "test_seed": 12345
+    },
+    {
+      "data_seed": 72537,
+      "parameter_seed": 66096,
+      "test_seed": 12345
+    },
+    {
+      "data_seed": 53199,
+      "parameter_seed": 27512,
+      "test_seed": 12345
+    },
+    {
+      "data_seed": 52890,
+      "parameter_seed": 45433,
+      "test_seed": 12345
+    },
+    {
+      "data_seed": 51110,
+      "parameter_seed": 60780,
+      "test_seed": 12345
+    },
+    {
+      "data_seed": 37103,
+      "parameter_seed": 28963,
+      "test_seed": 12345
+    },
+    {
+      "data_seed": 65874,
+      "parameter_seed": 20730,
+      "test_seed": 12345
+    }
+  ]
+
+  tr_examples_per_epoch:
+    value: 100
+
+  vl_examples_per_epoch:
+    value: 2_000
+
+  tr_avg_per:
+    value: 1
+
+  numVal:
+    value: 2_000
+
+  numTr:
+    value: 200_000
+
+  numTe:
+    value: 5_000
+
+  inner_learner:
+    values: ["rtrl"]
+
+  outer_learner:
+    value: "identity"
+
+  lossFn:
+    value: "cross_entropy"
+
+  inner_optimizer:
+    values: ["sgd"]
+
+  outer_optimizer:
+    value: "sgd"
+
+  activation_fn:
+    value: "tanh"
+
+  architecture:
+    value: "rnn"
+
+  n_h:
+    value: 64
+
+  n_in:
+    value: 2
+
+  n_out:
+    value: 2
+
+  inner_time_constant:
+    value: 1.0
+
+  outer_time_constant:
+    value: 1.0
+
+  tau_task:
+    value: True
+
+  inner_log_special:
+    value: False
+
+  outer_log_special:
+    value: False
+
+  inner_lanczos_iterations:
+    value: 10
+
+  outer_lanczos_iterations:
+    value: 10
+
+  inner_log_expensive:
+    value: False
+
+  outer_log_expensive:
+    value: False
+
+  inner_uoro_std:
+    value: 1.0
+
+  outer_uoro_std:
+    value: 1.0
+
+  initialization_std:
+    value: 1.0
+
+  inner_clip:
+    value: 1.0
+
+  inner_clip_sharpness:
+    value: 50.0
+
+  outer_clip:
+    value: 1.0
+
+  outer_clip_sharpness:
+    value: 50.0
+
+  inner_optimizer_parametrization:
+    value: "identity"
+
+  outer_optimizer_parametrization:
+    value: "identity"
