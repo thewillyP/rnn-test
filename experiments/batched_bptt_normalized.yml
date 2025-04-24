@@ -1,5 +1,5 @@
-program: src/main.py
-name: time_test_oho
+program: /rnn-test/src/main.py
+name: batched_bptt_normalized-1
 method: grid
 version: 1.0.56
 metric:
@@ -11,7 +11,7 @@ parameters:
     value: "batch"
   
   batch_vl: 
-    value: 1
+    value: 4
 
   batch_tr: 
     value: 1_000
@@ -29,16 +29,16 @@ parameters:
     value: 100
 
   checkpoint_interval:
-    value: 25
+    value: 51
 
   inner_learning_rate:
-    values: [0.1]
+    values: [0.3, 0.1, 0.01]
 
   outer_learning_rate:
-    values: [1.e-6]
+    values: [9.9999997e-6, 3.1622778e-5, 9.9999997e-5, 3.1622776e-4]
 
   ts:
-    values: [[10, 12]]
+    values: [[0, 2], [1, 3], [2, 4], [3, 5], [4, 6], [5, 7], [6, 8], [7, 9], [8, 10], [9, 11], [10, 12], [11, 13], [12, 14], [13, 15], [14, 16], [15, 17], [16, 18], [17, 19], [18, 20], [19, 21]]
 
   seed:
     values: [
@@ -98,13 +98,13 @@ parameters:
     value: 500
 
   vl_examples_per_epoch:
-    value: 2_000
+    value: 500
 
   tr_avg_per:
     value: 500
 
   vl_avg_per:
-    value: 2_000
+    value: 500
 
   numVal:
     value: 2_000
@@ -125,7 +125,7 @@ parameters:
     value: "cross_entropy"
 
   inner_optimizer:
-    value: "sgd_clipped"
+    value: "sgd_normalized"
 
   outer_optimizer:
     value: "sgd_positive"
@@ -182,7 +182,7 @@ parameters:
     value: 1.0
 
   inner_clip:
-    value: 3.0
+    value: 1.0
 
   inner_clip_sharpness:
     value: 50.0
