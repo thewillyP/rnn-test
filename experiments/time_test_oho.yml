@@ -1,11 +1,20 @@
-program: /rnn-test/src/main.py
+program: src/main.py
 name: time_test_oho
 method: grid
-version: 1.0.54
+version: 1.0.55
 metric:
   name: test_loss
   goal: minimize
 parameters:
+
+  batch_or_online: 
+    value: "batch"
+  
+  batch_vl: 
+    value: 1
+
+  batch_tr: 
+    value: 1_000
 
   log_influence:
     value: True
@@ -16,23 +25,20 @@ parameters:
   log_to_float16:
     value: True
 
-  data_load_size:
-    value: 1_000_000
-
   num_retrain_loops:
-    value: 1
+    value: 100
 
   checkpoint_interval:
-    value: 1
+    value: 25
 
   inner_learning_rate:
-    values: [0.1]
+    values: [0.025]
 
   outer_learning_rate:
-    values: [1.0e-4]
+    values: [1.e-6]
 
   ts:
-    values: [[15, 17]]
+    values: [[10, 12]]
 
   seed:
     values: [
@@ -89,25 +95,28 @@ parameters:
   ]
 
   tr_examples_per_epoch:
-    value: 100
+    value: 500
 
   vl_examples_per_epoch:
     value: 2_000
 
   tr_avg_per:
-    value: 1
+    value: 15
+
+  vl_avg_per:
+    value: 15
 
   numVal:
     value: 2_000
 
   numTr:
-    value: 200_000
+    value: 500_000
 
   numTe:
     value: 5_000
 
   inner_learner:
-    values: ["rtrl"]
+    values: ["bptt"]
 
   outer_learner:
     value: "rtrl"

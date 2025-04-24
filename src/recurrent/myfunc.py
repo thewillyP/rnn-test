@@ -1,5 +1,6 @@
-from typing import TypeVar, Callable, Generator, Iterator, Iterable
-from functools import reduce
+import itertools
+from typing import Callable, Iterable
+from toolz.curried import compose
 
 # from toolz.curried import curry, map, concat, compose
 # import itertools
@@ -37,6 +38,9 @@ def compose2[A, B, C](f: Callable[[A], B], g: Callable[[B], C]) -> Callable[[A],
         return g(f(a))
 
     return compose2_
+
+
+cycle_efficient = compose(itertools.chain.from_iterable, itertools.repeat)
 
 
 # def sequenceF2(
@@ -131,9 +135,6 @@ def compose2[A, B, C](f: Callable[[A], B], g: Callable[[B], C]) -> Callable[[A],
 # def mapTuple1(f, pair):
 #     a, b = pair
 #     return (f(a), b)
-
-
-# cycle_efficient = compose(itertools.chain.from_iterable, itertools.repeat)
 
 
 # def composeSnd(f: Callable[[A, B], C], g: Callable[[C], D]) -> Callable[[A, B], D]:

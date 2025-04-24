@@ -1,4 +1,4 @@
-from typing import Callable, Generator, NewType
+from typing import Callable, Generator, NewType, Protocol
 import jax
 import equinox as eqx
 from equinox import Module
@@ -40,6 +40,14 @@ REC_PARAM = NewType("REC_PARAM", jax.Array)  # is a vector
 
 LOSS = NewType("LOSS", jax.Array)  # is a scalar
 PRNG = NewType("PRNG", jax.Array)
+
+
+class Wrap[T](Protocol[T]):
+    value: T | jax.Array
+
+
+class IdentityF[T](Module):
+    value: T | jax.Array
 
 
 # smart constructor to let me know that some PyTrees are meant to be iterated

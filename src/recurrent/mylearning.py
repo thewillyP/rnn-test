@@ -34,14 +34,14 @@ class Library[Data, Interpreter, Env, Pred](NamedTuple):
     modelGradient: Controller[Data, Interpreter, Env, Gradient[REC_PARAM]]
 
 
-class CreateLearner(Protocol):
-    def createLearner[Data, Interpreter, Env, Pred](
+class CreateLearner[Data, Interpreter, Env, Pred, OutData: Wrap[Data], OutPred: Wrap[Pred]](Protocol):
+    def createLearner(
         self,
         activationStep: Controller[Data, Interpreter, Env, REC_STATE],
         readoutStep: Controller[Data, Interpreter, Env, Pred],
         lossFunction: LossFn[Pred, Data],
         lossGradientWrtActiv: Controller[Data, Interpreter, Env, Gradient[REC_STATE]],
-    ) -> Library[Data | Traversable[Data], Interpreter, Env, Pred | Traversable[Pred]]: ...
+    ) -> Library[OutData, Interpreter, Env, OutPred]: ...
 
 
 @eqx.filter_jit
@@ -177,22 +177,46 @@ def doGradient[Interpreter, Env, Wrt: jax.Array](
     return pure(Gradient[Wrt](jnp.ravel(grad)), PX[tuple[Interpreter, Env]]())
 
 
-def aggregateBatchedGradients[Interpreter, Env, Data](
-    gradientFn: Controller[Data, Interpreter, Env, Gradient[REC_PARAM]],
-    get_axes: Callable[[Env], Env],
-) -> Controller[Traversable[Data], Interpreter, Env, Gradient[REC_PARAM]]:
-    @do()
-    def batch(data: Traversable[Data]):
-        i = yield from ask(PX[Interpreter]())
-        env = yield from get(PX[Env]())
-        axes = get_axes(env)
-        f = lambda d, e: gradientFn(d).func(i, e)
-        gr: Gradient[REC_PARAM]
-        gr = eqx.filter_vmap(f, in_axes=(0, axes), out_axes=(0, axes))(data.value, env)
-        gr = Gradient(jnp.mean(gr.value, axis=0))
-        return pure(gr, PX[tuple[Interpreter, Env]]())
+# def foldrLibrary[Data, Interpreter: GetRecurrentParam[Env], Env, Pred](
+#     library: Library[Data, Interpreter, Env, Pred],
+# ) -> Library[Traversable[Data], Interpreter, Env, Traversable[Pred]]:
+#     @do()
+#     def modelGradient_(data: Traversable[Data]) -> G[Agent[Interpreter, Env, Gradient[REC_PARAM]]]:
+#         interpreter = yield from ask(PX[Interpreter]())
+#         param_shape: Gradient[REC_PARAM]
+#         param_shape = yield from interpreter.getRecurrentParam.fmap(lambda x: Gradient(jnp.zeros_like(x)))
 
-    return batch
+#         return accumulateM(library.modelGradient, add, param_shape)(data)
+
+#     return Library(
+#         model=traverseM(library.model),
+#         modelLossFn=accumulateM(library.modelLossFn, add, LOSS(jnp.array(0.0))),
+#         modelGradient=modelGradient_,
+#     )
+
+
+def aggregateBatchedGradients[Interpreter, Env, Data, Pred](
+    library: Library[Data, Interpreter, Env, Pred],
+    get_axes: Callable[[Env], Env],
+) -> Library[Traversable[Data], Interpreter, Env, Traversable[Pred]]:
+    def batch_fn[X](f: Controller[Data, Interpreter, Env, X], g: Callable[[X], X]):
+        @do()
+        def batch(data: Traversable[Data]):
+            i = yield from ask(PX[Interpreter]())
+            env = yield from get(PX[Env]())
+            axes = get_axes(env)
+            h = lambda d, e: f(d).func(i, e)
+            x, env = eqx.filter_vmap(h, in_axes=(0, axes), out_axes=(0, axes))(data.value, env)
+            _ = yield from put(env)
+            return pure(g(x), PX[tuple[Interpreter, Env]]())
+
+        return batch
+
+    return Library(
+        model=batch_fn(library.model, lambda x: Traversable(x)),
+        modelLossFn=batch_fn(library.modelLossFn, lambda x: LOSS(jnp.mean(x, axis=0))),
+        modelGradient=batch_fn(library.modelGradient, lambda x: Gradient(jnp.mean(x.value, axis=0))),
+    )
 
 
 def endowAveragedGradients[Interpreter: GetRecurrentParam[Env], Env, Data](
@@ -261,7 +285,7 @@ class IdentityLearner:
         readoutStep: Controller[Data, Interpreter, Env, Pred],
         lossFunction: LossFn[Pred, Data],
         _: Controller[Data, Interpreter, Env, Gradient[REC_STATE]],
-    ) -> Library[Data, Interpreter, Env, Pred]:
+    ) -> Library[IdentityF[Data], Interpreter, Env, IdentityF[Pred]]:
         @do()
         def rnnWithGradient() -> G[Agent[Interpreter, Env, Gradient[REC_PARAM]]]:
             interpreter = yield from ask(PX[Interpreter]())
@@ -269,10 +293,12 @@ class IdentityLearner:
             param_shape = yield from interpreter.getRecurrentParam.fmap(lambda x: Gradient(jnp.zeros_like(x)))
             return pure(param_shape, PX[tuple[Interpreter, Env]]())
 
-        return Library(
-            model=lambda data: activationStep(data).then(readoutStep(data)),
-            modelLossFn=lambda data: activationStep(data).then(readoutStep(data)).fmap(lambda p: lossFunction(p, data)),
-            modelGradient=lambda data: activationStep(data).then(rnnWithGradient()),
+        return Library[IdentityF[Data], Interpreter, Env, IdentityF[Pred]](
+            model=lambda data: activationStep(data.value).then(readoutStep(data.value)),
+            modelLossFn=lambda data: activationStep(data.value)
+            .then(readoutStep(data.value))
+            .fmap(lambda p: lossFunction(p, data.value)),
+            modelGradient=lambda data: activationStep(data.value).then(rnnWithGradient()),
         )
 
 
@@ -296,7 +322,7 @@ class OfflineLearning:
 
         @do()
         def rnnWithGradient(data: Traversable[Data]) -> G[Agent[Interpreter, Env, Gradient[REC_PARAM]]]:
-            interpreter: Interpreter = yield from ask(PX[Interpreter]())
+            interpreter = yield from ask(PX[Interpreter]())
             return doGradient(rnnWithLoss(data), interpreter.getRecurrentParam, interpreter.putRecurrentParam)
 
         return Library(
@@ -349,7 +375,7 @@ class PastFacingLearn(ABC):
         readoutStep: Controller[Data, Interpreter, Env, Pred],
         lossFunction: LossFn[Pred, Data],
         lossGradientWrtActiv: Controller[Data, Interpreter, Env, Gradient[REC_STATE]],
-    ) -> Library[Data, Interpreter, Env, Pred]:
+    ) -> Library[IdentityF[Data], Interpreter, Env, IdentityF[Pred]]:
         def immediateLoss(data: Data):
             return readoutStep(data).fmap(lambda p: lossFunction(p, data))
 
@@ -366,10 +392,10 @@ class PastFacingLearn(ABC):
 
             return pure(grad_rec + grad_readout, PX[tuple[Interpreter, Env]]())
 
-        return Library(
-            model=lambda data: activationStep(data).then(readoutStep(data)),
-            modelLossFn=lambda data: activationStep(data).then(immediateLoss(data)),
-            modelGradient=rnnGradient,
+        return Library[IdentityF[Data], Interpreter, Env, IdentityF[Pred]](
+            model=lambda data: activationStep(data.value).then(readoutStep(data.value)),
+            modelLossFn=lambda data: activationStep(data.value).then(immediateLoss(data.value)),
+            modelGradient=lambda data: rnnGradient(data.value),
         )
 
 
@@ -631,18 +657,17 @@ def endowBilevelOptimization[
     Env,
     Data,
     Pred,
+    OutData: Wrap[OhoData[Data]],
+    OutPred: Wrap[OhoData[Data]],
 ](
     library: Library[Data, TrainInterpreter, Env, Pred],
     paramFn: Callable[[Gradient[REC_PARAM]], Agent[TrainInterpreter, Env, Unit]],
     trainInterpreter: TrainInterpreter,
-    bilevelOptimizer: CreateLearner,
+    bilevelOptimizer: CreateLearner[OhoData[Data], OHO_Interpreter, Env, Pred, OutData, OutPred],
     computeLoss: LossFn[Pred, OhoData[Data]],
     resetEnvForValidation: Callable[[Env, PRNG], Env],
     grad_add_pad_by: int,
-) -> (
-    Library[OhoData[Data], OHO_Interpreter, Env, Pred]
-    | Library[Traversable[OhoData[Data]], OHO_Interpreter, Env, Traversable[Pred]]
-):
+) -> Library[OutData, OHO_Interpreter, Env, OutPred]:
     @do()
     def newActivationStep(oho_data: OhoData[Data]) -> G[Agent[OHO_Interpreter, Env, REC_PARAM]]:
         interpreter = yield from ask(PX[OHO_Interpreter]())

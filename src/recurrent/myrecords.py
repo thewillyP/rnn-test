@@ -20,7 +20,8 @@ class OhoData[Data](eqx.Module):
 
 
 class GodState(eqx.Module):
-    prng: PRNG
+    inner_prng: PRNG
+    outer_prng: PRNG
     start_epoch: int
     start_example: int
     innerTimeConstant: float = eqx.field(static=True)
@@ -77,11 +78,21 @@ class GodInterpreter:
     getUpdater: LocalApp[Callable[[optax.Params, optax.Updates], optax.Params]]
     getLearningRate: Callable[[GodState], float]
 
+    getPRNG: LocalApp[PRNG]
+    putPRNG: Callable[[PRNG], LocalApp[Unit]]
+
     @do()
     def updatePRNG(self) -> G[LocalApp[PRNG]]:
-        prng, new_prng = yield from gets(lambda e: prng_split(e.prng))
-        _ = yield from modifies(lambda e: eqx.tree_at(lambda t: t.prng, e, new_prng))
+        x = yield from self.getPRNG
+        prng, new_prng = prng_split(x)
+        _ = yield from self.putPRNG(new_prng)
         return pure(prng, PX[tuple[Self, GodState]]())
+
+    # @do()
+    # def updatePRNG(self) -> G[LocalApp[PRNG]]:
+    #     prng, new_prng = yield from gets(lambda e: prng_split(e.prng))
+    #     _ = yield from modifies(lambda e: eqx.tree_at(lambda t: t.prng, e, new_prng))
+    #     return pure(prng, PX[tuple[Self, GodState]]())
 
 
 @dataclass(frozen=True)
@@ -93,10 +104,12 @@ class SeedConfig:
 
 @dataclass(frozen=True)
 class GodConfig:
+    batch_or_online: Literal["batch", "online"]
+    batch_vl: int
+    batch_tr: int
     log_to_float16: bool
     log_influence: bool
     log_accumulate_influence: bool
-    data_load_size: int
     num_retrain_loops: int
     checkpoint_interval: int
     inner_learning_rate: float
@@ -106,11 +119,12 @@ class GodConfig:
     tr_examples_per_epoch: int
     vl_examples_per_epoch: int
     tr_avg_per: int
+    vl_avg_per: int
     numVal: int
     numTr: int
     numTe: int
-    inner_learner: Literal["rtrl", "uoro", "rflo", "identity"]
-    outer_learner: Literal["rtrl", "uoro", "rflo", "identity"]
+    inner_learner: Literal["rtrl", "uoro", "rflo", "identity", "bptt"]
+    outer_learner: Literal["rtrl", "uoro", "rflo", "identity", "bptt"]
     lossFn: Literal["cross_entropy"]
     inner_optimizer: Literal["sgd", "sgd_positive", "adam", "sgd_normalized", "sgd_clipped"]
     outer_optimizer: Literal["sgd", "sgd_positive", "adam", "sgd_normalized", "sgd_clipped"]
