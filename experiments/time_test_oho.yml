@@ -7,14 +7,20 @@ metric:
   goal: minimize
 parameters:
 
+  ffn_in:
+    value: 2
+
+  ffn_layers:
+    value: [[10, "relu"], [10, "relu"], [10, "softmax"]]
+
   batch_or_online: 
-    value: "batch"
+    value: "online"
   
   batch_vl: 
     value: 1
 
   batch_tr: 
-    value: 1_000
+    value: 1_000_000
 
   log_influence:
     value: True
@@ -26,19 +32,19 @@ parameters:
     value: True
 
   num_retrain_loops:
-    value: 100
+    value: 1
 
   checkpoint_interval:
-    value: 25
+    value: 1_0000
 
   inner_learning_rate:
-    values: [0.1]
+    values: [0.2]
 
   outer_learning_rate:
-    values: [1.e-6]
+    values: [5.e-5]
 
   ts:
-    values: [[10, 12]]
+    values: [[15, 17]]
 
   seed:
     values: [
@@ -95,28 +101,28 @@ parameters:
   ]
 
   tr_examples_per_epoch:
-    value: 500
+    value: 2_000
 
   vl_examples_per_epoch:
     value: 2_000
 
   tr_avg_per:
-    value: 500
+    value: 1
 
   vl_avg_per:
-    value: 2_000
+    value: 1
 
   numVal:
     value: 2_000
 
   numTr:
-    value: 500_000
+    value: 2_000_000
 
   numTe:
     value: 5_000
 
   inner_learner:
-    values: ["bptt"]
+    values: ["rtrl"]
 
   outer_learner:
     value: "rtrl"
@@ -125,7 +131,7 @@ parameters:
     value: "cross_entropy"
 
   inner_optimizer:
-    value: "sgd_clipped"
+    value: "sgd"
 
   outer_optimizer:
     value: "sgd_positive"
