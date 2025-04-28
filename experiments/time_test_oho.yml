@@ -14,13 +14,13 @@ parameters:
     value: [[10, "relu"], [10, "relu"], [10, "softmax"]]
 
   batch_or_online: 
-    value: "online"
+    value: "batch"
   
   batch_vl: 
     value: 1
 
   batch_tr: 
-    value: 1_000_000
+    value: 1_000
 
   log_influence:
     value: True
@@ -32,10 +32,10 @@ parameters:
     value: True
 
   num_retrain_loops:
-    value: 1
+    value: 5
 
   checkpoint_interval:
-    value: 1_0000
+    value: 51
 
   inner_learning_rate:
     values: [0.2]
@@ -101,31 +101,31 @@ parameters:
   ]
 
   tr_examples_per_epoch:
-    value: 2_000
+    value: 500
 
   vl_examples_per_epoch:
     value: 2_000
 
   tr_avg_per:
-    value: 1
+    value: 20
 
   vl_avg_per:
-    value: 1
+    value: 2_000
 
   numVal:
     value: 2_000
 
   numTr:
-    value: 2_000_000
+    value: 500_000
 
   numTe:
     value: 5_000
 
   inner_learner:
-    values: ["rtrl"]
+    values: ["bptt"]
 
   outer_learner:
-    value: "rtrl"
+    value: "identity"
 
   lossFn:
     value: "cross_entropy"
@@ -134,7 +134,7 @@ parameters:
     value: "sgd"
 
   outer_optimizer:
-    value: "sgd_positive"
+    value: "sgd"
 
   activation_fn:
     value: "tanh"
