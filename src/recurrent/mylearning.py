@@ -119,6 +119,25 @@ def soft_clipped_sgd(learning_rate, threshold, sharpness):
     )
 
 
+@do()
+def doFeedForwardStep[Interpreter, Env](_: InputOutput) -> G[Agent[Interpreter, Env, Unit]]:
+    return pure(Unit(), PX[tuple[Interpreter, Env]]())
+
+
+class _FFWD_Can[Env](
+    GetFeedForward[Env],
+    Protocol,
+): ...
+
+
+@do()
+def doFeedForwardReadout[Interpreter: _FFWD_Can[Env], Env](data: InputOutput) -> G[Agent[Interpreter, Env, PREDICTION]]:
+    interpreter = yield from ask(PX[Interpreter]())
+    model = yield from interpreter.getFeedForward
+    pred = PREDICTION(model(data.x))
+    return pure(pred, PX[tuple[Interpreter, Env]]())
+
+
 class _RnnActivation_Can[Env](
     GetActivation[Env],
     PutActivation[Env],

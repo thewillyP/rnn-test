@@ -14,6 +14,8 @@ import optax
 import joblib
 from dacite import from_dict, Config
 import torch
+from torchvision.datasets import MNIST
+
 
 from recurrent.batch import batch_env_form, to_batched_form
 from recurrent.mylearning import *
@@ -27,7 +29,7 @@ from recurrent.parameters import (
     SgdParameter,
     UORO_Param,
 )
-from recurrent.pytree_dataset import PyTreeDataset, jax_collate_fn
+from recurrent.pytree_dataset import PyTreeDataset, flatten_and_cast, jax_collate_fn, target_transform
 from recurrent.util import *
 from recurrent.myfunc import cycle_efficient
 
@@ -39,7 +41,16 @@ def runApp(
 ):
     with wandb.init(**wandb_kwargs) as run:
         config = from_dict(
-            data_class=GodConfig, data=load_config(run), config=Config(type_hooks={tuple[int, int]: tuple})
+            data_class=GodConfig,
+            data=load_config(run),
+            config=Config(
+                type_hooks={
+                    tuple[int, int]: tuple,
+                    tuple[tuple[int, Literal["tanh", "relu", "sigmoid", "identity", "softmax"]], ...]: lambda x: tuple(
+                        map(tuple, x)
+                    ),
+                }
+            ),
         )
         # RNG Stuff
         data_prng = PRNG(jax.random.key(config.seed.data_seed))
@@ -51,17 +62,51 @@ def runApp(
         torch.manual_seed(torch_seed)
 
         # IO Logging
-        lossFn = getLossFn(config)
+        _lossFn = getLossFn(config)
         checkpoint_fn = lambda env: save_checkpoint(env, f"env_{run.id}", "env.pkl")
         log_fn = lambda logs: save_object_as_wandb_artifact(
             logs, f"logs_{run.id}", "logs.pkl", "logs", to_float16=config.log_to_float16
         )
 
         # Dataset
-        tr_prng, vl_prng = jax.random.split(dataset_gen_prng, 2)
-        tr_dataset = adder_task(tr_prng, config, config.ts, config.numTr, config.tr_examples_per_epoch)
-        vl_dataset = adder_task(vl_prng, config, config.ts, config.numVal, config.vl_examples_per_epoch)
-        te_dataset = adder_task(test_prng, config, config.ts, config.numTe, config.numTe)
+        match config.dataset:
+            case "delay_add":
+                tr_prng, vl_prng = jax.random.split(dataset_gen_prng, 2)
+                tr_dataset = adder_task(tr_prng, config, config.ts, config.numTr, config.tr_examples_per_epoch)
+                vl_dataset = adder_task(vl_prng, config, config.ts, config.numVal, config.vl_examples_per_epoch)
+                te_dataset = adder_task(test_prng, config, config.ts, config.numTe, config.numTe)
+
+                lossFn = _lossFn
+            case "mnist":
+                dataset = MNIST(root=f"{config.data_root_dir}/data", train=True, download=True)
+                _te_dataset = MNIST(root=f"{config.data_root_dir}/data", train=False, download=True)
+                xs = jax.vmap(flatten_and_cast, in_axes=(0, None))(dataset.data.numpy(), config.n_in)
+                sequence_length = xs.shape[1]
+
+                ys = jax.vmap(target_transform, in_axes=(0, None))(dataset.targets.numpy(), sequence_length)
+                te_xs = jax.vmap(flatten_and_cast, in_axes=(0, None))(_te_dataset.data.numpy(), config.n_in)
+                te_ys = jax.vmap(target_transform, in_axes=(0, None))(_te_dataset.targets.numpy(), sequence_length)
+
+                perm = jax.random.permutation(dataset_gen_prng, len(xs))
+
+                split_idx = int(len(xs) * config.train_val_split_percent)
+                train_idx, val_idx = perm[:split_idx], perm[split_idx:]
+
+                xs_train, ys_train = xs[train_idx], ys[train_idx]
+                xs_val, ys_val = xs[val_idx], ys[val_idx]
+
+                tr_dataset = Traversable(Traversable(InputOutput(x=xs_train, y=ys_train)))
+                vl_dataset = Traversable(Traversable(InputOutput(x=xs_val, y=ys_val)))
+                te_dataset = Traversable(Traversable(InputOutput(x=te_xs, y=te_ys)))
+
+                def new_loss_fn(pred, target):
+                    label, idx = target
+                    return jax.lax.cond(idx == sequence_length - 1, lambda p: _lossFn(p, label), lambda _: 0.0, pred)
+
+                lossFn = new_loss_fn
+
+            case _:
+                raise ValueError("Invalid dataset")
 
         # Model
         _, innerInterpreter, outerInterpreter = create_env(config, env_prng)
@@ -90,14 +135,14 @@ def runApp(
                     return _tr_to_env(env, prng, config.batch_vl)
 
                 def tr_to_te_env(env: GodState, prng: PRNG) -> GodState:
-                    return _tr_to_env(env, prng, 1)
+                    return _tr_to_env(env, prng, te_dataset.value.value.x.shape[0])
 
                 def refresh_env(env: GodState) -> GodState:
                     _tr_prngs = jax.random.split(env.inner_prng[0], config.batch_tr)
                     _env = create_envs(config, _tr_prngs)
                     return to_batched_form(_env, env)
 
-                model = create_batched_model(
+                model, te_lossfn, innerLibrary = create_batched_model(
                     te_dataset, tr_to_val_env, tr_to_te_env, lossFn, tr_env, innerInterpreter, outerInterpreter, config
                 )
 
@@ -109,8 +154,52 @@ def runApp(
                     )
                 )
 
+                def getaccuracy(env):
+                    def _accuracy_seq_filter_single(
+                        preds: jnp.ndarray,  # [N, C]
+                        labels: jnp.ndarray,  # [N, 2]
+                        n: int,  # sequence number to filter
+                    ) -> float:
+                        class_indices = labels[:, 0].astype(jnp.int32)
+                        sequence_numbers = labels[:, 1].astype(jnp.int32)
+
+                        pred_classes = jnp.argmax(preds, axis=-1)
+                        correct = pred_classes == class_indices
+
+                        # Mask: 1 where sequence == n, else 0
+                        mask = (sequence_numbers == n).astype(jnp.float32)
+                        correct_masked = correct.astype(jnp.float32) * mask
+
+                        total = jnp.sum(mask)
+                        correct_total = jnp.sum(correct_masked)
+
+                        return jax.lax.cond(total > 0, lambda: correct_total / total, lambda: 0.0)
+
+                    # Vectorized over batch dimension: preds [B, N, C], labels [B, N, 2]
+                    batched_accuracy_with_sequence_filter = eqx.filter_vmap(
+                        _accuracy_seq_filter_single,
+                        in_axes=(0, 0, None),  # vmap over batch; n is shared
+                    )
+                    predictions, _ = innerLibrary.model(te_dataset).func(
+                        innerInterpreter, tr_to_te_env(env, env.outer_prng)
+                    )
+                    accuracy = batched_accuracy_with_sequence_filter(
+                        predictions.value.value, te_dataset.value.value.y, sequence_length - 1
+                    )
+                    return jnp.mean(accuracy)
+
                 train_loop_IO(
-                    tr_dataset, vl_dataset, combine_ds, model, tr_env, refresh_env, config, checkpoint_fn, log_fn
+                    tr_dataset,
+                    vl_dataset,
+                    combine_ds,
+                    model,
+                    tr_env,
+                    refresh_env,
+                    config,
+                    checkpoint_fn,
+                    log_fn,
+                    te_lossfn,
+                    getaccuracy,
                 )
 
             case "online":
@@ -141,7 +230,7 @@ def runApp(
                 #     _env: GodState = load_env(config, prng)
                 #     return to_batched_form(_env, env)
 
-                model = create_online_model(
+                model, _te_lossfn, _ = create_online_model(
                     te_dataset, tr_to_val_env, tr_to_te_env, lossFn, tr_env, innerInterpreter, outerInterpreter, config
                 )
 
@@ -154,7 +243,17 @@ def runApp(
                 )
 
                 train_loop_IO(
-                    tr_dataset, vl_dataset, combine_ds, model, tr_env, refresh_env, config, checkpoint_fn, log_fn
+                    tr_dataset,
+                    vl_dataset,
+                    combine_ds,
+                    model,
+                    tr_env,
+                    refresh_env,
+                    config,
+                    checkpoint_fn,
+                    log_fn,
+                    te_lossfn,
+                    lambda _: 0,
                 )
 
             case _:
@@ -220,6 +319,8 @@ def getLossFn(config: GodConfig) -> Callable[[jax.Array, jax.Array], LOSS]:
     match config.lossFn:
         case "cross_entropy":
             return lambda a, b: LOSS(optax.safe_softmax_cross_entropy(a, b))
+        case "cross_entropy_with_integer_labels":
+            return lambda a, b: LOSS(optax.losses.softmax_cross_entropy_with_integer_labels(a, b))
         case _:
             raise ValueError("Invalid loss function")
 
@@ -227,7 +328,7 @@ def getLossFn(config: GodConfig) -> Callable[[jax.Array, jax.Array], LOSS]:
 def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter, GodInterpreter]:
     # These don't care how env is created, just tags all possible parameter/states and vectorizes them
     inner_states = [lambda s: s.rnnState.activation]
-    inner_params = [lambda s: s.rnnState.rnnParameter]
+    inner_params = [lambda s: s.rnnState.rnnParameter, lambda s: s.feedforwardState]
     outer_states = inner_params + [lambda s: s.innerOptState]  # VERY IMPORTANT COMES FIRST
     if config.batch_or_online == "online":
         outer_states += [
@@ -257,7 +358,7 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
     def putter[T](env: GodState, f: Callable[[GodState], T], value: T) -> GodState:
         return eqx.tree_at(f, env, value, is_leaf=lambda x: x is None)
 
-    prng1, prng2, prng3, prng4, prng5, prng6, prng7, prng8, prng9, prng10, prng11 = jax.random.split(prng, 11)
+    prng1, prng2, prng3, prng4, prng5, prng6, prng7, prng8, prng9, prng10, prng11, prng12 = jax.random.split(prng, 12)
     inner_prng, outer_prng = jax.random.split(prng1, 2)
     env = GodState(
         inner_prng=inner_prng,
@@ -313,6 +414,26 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
                     )
                 )
                 env = putter(env, lambda s: s.innerUoro, UORO_Param(A=a_init, B=b_init))
+        case "ffn":
+
+            def map2Fn(str) -> Callable[[jax.Array], jax.Array]:
+                match str:
+                    case "tanh":
+                        return jax.nn.tanh
+                    case "relu":
+                        return jax.nn.relu
+                    case "sigmoid":
+                        return jax.nn.sigmoid
+                    case "identity":
+                        return lambda x: x
+                    case "softmax":
+                        return jax.nn.softmax
+                    case _:
+                        raise ValueError("Invalid activation function")
+
+                layers = list(map(lambda x: (x[0], map2Fn(x[1])), config.ffn_layers))
+                ffn = CustomSequential(layers, config.ffn_in, prng12)
+                env = putter(env, lambda s: s.feedforwardState, ffn)
 
         case _:
             raise ValueError("Invalid architecture")
@@ -356,9 +477,9 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
 
         match opt_config.optimizer:
             case "sgd" | "sgd_positive" | "sgd_normalized" | "sgd_clipped":
-                param = SgdParameter(learning_rate=reparam_inverse(opt_config.learning_rate))
+                param = SgdParameter(learning_rate=reparam_inverse(jnp.array(opt_config.learning_rate)))
             case "adam":
-                param = AdamParameter(learning_rate=reparam_inverse(opt_config.learning_rate))
+                param = AdamParameter(learning_rate=reparam_inverse(jnp.array(opt_config.learning_rate)))
             case _:
                 raise ValueError(f"Invalid optimizer")
 
@@ -528,6 +649,7 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
         getLearningRate=lambda s: inner_param_fn(inner_get_lr(s, config.inner_optimizer)),
         getPRNG=monadic_getter(lambda s: s.inner_prng),
         putPRNG=monadic_putter(lambda s: s.inner_prng),
+        getFeedForward=monadic_getter(lambda s: s.feedforwardState),
     )
 
     outerInterpreter = GodInterpreter(
@@ -555,6 +677,7 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
         getLearningRate=lambda s: outer_param_fn(outer_get_lr(s, config.outer_optimizer)),
         getPRNG=monadic_getter(lambda s: s.outer_prng),
         putPRNG=monadic_putter(lambda s: s.outer_prng),
+        getFeedForward=pure(None, PX[tuple[GodInterpreter, GodState]]()),
     )
 
     return env, innerInterpreter, outerInterpreter
@@ -671,25 +794,37 @@ def create_learner(
 
 
 def create_rnn_learner(
-    learner: RTRL | RFLO | UORO | IdentityLearner | OfflineLearning, lossFn: Callable[[jax.Array, jax.Array], LOSS]
+    learner: RTRL | RFLO | UORO | IdentityLearner | OfflineLearning,
+    lossFn: Callable[[jax.Array, jax.Array], LOSS],
+    arch: Literal["rnn", "ffn"],
 ) -> Library[Traversable[InputOutput], GodInterpreter, GodState, Traversable[PREDICTION]]:
+    match arch:
+        case "rnn":
+            stepFn = lambda d: doRnnStep(d).then(ask(PX[GodInterpreter]())).flat_map(lambda i: i.getRecurrentState)
+            readoutFn = doRnnReadout
+        case "ffn":
+            stepFn = (
+                lambda d: doFeedForwardStep(d).then(ask(PX[GodInterpreter]())).flat_map(lambda i: i.getRecurrentState)
+            )
+            readoutFn = doFeedForwardReadout
+
     lfn = lambda a, b: lossFn(a, b.y)
     match learner:
         case OfflineLearning():
             bptt_library: Library[Traversable[InputOutput], GodInterpreter, GodState, Traversable[PREDICTION]]
             bptt_library = learner.createLearner(
-                lambda d: doRnnStep(d).then(ask(PX[GodInterpreter]())).flat_map(lambda i: i.getRecurrentState),
-                doRnnReadout,
+                stepFn,
+                readoutFn,
                 lfn,
-                readoutRecurrentError(doRnnReadout, lfn),
+                readoutRecurrentError(readoutFn, lfn),
             )
             return bptt_library
         case _:
             # library: Library[InputOutput, GodInterpreter, GodState, PREDICTION]
             _library: Library[IdentityF[InputOutput], GodInterpreter, GodState, IdentityF[PREDICTION]]
             _library = learner.createLearner(
-                lambda d: doRnnStep(d).then(ask(PX[GodInterpreter]())).flat_map(lambda i: i.getRecurrentState),
-                doRnnReadout,  # these can be passed in dynamically later
+                stepFn,
+                readoutFn,
                 lfn,
                 readoutRecurrentError(doRnnReadout, lfn),
             )
@@ -711,6 +846,8 @@ def train_loop_IO[D](
     config: GodConfig,
     checkpoint_fn: Callable[[GodState], None],
     log_fn: Callable[[AllLogs], None],
+    te_loss: Callable[[GodState], LOSS],
+    statistic: Callable[[GodState], float],
 ) -> None:
     tr_dataset = PyTreeDataset(tr_dataset)
     vl_dataset = PyTreeDataset(vl_dataset)
@@ -718,7 +855,9 @@ def train_loop_IO[D](
     if config.batch_or_online == "batch":
         vl_batch_size = config.batch_vl
         vl_sampler = RandomSampler(vl_dataset)
-        tr_dl = lambda b: DataLoader(b, batch_size=config.batch_tr, shuffle=True, collate_fn=jax_collate_fn)
+        tr_dl = lambda b: DataLoader(
+            b, batch_size=config.batch_tr, shuffle=True, collate_fn=jax_collate_fn, drop_last=True
+        )
         # doesn't make sense to do this in batch case. batch=subsequence in online
         env = copy.replace(env, start_example=0)
     else:
@@ -726,7 +865,9 @@ def train_loop_IO[D](
         vl_sampler = RandomSampler(vl_dataset, replacement=True, num_samples=len(tr_dataset))
         tr_dl = lambda b: DataLoader(b, batch_size=config.batch_tr, shuffle=False, collate_fn=jax_collate_fn)
 
-    vl_dataloader = DataLoader(vl_dataset, batch_size=vl_batch_size, sampler=vl_sampler, collate_fn=jax_collate_fn)
+    vl_dataloader = DataLoader(
+        vl_dataset, batch_size=vl_batch_size, sampler=vl_sampler, collate_fn=jax_collate_fn, drop_last=True
+    )
     vl_dataloader = cycle_efficient(vl_dataloader)
 
     start = time.time()
@@ -740,19 +881,7 @@ def train_loop_IO[D](
         for i, (tr_batch, vl_batch) in enumerate(zip(tr_dataloader, vl_dataloader)):
             ds_batch = to_combined_ds(tr_batch, vl_batch)
             batch_size = len(jax.tree.leaves(ds_batch)[0])
-
-            # print(env.innerSgdParameter.learning_rate, jnp.dtype(env.innerSgdParameter.learning_rate))
-            # print(env.outerSgdParameter.learning_rate, jnp.dtype(env.outerSgdParameter.learning_rate))
             env = refresh_env(env)
-            # print(
-            #     env.innerSgdParameter.learning_rate,
-            #     jnp.dtype(env.innerSgdParameter.learning_rate) if epoch != 0 or i != 0 else None,
-            # )
-            # print(
-            #     env.outerSgdParameter.learning_rate,
-            #     jnp.dtype(env.outerSgdParameter.learning_rate) if epoch != 0 or i != 0 else None,
-            # )
-
             logs, env = model(ds_batch, env)
 
             env = eqx.tree_at(lambda t: t.start_example, env, env.start_example + batch_size)
@@ -766,6 +895,10 @@ def train_loop_IO[D](
                         outer_prng=jax.random.key_data(env.outer_prng),
                     )
                 )
+
+            print(
+                f"Batch {i + 1}/{len(tr_dataloader)}, Loss: {logs.value.train_loss[-1]}, LR: {logs.value.inner_learning_rate[-1]}"
+            )
 
         # env = eqx.tree_at(lambda t: t.start_epoch, env, epoch + 1)
         env = eqx.tree_at(lambda t: t.start_example, env, 0)
@@ -823,6 +956,12 @@ def train_loop_IO[D](
             }
         )
 
+    ee = te_loss(env)
+    eee = statistic(env)
+    print(ee)
+    print(eee)
+    wandb.log({"test_loss": ee, "test_statistic": eee})
+
 
 def create_online_model(
     test_dataset: Traversable[InputOutput],
@@ -833,9 +972,12 @@ def create_online_model(
     innerInterpreter: GodInterpreter,
     outerInterpreter: GodInterpreter,
     config: GodConfig,
-) -> Callable[[Traversable[OhoData[Traversable[InputOutput]]], GodState], tuple[Traversable[AllLogs], GodState]]:
+) -> tuple[
+    Callable[[Traversable[OhoData[Traversable[InputOutput]]], GodState], tuple[Traversable[AllLogs], GodState]],
+    Callable[[GodState], LOSS],
+]:
     innerLearner = create_learner(config.inner_learner, False, config.inner_uoro_std)
-    innerLibrary = create_rnn_learner(innerLearner, lossFn)
+    innerLibrary = create_rnn_learner(innerLearner, lossFn, config.architecture)
     outerLearner = create_learner(config.outer_learner, True, config.outer_uoro_std)
 
     innerController = endowAveragedGradients(innerLibrary.modelGradient, config.tr_avg_per)
@@ -983,7 +1125,11 @@ def create_online_model(
                 return pure(log, PX[tuple[GodInterpreter, GodState]]())
 
             model = eqx.filter_jit(lambda d, e: traverseM(updateStep)(d).func(outerInterpreter, e))
-            return model
+            return (
+                model,
+                lambda env: validation_model(test_dataset)(innerInterpreter, tr_to_te_env(env, env.outer_prng))[0],
+                innerLibrary,
+            )
 
 
 def create_batched_model(
@@ -995,9 +1141,12 @@ def create_batched_model(
     innerInterpreter: GodInterpreter,
     outerInterpreter: GodInterpreter,
     config: GodConfig,
-) -> Callable[[OhoData[Traversable[Traversable[InputOutput]]], GodState], tuple[Traversable[AllLogs], GodState]]:
+) -> tuple[
+    Callable[[OhoData[Traversable[Traversable[InputOutput]]], GodState], tuple[Traversable[AllLogs], GodState]],
+    Callable[[GodState], LOSS],
+]:
     innerLearner = create_learner(config.inner_learner, False, config.inner_uoro_std)
-    innerLibrary = create_rnn_learner(innerLearner, lossFn)
+    innerLibrary = create_rnn_learner(innerLearner, lossFn, config.architecture)
     outerLearner = create_learner(config.outer_learner, True, config.outer_uoro_std)
 
     innerController = endowAveragedGradients(innerLibrary.modelGradient, config.tr_avg_per)
@@ -1023,12 +1172,15 @@ def create_batched_model(
                 GodState,
                 IdentityF[Traversable[Traversable[PREDICTION]]],
             ]
+
             outerLibrary = endowBilevelOptimization(
                 innerLibrary,
                 doOptimizerStep,
                 innerInterpreter,
                 outerLearner,
-                lambda a, b: LOSS(jnp.mean(lossFn(a.value.value, b.validation.value.value.y))),
+                lambda a, b: LOSS(
+                    jnp.mean(eqx.filter_vmap(eqx.filter_vmap(lossFn))(a.value.value, b.validation.value.value.y))
+                ),
                 tr_to_val_env,
                 pad_val_grad_by,
             )
@@ -1044,9 +1196,10 @@ def create_batched_model(
                 hyperparameters = yield from interpreter.getRecurrentParam
                 weights, _ = innerInterpreter.getRecurrentParam.func(innerInterpreter, env)
 
-                te, _ = validation_model(test_dataset)(innerInterpreter, tr_to_te_env(env, env.outer_prng))
+                # te, _ = validation_model(test_dataset)(innerInterpreter, tr_to_te_env(env, env.outer_prng))
                 vl, _ = validation_model(oho_data.validation)(innerInterpreter, tr_to_val_env(env, env.outer_prng))
                 tr, _ = innerLibrary.modelLossFn(oho_data.payload).func(innerInterpreter, env)
+                te = 0
 
                 _ = yield from outerLibrary.modelGradient(IdentityF(oho_data)).flat_map(doOptimizerStep)
 
@@ -1081,4 +1234,34 @@ def create_batched_model(
                 return pure(logs, PX[tuple[GodInterpreter, GodState]]())
 
             model = eqx.filter_jit(lambda d, e: updateStep(d).func(outerInterpreter, e))
-            return model
+            return (
+                model,
+                lambda env: validation_model(test_dataset)(innerInterpreter, tr_to_te_env(env, env.outer_prng))[0],
+                innerLibrary,
+            )
+
+
+def accuracy_hard(preds: jnp.ndarray, labels: jnp.ndarray) -> float:
+    pred_classes = jnp.argmax(preds, axis=-1)
+    return jnp.mean(pred_classes == labels).item()
+
+
+def accuracy_soft(preds: jnp.ndarray, labels: jnp.ndarray) -> float:
+    pred_classes = jnp.argmax(preds, axis=-1)
+    true_classes = jnp.argmax(labels, axis=-1)
+    return jnp.mean(pred_classes == true_classes).item()
+
+
+def accuracy_with_sequence_filter(preds: jnp.ndarray, labels: jnp.ndarray, n: int) -> float:
+    class_indices = labels[0]
+    sequence_numbers = labels[1]
+    pred_classes = jnp.argmax(preds, axis=-1)
+
+    mask = sequence_numbers == n
+    filtered_preds = pred_classes[mask]
+    filtered_labels = class_indices[mask]
+
+    if filtered_labels.size == 0:
+        return float("nan")
+
+    return jnp.mean(filtered_preds == filtered_labels).item()

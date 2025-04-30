@@ -6,11 +6,11 @@ import equinox as eqx
 
 
 class SgdParameter(eqx.Module):
-    learning_rate: float
+    learning_rate: jax.Array
 
 
 class AdamParameter(eqx.Module):
-    learning_rate: float
+    learning_rate: jax.Array
 
 
 class RnnParameter(eqx.Module):
@@ -77,3 +77,22 @@ class AllLogs(eqx.Module):
     hessian: jax.Array | None
     rnn_activation_norm: jax.Array | None
     immediate_influence_tensor: jax.Array | None
+
+
+class CustomSequential(eqx.Module):
+    model: eqx.nn.Sequential
+
+    def __init__(self, layer_defs: list[tuple[int, Callable[[jax.Array], jax.Array]]], input_size: int, key: PRNG):
+        layers = []
+        in_size = input_size
+        layer_keys = jax.random.split(key, len(layer_defs))
+
+        for (out_size, activation), k in zip(layer_defs, layer_keys):
+            layers.append(eqx.nn.Linear(in_size, out_size, key=k))
+            layers.append(eqx.nn.Lambda(activation))
+            in_size = out_size
+
+        self.model = eqx.nn.Sequential(layers)
+
+    def __call__(self, x):
+        return self.model(x)
