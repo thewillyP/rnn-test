@@ -57,18 +57,20 @@ class Traversable[T: Module](Module):
 
 class IsVector[T](Module):
     vector: jax.Array
+    nonparams: T
     toParam: Callable[[jax.Array], T] = eqx.field(static=True)
 
 
 def invmap[T: CanDiff](canVec: T, f: Callable[[jax.Array], jax.Array]):
     vectorized = endowVector(canVec)
     new_vector = f(vectorized.vector)
-    return vectorized.toParam(new_vector)
+    return eqx.combine(vectorized.toParam(new_vector), vectorized.nonparams)
 
 
 def endowVector[T: CanDiff](tree: T) -> IsVector[T]:
-    vector, toParam = jax.flatten_util.ravel_pytree(tree)
-    return IsVector(vector=vector, toParam=toParam)
+    params, nonparams = eqx.partition(tree, eqx.is_array)
+    vector, toParam = jax.flatten_util.ravel_pytree(params)
+    return IsVector(vector=vector, nonparams=nonparams, toParam=toParam)
 
 
 def toVector[T: CanDiff](isVector: IsVector[T]) -> jax.Array:
@@ -76,4 +78,4 @@ def toVector[T: CanDiff](isVector: IsVector[T]) -> jax.Array:
 
 
 def toParam[T: CanDiff](isVector: IsVector[T]) -> T:
-    return isVector.toParam(isVector.vector)
+    return eqx.combine(isVector.toParam(isVector.vector), isVector.nonparams)

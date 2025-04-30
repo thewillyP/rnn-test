@@ -6,6 +6,16 @@ metric:
   name: test_loss
   goal: minimize
 parameters:
+
+  train_val_split_percent:
+    value: 0.95
+
+  data_root_dir:
+    value: "/wandb_data"
+
+  dataset:
+    value: "mnist"
+
   ffn_in:
     value: 2
 
@@ -16,13 +26,13 @@ parameters:
     value: "batch"
 
   batch_vl:
-    value: 1
+    value: 100
 
   batch_tr:
-    value: 1_000
+    value: 100
 
   log_influence:
-    value: True
+    value: False
 
   log_accumulate_influence:
     value: False
@@ -31,13 +41,13 @@ parameters:
     value: True
 
   num_retrain_loops:
-    value: 100
+    value: 1
 
   checkpoint_interval:
-    value: 51
+    value: 100000
 
   inner_learning_rate:
-    values: [0.050632309]
+    values: [0.001]
 
   outer_learning_rate:
     values: [0]
@@ -55,37 +65,37 @@ parameters:
     ]
 
   tr_examples_per_epoch:
-    value: 500
+    value: 1
 
   vl_examples_per_epoch:
-    value: 2_000
+    value: 1
 
   tr_avg_per:
-    value: 1
+    value: 28
 
   vl_avg_per:
-    value: 1
+    value: 28
 
   numVal:
-    value: 2_000
+    value: 1
 
   numTr:
-    value: 500_000
+    value: 1
 
   numTe:
-    value: 5_000
+    value: 1
 
   inner_learner:
-    values: ["rtrl"]
+    values: ["bptt"]
 
   outer_learner:
     value: "identity"
 
   lossFn:
-    value: "cross_entropy"
+    value: "cross_entropy_with_integer_labels"
 
   inner_optimizer:
-    value: "sgd"
+    value: "adam"
 
   outer_optimizer:
     value: "sgd"
@@ -97,13 +107,13 @@ parameters:
     value: "rnn"
 
   n_h:
-    value: 32
+    value: 128
 
   n_in:
-    value: 2
+    value: 28
 
   n_out:
-    value: 2
+    value: 10
 
   inner_time_constant:
     value: 1

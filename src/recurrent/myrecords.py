@@ -30,6 +30,7 @@ class GodState(eqx.Module):
 
     # Inner fields
     rnnState: Optional[RnnState] = eqx.field(default=None)
+    feedforwardState: Optional[CustomSequential] = eqx.field(default=None)
     innerInfluenceTensor: Optional[JACOBIAN] = eqx.field(default=None)
     innerUoro: Optional[UORO_Param] = eqx.field(default=None)
     innerLogs: Optional[Logs] = eqx.field(default=None)
@@ -72,6 +73,8 @@ class GodInterpreter:
     getRnnParameter: LocalApp[RnnParameter]
     putRnnParameter: Callable[[RnnParameter], LocalApp[Unit]]
 
+    getFeedForward: LocalApp[CustomSequential]
+
     getOptState: LocalApp[optax.OptState]
     putOptState: Callable[[optax.OptState], LocalApp[Unit]]
     getOptimizer: LocalApp[optax.GradientTransformation]
@@ -104,6 +107,9 @@ class SeedConfig:
 
 @dataclass(frozen=True)
 class GodConfig:
+    train_val_split_percent: float
+    data_root_dir: str
+    dataset: Literal["mnist", "delay_add"]
     batch_or_online: Literal["batch", "online"]
     batch_vl: int
     batch_tr: int
@@ -125,13 +131,15 @@ class GodConfig:
     numTe: int
     inner_learner: Literal["rtrl", "uoro", "rflo", "identity", "bptt"]
     outer_learner: Literal["rtrl", "uoro", "rflo", "identity", "bptt"]
-    lossFn: Literal["cross_entropy"]
+    lossFn: Literal["cross_entropy", "cross_entropy_with_integer_labels"]
     inner_optimizer: Literal["sgd", "sgd_positive", "adam", "sgd_normalized", "sgd_clipped"]
     outer_optimizer: Literal["sgd", "sgd_positive", "adam", "sgd_normalized", "sgd_clipped"]
     inner_optimizer_parametrization: Literal["identity", "softplus"]
     outer_optimizer_parametrization: Literal["identity", "softplus"]
     activation_fn: Literal["tanh", "relu"]
-    architecture: Literal["rnn"]
+    architecture: Literal["rnn", "ffn"]
+    ffn_in: int
+    ffn_layers: tuple[tuple[int, Literal["tanh", "relu", "sigmoid", "identity", "softmax"]], ...]
     n_h: int
     n_in: int
     n_out: int

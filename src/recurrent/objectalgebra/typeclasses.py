@@ -117,3 +117,8 @@ class GetPRNG[Env](Protocol):
 class GetTimeConstant[Env](Protocol):
     @property
     def getTimeConstant(self) -> App[Self, Env, float]: ...
+
+
+class GetFeedForward[Env](Protocol):
+    @property
+    def getFeedForward(self) -> App[Self, Env, CustomSequential]: ...

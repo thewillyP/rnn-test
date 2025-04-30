@@ -27,4 +27,5 @@ source ~/.secrets/env.sh
 singularity run --nv --containall --cleanenv --writable-tmpfs \
   --env WANDB_API_KEY=${WANDB_API_KEY} \
   --bind /scratch/${USER}/wandb:/wandb_data \
+  --bind /scratch/${USER}/space:/dump \
   /scratch/${USER}/images/rnn-test-${VARIANT}.sif ${WANDB_SWEEP_ID} http://${SWEEP_HOST}:${SWEEP_PORT}
