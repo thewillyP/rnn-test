@@ -158,35 +158,35 @@ def runApp(
                     def _accuracy_seq_filter_single(
                         preds: jnp.ndarray,  # [N, C]
                         labels: jnp.ndarray,  # [N, 2]
-                        n: int,  # sequence number to match
+                        n: int,  # sequence number to filter
                     ) -> float:
                         class_indices = labels[:, 0].astype(jnp.int32)
                         sequence_numbers = labels[:, 1].astype(jnp.int32)
 
                         pred_classes = jnp.argmax(preds, axis=-1)
-                        mask = sequence_numbers == n
+                        correct = pred_classes == class_indices
 
-                        filtered_preds = pred_classes[mask]
-                        filtered_labels = class_indices[mask]
+                        # Mask: 1 where sequence == n, else 0
+                        mask = (sequence_numbers == n).astype(jnp.float32)
+                        correct_masked = correct.astype(jnp.float32) * mask
 
-                        def compute_acc():
-                            return jnp.mean(filtered_preds == filtered_labels)
+                        total = jnp.sum(mask)
+                        correct_total = jnp.sum(correct_masked)
 
-                        def return_nan():
-                            return float("nan")
-
-                        return jax.lax.cond(filtered_labels.size > 0, compute_acc, return_nan)
+                        return jax.lax.cond(total > 0, lambda: correct_total / total, lambda: 0.0)
 
                     # Vectorized over batch dimension: preds [B, N, C], labels [B, N, 2]
                     batched_accuracy_with_sequence_filter = eqx.filter_vmap(
                         _accuracy_seq_filter_single,
                         in_axes=(0, 0, None),  # vmap over batch; n is shared
                     )
-                    predictions = innerLibrary.model(te_dataset).func(innerLibrary, tr_to_te_env(env, env.outer_prng))
-                    accuracy = batched_accuracy_with_sequence_filter(
-                        predictions.value.value, te_dataset.value.value.y, sequence_length
+                    predictions, _ = innerLibrary.model(te_dataset).func(
+                        innerInterpreter, tr_to_te_env(env, env.outer_prng)
                     )
-                    return accuracy
+                    accuracy = batched_accuracy_with_sequence_filter(
+                        predictions.value.value, te_dataset.value.value.y, sequence_length - 1
+                    )
+                    return jnp.mean(accuracy)
 
                 train_loop_IO(
                     tr_dataset,
@@ -896,7 +896,9 @@ def train_loop_IO[D](
                     )
                 )
 
-            print(f"Batch {i + 1}/{len(tr_dataloader)}, Loss: {logs.value.train_loss[-1]}")
+            print(
+                f"Batch {i + 1}/{len(tr_dataloader)}, Loss: {logs.value.train_loss[-1]}, LR: {logs.value.inner_learning_rate[-1]}"
+            )
 
         # env = eqx.tree_at(lambda t: t.start_epoch, env, epoch + 1)
         env = eqx.tree_at(lambda t: t.start_example, env, 0)
@@ -954,7 +956,11 @@ def train_loop_IO[D](
             }
         )
 
-    wandb.log({"test_loss": te_loss(env), "statistic": statistic(env)})
+    ee = te_loss(env)
+    eee = statistic(env)
+    print(ee)
+    print(eee)
+    wandb.log({"test_loss": ee, "test_statistic": eee})
 
 
 def create_online_model(
@@ -1166,12 +1172,15 @@ def create_batched_model(
                 GodState,
                 IdentityF[Traversable[Traversable[PREDICTION]]],
             ]
+
             outerLibrary = endowBilevelOptimization(
                 innerLibrary,
                 doOptimizerStep,
                 innerInterpreter,
                 outerLearner,
-                lambda a, b: LOSS(jnp.mean(lossFn(a.value.value, b.validation.value.value.y))),
+                lambda a, b: LOSS(
+                    jnp.mean(eqx.filter_vmap(eqx.filter_vmap(lossFn))(a.value.value, b.validation.value.value.y))
+                ),
                 tr_to_val_env,
                 pad_val_grad_by,
             )
@@ -1188,10 +1197,9 @@ def create_batched_model(
                 weights, _ = innerInterpreter.getRecurrentParam.func(innerInterpreter, env)
 
                 # te, _ = validation_model(test_dataset)(innerInterpreter, tr_to_te_env(env, env.outer_prng))
-                # vl, _ = validation_model(oho_data.validation)(innerInterpreter, tr_to_val_env(env, env.outer_prng))
+                vl, _ = validation_model(oho_data.validation)(innerInterpreter, tr_to_val_env(env, env.outer_prng))
                 tr, _ = innerLibrary.modelLossFn(oho_data.payload).func(innerInterpreter, env)
                 te = 0
-                vl = 0
 
                 _ = yield from outerLibrary.modelGradient(IdentityF(oho_data)).flat_map(doOptimizerStep)
 

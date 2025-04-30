@@ -8,7 +8,7 @@ metric:
 parameters:
 
   train_val_split_percent:
-    value: 0.95
+    value: 0.60
 
   data_root_dir:
     value: "/wandb_data"
@@ -47,10 +47,10 @@ parameters:
     value: 100000
 
   inner_learning_rate:
-    values: [0.001]
+    values: [0.031]
 
   outer_learning_rate:
-    values: [0]
+    values: [2.e-5]
 
   ts:
     values: [[14, 16]]
@@ -95,10 +95,10 @@ parameters:
     value: "cross_entropy_with_integer_labels"
 
   inner_optimizer:
-    value: "adam"
+    value: "sgd"
 
   outer_optimizer:
-    value: "sgd"
+    value: "sgd_positive"
 
   activation_fn:
     value: "tanh"
