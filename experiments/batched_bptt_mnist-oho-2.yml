@@ -1,0 +1,262 @@
+program: /rnn-test/src/main.py
+name: batched_bptt_mnist-oho-2
+method: grid
+version: 1.0.58
+metric:
+  name: test_loss
+  goal: minimize
+parameters:
+
+  train_val_split_percent:
+    value: 0.60
+
+  data_root_dir:
+    value: "/wandb_data"
+
+  dataset:
+    value: "mnist"
+
+  ffn_layers:
+    value: [[128, "relu"], [64, "relu"], [10, "softmax"]]
+
+  batch_or_online:
+    value: "batch"
+
+  batch_vl:
+    value: 100
+
+  batch_tr:
+    value: 100
+
+  log_influence:
+    value: False
+
+  log_accumulate_influence:
+    value: False
+
+  log_to_float16:
+    value: True
+
+  num_retrain_loops:
+    value: 3
+
+  checkpoint_interval:
+    value: 100000
+
+  inner_learning_rate:
+    values: [0.4, 0.01, 0.001]
+
+  outer_learning_rate:
+    values: [1.e-6]
+
+  ts:
+    values: [[0, 2]]
+
+  seed:
+    values: [
+      {
+        "data_seed": 134,
+        "parameter_seed": 64,
+        "test_seed": 12345
+      },
+      {
+        "data_seed": 156,
+        "parameter_seed": 83,
+        "test_seed": 12345
+      },
+      {
+        "data_seed": 144,
+        "parameter_seed": 113,
+        "test_seed": 12345
+      },
+      {
+        "data_seed": 119,
+        "parameter_seed": 63,
+        "test_seed": 12345
+      },
+      {
+        "data_seed": 197,
+        "parameter_seed": 1,
+        "test_seed": 12345
+      },
+      {
+        "data_seed": 99,
+        "parameter_seed": 57,
+        "test_seed": 12345
+      },
+      {
+        "data_seed": 48,
+        "parameter_seed": 30,
+        "test_seed": 12345
+      },
+      {
+        "data_seed": 86,
+        "parameter_seed": 95,
+        "test_seed": 12345
+      },
+      {
+        "data_seed": 198,
+        "parameter_seed": 112,
+        "test_seed": 12345
+      },
+      {
+        "data_seed": 158,
+        "parameter_seed": 197,
+        "test_seed": 12345
+      },
+      {
+        "data_seed": 121,
+        "parameter_seed": 66,
+        "test_seed": 12345
+      },
+      {
+        "data_seed": 162,
+        "parameter_seed": 191,
+        "test_seed": 12345
+      },
+      {
+        "data_seed": 83,
+        "parameter_seed": 45,
+        "test_seed": 12345
+      },
+      {
+        "data_seed": 19,
+        "parameter_seed": 98,
+        "test_seed": 12345
+      },
+      {
+        "data_seed": 47,
+        "parameter_seed": 111,
+        "test_seed": 12345
+      },
+      {
+        "data_seed": 124,
+        "parameter_seed": 28,
+        "test_seed": 12345
+      },
+      {
+        "data_seed": 40,
+        "parameter_seed": 114,
+        "test_seed": 12345
+      },
+      {
+        "data_seed": 34,
+        "parameter_seed": 72,
+        "test_seed": 12345
+      },
+      {
+        "data_seed": 41,
+        "parameter_seed": 99,
+        "test_seed": 12345
+      },
+      {
+        "data_seed": 152,
+        "parameter_seed": 13,
+        "test_seed": 12345
+      }
+    ]
+
+  tr_examples_per_epoch:
+    value: 1
+
+  vl_examples_per_epoch:
+    value: 1
+
+  tr_avg_per:
+    value: 28
+
+  vl_avg_per:
+    value: 28
+
+  numVal:
+    value: 1
+
+  numTr:
+    value: 1
+
+  numTe:
+    value: 1
+
+  inner_learner:
+    values: ["bptt"]
+
+  outer_learner:
+    value: "rtrl"
+
+  lossFn:
+    value: "cross_entropy_with_integer_labels"
+
+  inner_optimizer:
+    value: "sgd"
+
+  outer_optimizer:
+    value: "sgd_positive"
+
+  activation_fn:
+    value: "tanh"
+
+  architecture:
+    value: "rnn"
+
+  n_h:
+    value: 128
+
+  n_in:
+    value: 28
+
+  n_out:
+    value: 10
+
+  inner_time_constant:
+    value: 1.0
+
+  outer_time_constant:
+    value: 1.0
+
+  tau_task:
+    value: True
+
+  inner_log_special:
+    value: False
+
+  outer_log_special:
+    value: False
+
+  inner_lanczos_iterations:
+    value: 10
+
+  outer_lanczos_iterations:
+    value: 10
+
+  inner_log_expensive:
+    value: False
+
+  outer_log_expensive:
+    value: False
+
+  inner_uoro_std:
+    value: 1.0
+
+  outer_uoro_std:
+    value: 1.0
+
+  initialization_std:
+    value: 1.0
+
+  inner_clip:
+    value: 1.0
+
+  inner_clip_sharpness:
+    value: 50.0
+
+  outer_clip:
+    value: 1.0
+
+  outer_clip_sharpness:
+    value: 50.0
+
+  inner_optimizer_parametrization:
+    value: "identity"
+
+  outer_optimizer_parametrization:
+    value: "identity"
