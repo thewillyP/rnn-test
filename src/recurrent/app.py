@@ -271,7 +271,7 @@ def generate_unique_id():
 def save_object_as_wandb_artifact(
     obj: Any, artifact_name: str, filename: str, artifact_type: str, to_float16: bool
 ) -> None:
-    os.makedirs("/scratch/artifacts", exist_ok=True)
+    os.makedirs("/dump/artifacts", exist_ok=True)
 
     # Ensure filename ends with .pkl
     # if not filename.endswith(".dill"):
@@ -279,7 +279,7 @@ def save_object_as_wandb_artifact(
     if not filename.endswith(".pkl"):
         filename = filename + ".pkl"
 
-    full_path = os.path.join("/scratch/artifacts", filename)
+    full_path = os.path.join("/dump/artifacts", filename)
 
     # Reduce precision of JAX arrays if to_float16 is True
     if to_float16:
