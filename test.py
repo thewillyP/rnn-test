@@ -9,7 +9,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Hyper-parameters
 # input_size = 784 # 28x28
 num_classes = 10
-num_epochs = 2
+num_epochs = 3
 batch_size = 100
 learning_rate = 0.001
 
@@ -19,9 +19,11 @@ hidden_size = 128
 num_layers = 2
 
 # MNIST dataset
-train_dataset = torchvision.datasets.MNIST(root="./data", train=True, transform=transforms.ToTensor(), download=True)
+train_dataset = torchvision.datasets.MNIST(
+    root="/scratch/data", train=True, transform=transforms.ToTensor(), download=True
+)
 
-test_dataset = torchvision.datasets.MNIST(root="./data", train=False, transform=transforms.ToTensor())
+test_dataset = torchvision.datasets.MNIST(root="/scratch/data", train=False, transform=transforms.ToTensor())
 
 # Data loader
 train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)

@@ -8,7 +8,7 @@ metric:
 parameters:
 
   train_val_split_percent:
-    value: 0.80
+    value: 0.6
 
   data_root_dir:
     value: "/wandb_data"
@@ -23,10 +23,10 @@ parameters:
     value: "batch"
 
   batch_vl:
-    value: 300
+    value: 100
 
   batch_tr:
-    value: 300
+    value: 100
 
   log_influence:
     value: False
@@ -38,16 +38,16 @@ parameters:
     value: True
 
   num_retrain_loops:
-    value: 2
+    value: 3
 
   checkpoint_interval:
     value: 100000
 
   inner_learning_rate:
-    values: [0.001]
+    values: [0.08]
 
   outer_learning_rate:
-    values: [1.e-5]
+    values: [1.e-6]
 
   ts:
     values: [[14, 16]]
@@ -55,8 +55,8 @@ parameters:
   seed:
     values: [
       {
-        "data_seed": 37103,
-        "parameter_seed": 28963,
+        "data_seed": 234,
+        "parameter_seed": 15,
         "test_seed": 12345
       }
     ]
@@ -92,7 +92,7 @@ parameters:
     value: "cross_entropy_with_integer_labels"
 
   inner_optimizer:
-    value: "adam"
+    value: "sgd"
 
   outer_optimizer:
     value: "sgd_positive"

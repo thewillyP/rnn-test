@@ -138,7 +138,6 @@ class GodConfig:
     outer_optimizer_parametrization: Literal["identity", "softplus"]
     activation_fn: Literal["tanh", "relu"]
     architecture: Literal["rnn", "ffn"]
-    ffn_in: int
     ffn_layers: tuple[tuple[int, Literal["tanh", "relu", "sigmoid", "identity", "softmax"]], ...]
     n_h: int
     n_in: int

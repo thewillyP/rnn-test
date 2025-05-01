@@ -52,7 +52,7 @@ def jvp(f, primal, tangent):
 @eqx.filter_jit
 def jacobian_matrix_product(f, primal, matrix):
     wrapper = lambda p, t: jvp(f, p, t)
-    return jax.vmap(wrapper, in_axes=(None, 1), out_axes=1)(primal, matrix)
+    return eqx.filter_vmap(wrapper, in_axes=(None, 1), out_axes=1)(primal, matrix)
 
 
 def resetRnnActivation[Interpreter: PutActivation[Env], Env](resetActv: ACTIVATION) -> Agent[Interpreter, Env, Unit]:

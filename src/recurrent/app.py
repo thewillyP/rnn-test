@@ -11,6 +11,8 @@ from datetime import datetime
 from torch.utils.data import DataLoader, Subset, RandomSampler
 import os
 import optax
+
+# import dill
 import joblib
 from dacite import from_dict, Config
 import torch
@@ -269,19 +271,23 @@ def generate_unique_id():
 def save_object_as_wandb_artifact(
     obj: Any, artifact_name: str, filename: str, artifact_type: str, to_float16: bool
 ) -> None:
-    os.makedirs("artifacts", exist_ok=True)
+    os.makedirs("/scratch/artifacts", exist_ok=True)
 
     # Ensure filename ends with .pkl
+    # if not filename.endswith(".dill"):
+    #     filename = filename + ".dill"
     if not filename.endswith(".pkl"):
         filename = filename + ".pkl"
 
-    full_path = os.path.join("artifacts", filename)
+    full_path = os.path.join("/scratch/artifacts", filename)
 
     # Reduce precision of JAX arrays if to_float16 is True
     if to_float16:
         obj = jax.tree.map(lambda x: x.astype(jnp.float16) if isinstance(x, jax.Array) else x, obj)
 
     joblib.dump(obj, full_path, compress=0)
+    # with open(full_path, "wb") as f:
+    #     dill.dump(obj, f)
 
     artifact = wandb.Artifact(artifact_name, type=artifact_type)
     artifact.add_file(full_path)
@@ -298,12 +304,18 @@ def load_artifact(artifact_name: str, filename: str) -> Any:
     model_dir = model_artifact.download()
 
     # Ensure filename ends with .pkl
+    # if not filename.endswith(".dill"):
+    #     filename = filename + ".dill"
     if not filename.endswith(".pkl"):
         filename = filename + ".pkl"
 
     full_path = os.path.join(model_dir, filename)
-
     return joblib.load(full_path)
+
+    # with open(full_path, "rb") as f:
+    #     loaded_model = dill.load(f)
+
+    # return loaded_model
 
 
 def log_jax_array(array: jax.Array, artifact_name: str):
@@ -383,6 +395,9 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
 
     # 1) Initialize inner state and parameters
 
+    rnn_state = RnnState(rnnConfig=None, activation=None, rnnParameter=None)
+    env = putter(env, lambda s: s.rnnState, rnn_state)
+
     match config.architecture:
         case "rnn":
             i_std = config.initialization_std
@@ -431,9 +446,9 @@ def create_env(config: GodConfig, prng: PRNG) -> tuple[GodState, GodInterpreter,
                     case _:
                         raise ValueError("Invalid activation function")
 
-                layers = list(map(lambda x: (x[0], map2Fn(x[1])), config.ffn_layers))
-                ffn = CustomSequential(layers, config.ffn_in, prng12)
-                env = putter(env, lambda s: s.feedforwardState, ffn)
+            layers = list(map(lambda x: (x[0], map2Fn(x[1])), config.ffn_layers))
+            ffn = CustomSequential(layers, config.n_in, prng12)
+            env = putter(env, lambda s: s.feedforwardState, ffn)
 
         case _:
             raise ValueError("Invalid architecture")
@@ -868,7 +883,13 @@ def train_loop_IO[D](
     vl_dataloader = DataLoader(
         vl_dataset, batch_size=vl_batch_size, sampler=vl_sampler, collate_fn=jax_collate_fn, drop_last=True
     )
-    vl_dataloader = cycle_efficient(vl_dataloader)
+
+    def infinite_loader(loader):
+        while True:
+            for batch in loader:
+                yield batch
+
+    vl_dataloader = infinite_loader(vl_dataloader)
 
     start = time.time()
     num_batches_seen_so_far = 0

@@ -20,7 +20,7 @@ parameters:
     value: 2
 
   ffn_layers:
-    value: [[10, "relu"], [10, "relu"], [10, "softmax"]]
+    value: [[128, "relu"], [64, "relu"], [10, "softmax"]]
 
   batch_or_online:
     value: "batch"
