@@ -8,7 +8,7 @@ metric:
 parameters:
 
   train_val_split_percent:
-    value: 0.6
+    value: 0.8
 
   data_root_dir:
     value: "/wandb_data"
@@ -23,10 +23,10 @@ parameters:
     value: "batch"
 
   batch_vl:
-    value: 100
+    value: 600
 
   batch_tr:
-    value: 100
+    value: 300
 
   log_influence:
     value: False
@@ -44,10 +44,10 @@ parameters:
     value: 100000
 
   inner_learning_rate:
-    values: [0.08]
+    values: [0.04]
 
   outer_learning_rate:
-    values: [1.e-6]
+    values: [2.e-5]
 
   ts:
     values: [[14, 16]]
@@ -86,7 +86,7 @@ parameters:
     values: ["bptt"]
 
   outer_learner:
-    value: "identity"
+    value: "rtrl"
 
   lossFn:
     value: "cross_entropy_with_integer_labels"

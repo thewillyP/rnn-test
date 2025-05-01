@@ -44,7 +44,7 @@ parameters:
     value: 100000
 
   inner_learning_rate:
-    values: [0.4, 0.01, 0.001]
+    values: [0.04, 0.01, 0.001]
 
   outer_learning_rate:
     values: [1.e-6]
