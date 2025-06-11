@@ -8,7 +8,7 @@ metric:
 parameters:
 
   train_val_split_percent:
-    value: 0.8
+    value: 0.6
 
   data_root_dir:
     value: "/wandb_data"
@@ -23,10 +23,10 @@ parameters:
     value: "batch"
 
   batch_vl:
-    value: 600
+    value: 100
 
   batch_tr:
-    value: 300
+    value: 100
 
   log_influence:
     value: False
@@ -47,7 +47,7 @@ parameters:
     values: [0.04]
 
   outer_learning_rate:
-    values: [2.e-5]
+    values: [2.e-6]
 
   ts:
     values: [[14, 16]]
@@ -55,8 +55,8 @@ parameters:
   seed:
     values: [
       {
-        "data_seed": 234,
-        "parameter_seed": 15,
+        "data_seed": 134,
+        "parameter_seed": 64,
         "test_seed": 12345
       }
     ]
