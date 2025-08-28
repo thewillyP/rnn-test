@@ -61,6 +61,7 @@ class AllLogs(eqx.Module):
     train_loss: jax.Array | None
     validation_loss: jax.Array | None
     test_loss: jax.Array | None
+    meta_test_loss: jax.Array | None
     hyperparameters: jax.Array | None
     inner_learning_rate: jax.Array | None
     parameter_norm: jax.Array | None

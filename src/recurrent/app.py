@@ -182,7 +182,9 @@ def runApp():
             tr_prng, vl_prng = jax.random.split(dataset_gen_prng, 2)
             tr_dataset = adder_task(tr_prng, config, config.ts, config.numTr, config.tr_examples_per_epoch)
             vl_dataset = adder_task(vl_prng, config, config.ts, config.numVal, config.vl_examples_per_epoch)
-            te_dataset = adder_task(test_prng, config, config.ts, config.numTe, config.numTe)
+            te1, te2 = jax.random.split(test_prng, 2)
+            te_dataset = adder_task(te1, config, config.ts, config.numTe, config.numTe)
+            meta_te_ds = adder_task(te2, config, config.ts, config.numTe, config.numTe)
 
             lossFn = _lossFn
         case "mnist":
@@ -203,9 +205,18 @@ def runApp():
             xs_train, ys_train = xs[train_idx], ys[train_idx]
             xs_val, ys_val = xs[val_idx], ys[val_idx]
 
+            # Split test dataset in half
+            te_perm = jax.random.permutation(test_prng, len(te_xs))
+            te_split_idx = len(te_xs) // 2
+            te_half1_idx, te_half2_idx = te_perm[:te_split_idx], te_perm[te_split_idx:]
+
+            te_xs_half1, te_ys_half1 = te_xs[te_half1_idx], te_ys[te_half1_idx]
+            te_xs_half2, te_ys_half2 = te_xs[te_half2_idx], te_ys[te_half2_idx]
+
             tr_dataset = Traversable(Traversable(InputOutput(x=xs_train, y=ys_train)))
             vl_dataset = Traversable(Traversable(InputOutput(x=xs_val, y=ys_val)))
-            te_dataset = Traversable(Traversable(InputOutput(x=te_xs, y=te_ys)))
+            te_dataset = Traversable(Traversable(InputOutput(x=te_xs_half1, y=te_ys_half1)))
+            meta_te_ds = Traversable(Traversable(InputOutput(x=te_xs_half2, y=te_ys_half2)))
 
             def new_loss_fn(pred, target):
                 label, idx = target
@@ -252,7 +263,15 @@ def runApp():
                 return to_batched_form(_env, env)
 
             model, te_lossfn, innerLibrary = create_batched_model(
-                te_dataset, tr_to_val_env, tr_to_te_env, lossFn, tr_env, innerInterpreter, outerInterpreter, config
+                te_dataset,
+                meta_te_ds,
+                tr_to_val_env,
+                tr_to_te_env,
+                lossFn,
+                tr_env,
+                innerInterpreter,
+                outerInterpreter,
+                config,
             )
 
             def getaccuracy(env):
@@ -289,6 +308,40 @@ def runApp():
                 )
                 return jnp.mean(accuracy)
 
+            def getaccuracy1(env):
+                def _accuracy_seq_filter_single(
+                    preds: jnp.ndarray,  # [N, C]
+                    labels: jnp.ndarray,  # [N, 2]
+                    n: int,  # sequence number to filter
+                ) -> float:
+                    class_indices = labels[:, 0].astype(jnp.int32)
+                    sequence_numbers = labels[:, 1].astype(jnp.int32)
+
+                    pred_classes = jnp.argmax(preds, axis=-1)
+                    correct = pred_classes == class_indices
+
+                    # Mask: 1 where sequence == n, else 0
+                    mask = (sequence_numbers == n).astype(jnp.float32)
+                    correct_masked = correct.astype(jnp.float32) * mask
+
+                    total = jnp.sum(mask)
+                    correct_total = jnp.sum(correct_masked)
+
+                    return jax.lax.cond(total > 0, lambda: correct_total / total, lambda: 0.0)
+
+                # Vectorized over batch dimension: preds [B, N, C], labels [B, N, 2]
+                batched_accuracy_with_sequence_filter = eqx.filter_vmap(
+                    _accuracy_seq_filter_single,
+                    in_axes=(0, 0, None),  # vmap over batch; n is shared
+                )
+                predictions, _ = innerLibrary.model(meta_te_ds).func(
+                    innerInterpreter, tr_to_te_env(env, env.outer_prng)
+                )
+                accuracy = batched_accuracy_with_sequence_filter(
+                    predictions.value.value, meta_te_ds.value.value.y, sequence_length - 1
+                )
+                return jnp.mean(accuracy)
+
             train_loop_IO(
                 task,
                 tr_dataset,
@@ -300,6 +353,7 @@ def runApp():
                 config,
                 te_lossfn,
                 getaccuracy,
+                getaccuracy1,
             )
 
         case "online":
@@ -307,6 +361,7 @@ def runApp():
             tr_env = load_env(config, tr_prng)
             vl_env = load_env(config, vl_prng)
             te_dataset = tree_unstack(te_dataset)[0].value
+            meta_te_ds = tree_unstack(meta_te_ds)[0].value
 
             def combine_ds(
                 tr_ds: Traversable[Traversable[InputOutput]], vl_ds: Traversable[Traversable[InputOutput]]
@@ -331,7 +386,15 @@ def runApp():
             #     return to_batched_form(_env, env)
 
             model, _te_lossfn, _ = create_online_model(
-                te_dataset, tr_to_val_env, tr_to_te_env, lossFn, tr_env, innerInterpreter, outerInterpreter, config
+                te_dataset,
+                meta_te_ds,
+                tr_to_val_env,
+                tr_to_te_env,
+                lossFn,
+                tr_env,
+                innerInterpreter,
+                outerInterpreter,
+                config,
             )
 
             train_loop_IO(
@@ -344,6 +407,7 @@ def runApp():
                 refresh_env,
                 config,
                 te_lossfn,
+                lambda _: 0,
                 lambda _: 0,
             )
 
@@ -951,6 +1015,7 @@ def train_loop_IO[D](
     config: GodConfig,
     te_loss: Callable[[GodState], LOSS],
     statistic: Callable[[GodState], float],
+    statistic1: Callable[[GodState], float],
 ) -> None:
     tr_dataset = PyTreeDataset(tr_dataset)
     vl_dataset = PyTreeDataset(vl_dataset)
@@ -1038,40 +1103,37 @@ def train_loop_IO[D](
             lambda x: jnp.real(x) if x is not None and jnp.all(jnp.isfinite(x)) else None, log_tree_
         )
 
-        logger.report_scalar("train_loss", "value", iteration=step, value=log_data.train_loss)
-        logger.report_scalar("validation_loss", "value", iteration=step, value=log_data.validation_loss)
-        logger.report_scalar("test_loss", "value", iteration=step, value=log_data.test_loss)
+        def safe_log_scalar(name, value, step):
+            if value is not None:
+                logger.report_scalar(name, "value", iteration=step, value=value)
 
-        logger.report_vector("hyperparameters", "values", iteration=step, values=log_data.hyperparameters)
+        # Scalars
+        safe_log_scalar("train_loss", log_data.train_loss, step)
+        safe_log_scalar("validation_loss", log_data.validation_loss, step)
+        safe_log_scalar("test_loss", log_data.test_loss, step)
+        safe_log_scalar("meta_test_loss", log_data.meta_test_loss, step)
 
-        logger.report_scalar("inner_learning_rate", "value", iteration=step, value=log_data.inner_learning_rate)
-        logger.report_scalar("parameter_norm", "value", iteration=step, value=log_data.parameter_norm)
+        # Hyperparameters as vector
+        if log_data.hyperparameters is not None:
+            logger.report_vector("hyperparameters", "values", iteration=step, values=log_data.hyperparameters)
 
-        logger.report_scalar("oho_gradient_norm", "value", iteration=step, value=safe_norm(log_data.oho_gradient))
-        logger.report_scalar("train_gradient_norm", "value", iteration=step, value=safe_norm(log_data.train_gradient))
-        logger.report_scalar(
-            "validation_gradient_norm", "value", iteration=step, value=safe_norm(log_data.validation_gradient)
-        )
+        safe_log_scalar("inner_learning_rate", log_data.inner_learning_rate, step)
+        safe_log_scalar("parameter_norm", log_data.parameter_norm, step)
 
-        logger.report_scalar(
-            "immediate_influence_tensor_norm", "value", iteration=step, value=log_data.immediate_influence_tensor_norm
-        )
-        logger.report_scalar(
-            "inner_influence_tensor_norm", "value", iteration=step, value=log_data.inner_influence_tensor_norm
-        )
-        logger.report_scalar(
-            "outer_influence_tensor_norm", "value", iteration=step, value=log_data.outer_influence_tensor_norm
-        )
+        safe_log_scalar("oho_gradient_norm", safe_norm(log_data.oho_gradient), step)
+        safe_log_scalar("train_gradient_norm", safe_norm(log_data.train_gradient), step)
+        safe_log_scalar("validation_gradient_norm", safe_norm(log_data.validation_gradient), step)
 
-        logger.report_scalar(
-            "largest_jacobian_eigenvalue", "value", iteration=step, value=log_data.largest_jacobian_eigenvalue
-        )
-        logger.report_scalar(
-            "largest_influence_eigenvalue", "value", iteration=step, value=log_data.largest_hessian_eigenvalue
-        )
+        safe_log_scalar("immediate_influence_tensor_norm", log_data.immediate_influence_tensor_norm, step)
+        safe_log_scalar("inner_influence_tensor_norm", log_data.inner_influence_tensor_norm, step)
+        safe_log_scalar("outer_influence_tensor_norm", log_data.outer_influence_tensor_norm, step)
 
-        logger.report_scalar("rnn_activation_norm", "value", iteration=step, value=log_data.rnn_activation_norm)
+        safe_log_scalar("largest_jacobian_eigenvalue", log_data.largest_jacobian_eigenvalue, step)
+        safe_log_scalar("largest_influence_eigenvalue", log_data.largest_hessian_eigenvalue, step)
 
+        safe_log_scalar("rnn_activation_norm", log_data.rnn_activation_norm, step)
+
+        # Vectors
         if log_data.jacobian is not None:
             logger.report_vector("jacobian_eigenvalues", "values", iteration=step, values=log_data.jacobian)
 
@@ -1085,19 +1147,28 @@ def train_loop_IO[D](
 
         if log_data.outer_influence_tensor is not None:
             logger.report_vector(
-                "outer_influence_tensor", "values", iteration=step, values=jnp.ravel(log_data.outer_influence_tensor)
+                "outer_influence_tensor",
+                "values",
+                iteration=step,
+                values=jnp.ravel(log_data.outer_influence_tensor),
             )
+
         step += 1
 
-    # ee = te_loss(env)
-    # eee = statistic(env)
-    # print(ee)
-    # print(eee)
-    # wandb.log({"test_loss": ee, "test_statistic": eee})
+    ee = te_loss(env)
+    eee = statistic(env)
+    eeee = statistic1(env)
+    print(ee)
+    print(eee)
+    print(eeee)
+    logger.report_scalar("final_test_loss", "value", iteration=step, value=ee)
+    logger.report_scalar("final_statistic", "value", iteration=step, value=eee)
+    logger.report_scalar("final_statistic1", "value", iteration=step, value=eeee)
 
 
 def create_online_model(
     test_dataset: Traversable[InputOutput],
+    meta_te_ds,
     tr_to_val_env: Callable[[GodState, PRNG], GodState],
     tr_to_te_env: Callable[[GodState, PRNG], GodState],
     lossFn: Callable[[jax.Array, jax.Array], LOSS],
@@ -1153,6 +1224,7 @@ def create_online_model(
                 weights, _ = innerInterpreter.getRecurrentParam.func(innerInterpreter, env)
 
                 te, _ = validation_model(test_dataset)(innerInterpreter, tr_to_te_env(env, env.outer_prng))
+                meta_te, _ = validation_model(meta_te_ds)(innerInterpreter, tr_to_te_env(env, env.outer_prng))
                 vl, _ = _outerLibrary.modelLossFn(oho_data).func(outerInterpreter, env)
                 tr, _ = (
                     foldrLibrary(innerLibrary)
@@ -1167,6 +1239,7 @@ def create_online_model(
                     train_loss=tr / config.tr_examples_per_epoch,
                     validation_loss=vl / config.vl_examples_per_epoch,
                     test_loss=te / config.numTe,
+                    meta_test_loss=meta_te / config.numTe,
                     hyperparameters=hyperparameters,
                     inner_learning_rate=innerInterpreter.getLearningRate(env),
                     parameter_norm=safe_norm(weights),
@@ -1223,6 +1296,7 @@ def create_online_model(
                 weights, _ = innerInterpreter.getRecurrentParam.func(innerInterpreter, env)
 
                 te, _ = validation_model(test_dataset)(innerInterpreter, tr_to_te_env(env, env.outer_prng))
+                meta_te, _ = validation_model(meta_te_ds)(innerInterpreter, tr_to_te_env(env, env.outer_prng))
                 vl, _ = validation_model(oho_data.validation)(innerInterpreter, tr_to_val_env(env, env.outer_prng))
                 tr, _ = innerLibrary.modelLossFn(oho_data.payload).func(innerInterpreter, env)
 
@@ -1236,6 +1310,7 @@ def create_online_model(
                     train_loss=tr / config.tr_examples_per_epoch,
                     validation_loss=vl / config.vl_examples_per_epoch,
                     test_loss=te / config.numTe,
+                    meta_test_loss=meta_te / config.numTe,
                     hyperparameters=hyperparameters,
                     inner_learning_rate=innerInterpreter.getLearningRate(env),
                     parameter_norm=safe_norm(weights),
@@ -1267,6 +1342,7 @@ def create_online_model(
 
 def create_batched_model(
     test_dataset: Traversable[Traversable[InputOutput]],
+    meta_te_ds,
     tr_to_val_env: Callable[[GodState, PRNG], GodState],
     tr_to_te_env: Callable[[GodState, PRNG], GodState],
     lossFn: Callable[[jax.Array, jax.Array], LOSS],
@@ -1329,10 +1405,11 @@ def create_batched_model(
                 hyperparameters = yield from interpreter.getRecurrentParam
                 weights, _ = innerInterpreter.getRecurrentParam.func(innerInterpreter, env)
 
-                # te, _ = validation_model(test_dataset)(innerInterpreter, tr_to_te_env(env, env.outer_prng))
+                te, _ = validation_model(test_dataset)(innerInterpreter, tr_to_te_env(env, env.outer_prng))
+                meta_te, _ = validation_model(meta_te_ds)(innerInterpreter, tr_to_te_env(env, env.outer_prng))
                 vl, _ = validation_model(oho_data.validation)(innerInterpreter, tr_to_val_env(env, env.outer_prng))
                 tr, _ = innerLibrary.modelLossFn(oho_data.payload).func(innerInterpreter, env)
-                te = 0
+                # te = 0
 
                 _ = yield from outerLibrary.modelGradient(IdentityF(oho_data)).flat_map(doOptimizerStep)
 
@@ -1344,6 +1421,7 @@ def create_batched_model(
                     train_loss=tr / config.tr_examples_per_epoch,
                     validation_loss=vl / config.vl_examples_per_epoch,
                     test_loss=te / config.numTe,
+                    meta_test_loss=meta_te / config.numTe,
                     hyperparameters=hyperparameters,
                     inner_learning_rate=innerInterpreter.getLearningRate(env),
                     parameter_norm=safe_norm(weights),
