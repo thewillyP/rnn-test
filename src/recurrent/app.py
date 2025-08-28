@@ -1,16 +1,20 @@
 import copy
 import time
-from typing import Any
+from typing import Any, Union
 import jax.numpy as jnp
 import equinox as eqx
 import jax
-import wandb
-from wandb import sdk as wandb_sdk
 import uuid
 from datetime import datetime
 from torch.utils.data import DataLoader, Subset, RandomSampler
 import os
 import optax
+import clearml
+import boto3
+import random
+import string
+from cattrs import unstructure, structure
+
 
 # import dill
 import joblib
@@ -22,7 +26,7 @@ from torchvision.datasets import MNIST
 from recurrent.batch import batch_env_form, to_batched_form
 from recurrent.mylearning import *
 from recurrent.mylearning import RFLO, RTRL, UORO, IdentityLearner, Library
-from recurrent.myrecords import GodConfig, GodInterpreter, GodState, InputOutput
+from recurrent.myrecords import GodConfig, GodInterpreter, GodState, InputOutput, SeedConfig
 from recurrent.mytypes import *
 from recurrent.mytypes import Traversable
 from recurrent.parameters import (
@@ -36,230 +40,315 @@ from recurrent.util import *
 from recurrent.myfunc import cycle_efficient
 
 
-def runApp(
-    load_env: Callable[[GodConfig, PRNG], GodState],
-    load_config: Callable[[wandb_sdk.wandb_run.Run], dict[str, Any]],
-    wandb_kwargs: dict[str, Any],
-):
-    with wandb.init(**wandb_kwargs) as run:
-        config = from_dict(
-            data_class=GodConfig,
-            data=load_config(run),
-            config=Config(
-                type_hooks={
-                    tuple[int, int]: tuple,
-                    tuple[tuple[int, Literal["tanh", "relu", "sigmoid", "identity", "softmax"]], ...]: lambda x: tuple(
-                        map(tuple, x)
-                    ),
-                }
-            ),
-        )
-        # RNG Stuff
-        data_prng = PRNG(jax.random.key(config.seed.data_seed))
-        env_prng = PRNG(jax.random.key(config.seed.parameter_seed))
-        test_prng = PRNG(jax.random.key(config.seed.test_seed))
-        dataset_gen_prng, torch_prng = jax.random.split(data_prng, 2)
-        torch_seed = jax.random.randint(torch_prng, shape=(), minval=0, maxval=1e6, dtype=jnp.uint32)
-        torch_seed = int(torch_seed)
-        torch.manual_seed(torch_seed)
+@dataclass(frozen=True)
+class DockerContainerSource:
+    docker_url: str
+    type: str = "docker_url"
 
-        # IO Logging
-        _lossFn = getLossFn(config)
-        checkpoint_fn = lambda env: save_checkpoint(env, f"env_{run.id}", "env.pkl")
-        log_fn = lambda logs: save_object_as_wandb_artifact(
-            logs, f"logs_{run.id}", "logs.pkl", "logs", to_float16=config.log_to_float16
-        )
 
-        # Dataset
-        match config.dataset:
-            case "delay_add":
-                tr_prng, vl_prng = jax.random.split(dataset_gen_prng, 2)
-                tr_dataset = adder_task(tr_prng, config, config.ts, config.numTr, config.tr_examples_per_epoch)
-                vl_dataset = adder_task(vl_prng, config, config.ts, config.numVal, config.vl_examples_per_epoch)
-                te_dataset = adder_task(test_prng, config, config.ts, config.numTe, config.numTe)
+@dataclass(frozen=True)
+class SifContainerSource:
+    sif_path: str
+    type: str = "sif_path"
 
-                lossFn = _lossFn
-            case "mnist":
-                dataset = MNIST(root=f"{config.data_root_dir}/data", train=True, download=True)
-                _te_dataset = MNIST(root=f"{config.data_root_dir}/data", train=False, download=True)
-                xs = jax.vmap(flatten_and_cast, in_axes=(0, None))(dataset.data.numpy(), config.n_in)
-                sequence_length = xs.shape[1]
 
-                ys = jax.vmap(target_transform, in_axes=(0, None))(dataset.targets.numpy(), sequence_length)
-                te_xs = jax.vmap(flatten_and_cast, in_axes=(0, None))(_te_dataset.data.numpy(), config.n_in)
-                te_ys = jax.vmap(target_transform, in_axes=(0, None))(_te_dataset.targets.numpy(), sequence_length)
+@dataclass(frozen=True)
+class ArtifactContainerSource:
+    project: str
+    dataset_name: str
+    type: str = "artifact_task"
 
-                perm = jax.random.permutation(dataset_gen_prng, len(xs))
 
-                split_idx = int(len(xs) * config.train_val_split_percent)
-                train_idx, val_idx = perm[:split_idx], perm[split_idx:]
+@dataclass(frozen=True)
+class SlurmParams:
+    memory: str
+    time: str
+    cpu: int
+    gpu: int
+    log_dir: str
+    singularity_overlay: str
+    singularity_binds: str
+    container_source: Union[DockerContainerSource, SifContainerSource, ArtifactContainerSource]
 
-                xs_train, ys_train = xs[train_idx], ys[train_idx]
-                xs_val, ys_val = xs[val_idx], ys[val_idx]
 
-                tr_dataset = Traversable(Traversable(InputOutput(x=xs_train, y=ys_train)))
-                vl_dataset = Traversable(Traversable(InputOutput(x=xs_val, y=ys_val)))
-                te_dataset = Traversable(Traversable(InputOutput(x=te_xs, y=te_ys)))
+def runApp():
+    ssm = boto3.client("ssm")
+    clearml.Task.set_credentials(
+        api_host=ssm.get_parameter(Name="/dev/research/clearml_api_host")["Parameter"]["Value"],
+        web_host=ssm.get_parameter(Name="/dev/research/clearml_web_host")["Parameter"]["Value"],
+        files_host=ssm.get_parameter(Name="/dev/research/clearml_files_host")["Parameter"]["Value"],
+        key=ssm.get_parameter(Name="/dev/research/clearml_api_access_key", WithDecryption=True)["Parameter"]["Value"],
+        secret=ssm.get_parameter(Name="/dev/research/clearml_api_secret_key", WithDecryption=True)["Parameter"][
+            "Value"
+        ],
+    )
+    # names don't matter, can change in UI
+    task: clearml.Task = clearml.Task.init(
+        project_name="temp",
+        task_name="".join(random.choices(string.ascii_lowercase + string.digits, k=8)),
+        task_type=clearml.TaskTypes.training,
+    )
 
-                def new_loss_fn(pred, target):
-                    label, idx = target
-                    return jax.lax.cond(idx == sequence_length - 1, lambda p: _lossFn(p, label), lambda _: 0.0, pred)
+    # Values dont matter because can change in UI
+    slurm_params = SlurmParams(
+        memory="8GB",
+        time="01:00:00",
+        cpu=2,
+        gpu=0,
+        log_dir="/vast/wlp9800/logs",
+        singularity_overlay="",
+        singularity_binds="",
+        container_source=SifContainerSource(sif_path="/scratch/wlp9800/images/devenv-cpu.sif"),
+    )
+    task.connect(unstructure(slurm_params), name="slurm")
 
-                lossFn = new_loss_fn
+    config = GodConfig(
+        clearml_run=False,
+        train_val_split_percent=0.8,
+        data_root_dir="/tmp",
+        dataset="mnist",
+        ffn_layers=[[128, "relu"], [64, "relu"], [10, "softmax"]],
+        batch_or_online="batch",
+        batch_vl=100,
+        batch_tr=100,
+        log_influence=False,
+        log_accumulate_influence=False,
+        log_to_float16=False,
+        num_retrain_loops=100,
+        checkpoint_interval=100000,
+        inner_learning_rate=0.001,
+        outer_learning_rate=1e-4,
+        ts=(14, 16),
+        seed=SeedConfig(data_seed=42, parameter_seed=43, test_seed=44),
+        tr_examples_per_epoch=1,
+        vl_examples_per_epoch=1,
+        tr_avg_per=28,
+        vl_avg_per=28,
+        numVal=1,
+        numTr=1,
+        numTe=1,
+        inner_learner="bptt",
+        outer_learner="rtrl",
+        lossFn="cross_entropy_with_integer_labels",
+        inner_optimizer="sgd",
+        outer_optimizer="adam",
+        activation_fn="tanh",
+        architecture="rnn",
+        n_h=128,
+        n_in=28,
+        n_out=10,
+        inner_time_constant=1.0,
+        outer_time_constant=1.0,
+        tau_task=True,
+        inner_log_special=False,
+        outer_log_special=False,
+        inner_lanczos_iterations=5,
+        outer_lanczos_iterations=5,
+        inner_log_expensive=False,
+        outer_log_expensive=False,
+        inner_uoro_std=1.0,
+        outer_uoro_std=1.0,
+        initialization_std=1.0,
+        inner_clip=1.0,
+        inner_clip_sharpness=50.0,
+        outer_clip=1.0,
+        outer_clip_sharpness=50.0,
+        inner_optimizer_parametrization="softplus",
+        outer_optimizer_parametrization="identity",
+    )
 
-            case _:
-                raise ValueError("Invalid dataset")
+    _config = task.connect(unstructure(config), name="config")
+    config = structure(_config, GodConfig)
+    task.execute_remotely(queue_name="slurm", clone=False, exit_process=True)
 
-        # Model
-        _, innerInterpreter, outerInterpreter = create_env(config, env_prng)
-        load_env = eqx.filter_jit(load_env)
-        match config.batch_or_online:
-            case "batch":
-                env_root_prng, tr_batches_prng = jax.random.split(env_prng, 2)
-                tr_prngs = jax.random.split(tr_batches_prng, config.batch_tr)
-                _env = load_env(config, env_root_prng)
-                create_envs = eqx.filter_vmap(load_env, in_axes=(None, 0))
-                create_envs = eqx.filter_jit(create_envs)
-                _tr_env = create_envs(config, tr_prngs)
-                tr_env = to_batched_form(_tr_env, _env)
+    if not config.clearml_run:
+        return
 
-                def combine_ds(
-                    tr_ds: Traversable[Traversable[InputOutput]], vl_ds: Traversable[Traversable[InputOutput]]
-                ) -> OhoData[Traversable[Traversable[InputOutput]]]:
-                    return OhoData(payload=tr_ds, validation=vl_ds)
+    # RNG Stuff
+    data_prng = PRNG(jax.random.key(config.seed.data_seed))
+    env_prng = PRNG(jax.random.key(config.seed.parameter_seed))
+    test_prng = PRNG(jax.random.key(config.seed.test_seed))
+    dataset_gen_prng, torch_prng = jax.random.split(data_prng, 2)
+    torch_seed = jax.random.randint(torch_prng, shape=(), minval=0, maxval=1e6, dtype=jnp.uint32)
+    torch_seed = int(torch_seed)
+    torch.manual_seed(torch_seed)
 
-                def _tr_to_env(env: GodState, prng: PRNG, batch_size: int) -> GodState:
-                    vl_prngs = jax.random.split(prng, batch_size)
-                    vl_env = create_envs(config, vl_prngs)
-                    return to_batched_form(vl_env, env)
+    # IO Logging
+    _lossFn = getLossFn(config)
 
-                def tr_to_val_env(env: GodState, prng: PRNG) -> GodState:
-                    return _tr_to_env(env, prng, config.batch_vl)
+    # Dataset
+    match config.dataset:
+        case "delay_add":
+            tr_prng, vl_prng = jax.random.split(dataset_gen_prng, 2)
+            tr_dataset = adder_task(tr_prng, config, config.ts, config.numTr, config.tr_examples_per_epoch)
+            vl_dataset = adder_task(vl_prng, config, config.ts, config.numVal, config.vl_examples_per_epoch)
+            te_dataset = adder_task(test_prng, config, config.ts, config.numTe, config.numTe)
 
-                def tr_to_te_env(env: GodState, prng: PRNG) -> GodState:
-                    return _tr_to_env(env, prng, te_dataset.value.value.x.shape[0])
+            lossFn = _lossFn
+        case "mnist":
+            dataset = MNIST(root=f"{config.data_root_dir}/data", train=True, download=True)
+            _te_dataset = MNIST(root=f"{config.data_root_dir}/data", train=False, download=True)
+            xs = jax.vmap(flatten_and_cast, in_axes=(0, None))(dataset.data.numpy(), config.n_in)
+            sequence_length = xs.shape[1]
 
-                def refresh_env(env: GodState) -> GodState:
-                    _tr_prngs = jax.random.split(env.inner_prng[0], config.batch_tr)
-                    _env = create_envs(config, _tr_prngs)
-                    return to_batched_form(_env, env)
+            ys = jax.vmap(target_transform, in_axes=(0, None))(dataset.targets.numpy(), sequence_length)
+            te_xs = jax.vmap(flatten_and_cast, in_axes=(0, None))(_te_dataset.data.numpy(), config.n_in)
+            te_ys = jax.vmap(target_transform, in_axes=(0, None))(_te_dataset.targets.numpy(), sequence_length)
 
-                model, te_lossfn, innerLibrary = create_batched_model(
-                    te_dataset, tr_to_val_env, tr_to_te_env, lossFn, tr_env, innerInterpreter, outerInterpreter, config
+            perm = jax.random.permutation(dataset_gen_prng, len(xs))
+
+            split_idx = int(len(xs) * config.train_val_split_percent)
+            train_idx, val_idx = perm[:split_idx], perm[split_idx:]
+
+            xs_train, ys_train = xs[train_idx], ys[train_idx]
+            xs_val, ys_val = xs[val_idx], ys[val_idx]
+
+            tr_dataset = Traversable(Traversable(InputOutput(x=xs_train, y=ys_train)))
+            vl_dataset = Traversable(Traversable(InputOutput(x=xs_val, y=ys_val)))
+            te_dataset = Traversable(Traversable(InputOutput(x=te_xs, y=te_ys)))
+
+            def new_loss_fn(pred, target):
+                label, idx = target
+                return jax.lax.cond(idx == sequence_length - 1, lambda p: _lossFn(p, label), lambda _: 0.0, pred)
+
+            lossFn = new_loss_fn
+
+        case _:
+            raise ValueError("Invalid dataset")
+
+    # Model
+    _, innerInterpreter, outerInterpreter = create_env(config, env_prng)
+    load_env = lambda config, prng: create_env(config, prng)[0]
+    load_env = eqx.filter_jit(load_env)
+    match config.batch_or_online:
+        case "batch":
+            env_root_prng, tr_batches_prng = jax.random.split(env_prng, 2)
+            tr_prngs = jax.random.split(tr_batches_prng, config.batch_tr)
+            _env = load_env(config, env_root_prng)
+            create_envs = eqx.filter_vmap(load_env, in_axes=(None, 0))
+            create_envs = eqx.filter_jit(create_envs)
+            _tr_env = create_envs(config, tr_prngs)
+            tr_env = to_batched_form(_tr_env, _env)
+
+            def combine_ds(
+                tr_ds: Traversable[Traversable[InputOutput]], vl_ds: Traversable[Traversable[InputOutput]]
+            ) -> OhoData[Traversable[Traversable[InputOutput]]]:
+                return OhoData(payload=tr_ds, validation=vl_ds)
+
+            def _tr_to_env(env: GodState, prng: PRNG, batch_size: int) -> GodState:
+                vl_prngs = jax.random.split(prng, batch_size)
+                vl_env = create_envs(config, vl_prngs)
+                return to_batched_form(vl_env, env)
+
+            def tr_to_val_env(env: GodState, prng: PRNG) -> GodState:
+                return _tr_to_env(env, prng, config.batch_vl)
+
+            def tr_to_te_env(env: GodState, prng: PRNG) -> GodState:
+                return _tr_to_env(env, prng, te_dataset.value.value.x.shape[0])
+
+            def refresh_env(env: GodState) -> GodState:
+                _tr_prngs = jax.random.split(env.inner_prng[0], config.batch_tr)
+                _env = create_envs(config, _tr_prngs)
+                return to_batched_form(_env, env)
+
+            model, te_lossfn, innerLibrary = create_batched_model(
+                te_dataset, tr_to_val_env, tr_to_te_env, lossFn, tr_env, innerInterpreter, outerInterpreter, config
+            )
+
+            def getaccuracy(env):
+                def _accuracy_seq_filter_single(
+                    preds: jnp.ndarray,  # [N, C]
+                    labels: jnp.ndarray,  # [N, 2]
+                    n: int,  # sequence number to filter
+                ) -> float:
+                    class_indices = labels[:, 0].astype(jnp.int32)
+                    sequence_numbers = labels[:, 1].astype(jnp.int32)
+
+                    pred_classes = jnp.argmax(preds, axis=-1)
+                    correct = pred_classes == class_indices
+
+                    # Mask: 1 where sequence == n, else 0
+                    mask = (sequence_numbers == n).astype(jnp.float32)
+                    correct_masked = correct.astype(jnp.float32) * mask
+
+                    total = jnp.sum(mask)
+                    correct_total = jnp.sum(correct_masked)
+
+                    return jax.lax.cond(total > 0, lambda: correct_total / total, lambda: 0.0)
+
+                # Vectorized over batch dimension: preds [B, N, C], labels [B, N, 2]
+                batched_accuracy_with_sequence_filter = eqx.filter_vmap(
+                    _accuracy_seq_filter_single,
+                    in_axes=(0, 0, None),  # vmap over batch; n is shared
                 )
-
-                checkpoint_fn(
-                    copy.replace(
-                        tr_env,
-                        inner_prng=jax.random.key_data(tr_env.inner_prng),
-                        outer_prng=jax.random.key_data(tr_env.outer_prng),
-                    )
+                predictions, _ = innerLibrary.model(te_dataset).func(
+                    innerInterpreter, tr_to_te_env(env, env.outer_prng)
                 )
-
-                def getaccuracy(env):
-                    def _accuracy_seq_filter_single(
-                        preds: jnp.ndarray,  # [N, C]
-                        labels: jnp.ndarray,  # [N, 2]
-                        n: int,  # sequence number to filter
-                    ) -> float:
-                        class_indices = labels[:, 0].astype(jnp.int32)
-                        sequence_numbers = labels[:, 1].astype(jnp.int32)
-
-                        pred_classes = jnp.argmax(preds, axis=-1)
-                        correct = pred_classes == class_indices
-
-                        # Mask: 1 where sequence == n, else 0
-                        mask = (sequence_numbers == n).astype(jnp.float32)
-                        correct_masked = correct.astype(jnp.float32) * mask
-
-                        total = jnp.sum(mask)
-                        correct_total = jnp.sum(correct_masked)
-
-                        return jax.lax.cond(total > 0, lambda: correct_total / total, lambda: 0.0)
-
-                    # Vectorized over batch dimension: preds [B, N, C], labels [B, N, 2]
-                    batched_accuracy_with_sequence_filter = eqx.filter_vmap(
-                        _accuracy_seq_filter_single,
-                        in_axes=(0, 0, None),  # vmap over batch; n is shared
-                    )
-                    predictions, _ = innerLibrary.model(te_dataset).func(
-                        innerInterpreter, tr_to_te_env(env, env.outer_prng)
-                    )
-                    accuracy = batched_accuracy_with_sequence_filter(
-                        predictions.value.value, te_dataset.value.value.y, sequence_length - 1
-                    )
-                    return jnp.mean(accuracy)
-
-                train_loop_IO(
-                    tr_dataset,
-                    vl_dataset,
-                    combine_ds,
-                    model,
-                    tr_env,
-                    refresh_env,
-                    config,
-                    checkpoint_fn,
-                    log_fn,
-                    te_lossfn,
-                    getaccuracy,
+                accuracy = batched_accuracy_with_sequence_filter(
+                    predictions.value.value, te_dataset.value.value.y, sequence_length - 1
                 )
+                return jnp.mean(accuracy)
 
-            case "online":
-                tr_prng, vl_prng = jax.random.split(env_prng, 2)
-                tr_env = load_env(config, tr_prng)
-                vl_env = load_env(config, vl_prng)
-                te_dataset = tree_unstack(te_dataset)[0].value
+            train_loop_IO(
+                task,
+                tr_dataset,
+                vl_dataset,
+                combine_ds,
+                model,
+                tr_env,
+                refresh_env,
+                config,
+                te_lossfn,
+                getaccuracy,
+            )
 
-                def combine_ds(
-                    tr_ds: Traversable[Traversable[InputOutput]], vl_ds: Traversable[Traversable[InputOutput]]
-                ) -> Traversable[OhoData[Traversable[InputOutput]]]:
-                    return Traversable(OhoData(payload=tr_ds.value, validation=vl_ds.value))
+        case "online":
+            tr_prng, vl_prng = jax.random.split(env_prng, 2)
+            tr_env = load_env(config, tr_prng)
+            vl_env = load_env(config, vl_prng)
+            te_dataset = tree_unstack(te_dataset)[0].value
 
-                def _tr_to_env(env: GodState, _: PRNG) -> GodState:
-                    return to_batched_form(vl_env, env)
+            def combine_ds(
+                tr_ds: Traversable[Traversable[InputOutput]], vl_ds: Traversable[Traversable[InputOutput]]
+            ) -> Traversable[OhoData[Traversable[InputOutput]]]:
+                return Traversable(OhoData(payload=tr_ds.value, validation=vl_ds.value))
 
-                def tr_to_val_env(env: GodState, prng: PRNG) -> GodState:
-                    return _tr_to_env(env, prng)
+            def _tr_to_env(env: GodState, _: PRNG) -> GodState:
+                return to_batched_form(vl_env, env)
 
-                def tr_to_te_env(env: GodState, prng: PRNG) -> GodState:
-                    return _tr_to_env(env, prng)
+            def tr_to_val_env(env: GodState, prng: PRNG) -> GodState:
+                return _tr_to_env(env, prng)
 
-                def refresh_env(env: GodState) -> GodState:
-                    return env
+            def tr_to_te_env(env: GodState, prng: PRNG) -> GodState:
+                return _tr_to_env(env, prng)
 
-                # def refresh_env(env: GodState) -> GodState:
-                #     prng, env = innerInterpreter.updatePRNG().func(innerInterpreter, env)
-                #     _env: GodState = load_env(config, prng)
-                #     return to_batched_form(_env, env)
+            def refresh_env(env: GodState) -> GodState:
+                return env
 
-                model, _te_lossfn, _ = create_online_model(
-                    te_dataset, tr_to_val_env, tr_to_te_env, lossFn, tr_env, innerInterpreter, outerInterpreter, config
-                )
+            # def refresh_env(env: GodState) -> GodState:
+            #     prng, env = innerInterpreter.updatePRNG().func(innerInterpreter, env)
+            #     _env: GodState = load_env(config, prng)
+            #     return to_batched_form(_env, env)
 
-                checkpoint_fn(
-                    copy.replace(
-                        tr_env,
-                        inner_prng=jax.random.key_data(tr_env.inner_prng),
-                        outer_prng=jax.random.key_data(tr_env.outer_prng),
-                    )
-                )
+            model, _te_lossfn, _ = create_online_model(
+                te_dataset, tr_to_val_env, tr_to_te_env, lossFn, tr_env, innerInterpreter, outerInterpreter, config
+            )
 
-                train_loop_IO(
-                    tr_dataset,
-                    vl_dataset,
-                    combine_ds,
-                    model,
-                    tr_env,
-                    refresh_env,
-                    config,
-                    checkpoint_fn,
-                    log_fn,
-                    te_lossfn,
-                    lambda _: 0,
-                )
+            train_loop_IO(
+                task,
+                tr_dataset,
+                vl_dataset,
+                combine_ds,
+                model,
+                tr_env,
+                refresh_env,
+                config,
+                te_lossfn,
+                lambda _: 0,
+            )
 
-            case _:
-                raise ValueError("Invalid batch_or_online option")
+        case _:
+            raise ValueError("Invalid batch_or_online option")
 
 
 def generate_unique_id():
@@ -268,63 +357,63 @@ def generate_unique_id():
     return f"{timestamp}_{short_uuid}"
 
 
-def save_object_as_wandb_artifact(
-    obj: Any, artifact_name: str, filename: str, artifact_type: str, to_float16: bool
-) -> None:
-    os.makedirs("/dump/artifacts", exist_ok=True)
+# def save_object_as_wandb_artifact(
+#     obj: Any, artifact_name: str, filename: str, artifact_type: str, to_float16: bool
+# ) -> None:
+#     os.makedirs("/scratch/artifacts", exist_ok=True)
 
-    # Ensure filename ends with .pkl
-    # if not filename.endswith(".dill"):
-    #     filename = filename + ".dill"
-    if not filename.endswith(".pkl"):
-        filename = filename + ".pkl"
+#     # Ensure filename ends with .pkl
+#     # if not filename.endswith(".dill"):
+#     #     filename = filename + ".dill"
+#     if not filename.endswith(".pkl"):
+#         filename = filename + ".pkl"
 
-    full_path = os.path.join("/dump/artifacts", filename)
+#     full_path = os.path.join("/scratch/artifacts", filename)
 
-    # Reduce precision of JAX arrays if to_float16 is True
-    if to_float16:
-        obj = jax.tree.map(lambda x: x.astype(jnp.float16) if isinstance(x, jax.Array) else x, obj)
+#     # Reduce precision of JAX arrays if to_float16 is True
+#     if to_float16:
+#         obj = jax.tree.map(lambda x: x.astype(jnp.float16) if isinstance(x, jax.Array) else x, obj)
 
-    joblib.dump(obj, full_path, compress=0)
-    # with open(full_path, "wb") as f:
-    #     dill.dump(obj, f)
+#     joblib.dump(obj, full_path, compress=0)
+#     # with open(full_path, "wb") as f:
+#     #     dill.dump(obj, f)
 
-    artifact = wandb.Artifact(artifact_name, type=artifact_type)
-    artifact.add_file(full_path)
-    wandb.log_artifact(artifact)
-
-
-def save_checkpoint(obj: Any, name: str, filename: str) -> None:
-    save_object_as_wandb_artifact(obj, name, filename, "checkpoint", False)
+#     artifact = wandb.Artifact(artifact_name, type=artifact_type)
+#     artifact.add_file(full_path)
+#     wandb.log_artifact(artifact)
 
 
-def load_artifact(artifact_name: str, filename: str) -> Any:
-    api = wandb.Api()
-    model_artifact = api.artifact(artifact_name)
-    model_dir = model_artifact.download()
-
-    # Ensure filename ends with .pkl
-    # if not filename.endswith(".dill"):
-    #     filename = filename + ".dill"
-    if not filename.endswith(".pkl"):
-        filename = filename + ".pkl"
-
-    full_path = os.path.join(model_dir, filename)
-    return joblib.load(full_path)
-
-    # with open(full_path, "rb") as f:
-    #     loaded_model = dill.load(f)
-
-    # return loaded_model
+# def save_checkpoint(obj: Any, name: str, filename: str) -> None:
+#     save_object_as_wandb_artifact(obj, name, filename, "checkpoint", False)
 
 
-def log_jax_array(array: jax.Array, artifact_name: str):
-    filename = f"{artifact_name}.npy"
-    jnp.save(filename, array)
-    artifact = wandb.Artifact(artifact_name, type="checkpoint")
-    artifact.add_file(filename)
-    wandb.log_artifact(artifact)
-    os.remove(filename)
+# def load_artifact(artifact_name: str, filename: str) -> Any:
+#     api = wandb.Api()
+#     model_artifact = api.artifact(artifact_name)
+#     model_dir = model_artifact.download()
+
+#     # Ensure filename ends with .pkl
+#     # if not filename.endswith(".dill"):
+#     #     filename = filename + ".dill"
+#     if not filename.endswith(".pkl"):
+#         filename = filename + ".pkl"
+
+#     full_path = os.path.join(model_dir, filename)
+#     return joblib.load(full_path)
+
+#     # with open(full_path, "rb") as f:
+#     #     loaded_model = dill.load(f)
+
+#     # return loaded_model
+
+
+# def log_jax_array(array: jax.Array, artifact_name: str):
+#     filename = f"{artifact_name}.npy"
+#     jnp.save(filename, array)
+#     artifact = wandb.Artifact(artifact_name, type="checkpoint")
+#     artifact.add_file(filename)
+#     wandb.log_artifact(artifact)
+#     os.remove(filename)
 
 
 def getLossFn(config: GodConfig) -> Callable[[jax.Array, jax.Array], LOSS]:
@@ -852,6 +941,7 @@ def create_rnn_learner(
 
 
 def train_loop_IO[D](
+    task,
     tr_dataset: Traversable[Traversable[InputOutput]],
     vl_dataset: Traversable[Traversable[InputOutput]],
     to_combined_ds: Callable[[Traversable[Traversable[InputOutput]], Traversable[Traversable[InputOutput]]], D],
@@ -859,8 +949,6 @@ def train_loop_IO[D](
     env: GodState,
     refresh_env: Callable[[GodState], GodState],
     config: GodConfig,
-    checkpoint_fn: Callable[[GodState], None],
-    log_fn: Callable[[AllLogs], None],
     te_loss: Callable[[GodState], LOSS],
     statistic: Callable[[GodState], float],
 ) -> None:
@@ -908,14 +996,14 @@ def train_loop_IO[D](
             env = eqx.tree_at(lambda t: t.start_example, env, env.start_example + batch_size)
             all_logs.append(logs)
             checkpoint_condition = num_batches_seen_so_far + i + 1
-            if checkpoint_condition % config.checkpoint_interval == 0:
-                checkpoint_fn(
-                    copy.replace(
-                        env,
-                        inner_prng=jax.random.key_data(env.inner_prng),
-                        outer_prng=jax.random.key_data(env.outer_prng),
-                    )
-                )
+            # if checkpoint_condition % config.checkpoint_interval == 0:
+            #     checkpoint_fn(
+            #         copy.replace(
+            #             env,
+            #             inner_prng=jax.random.key_data(env.inner_prng),
+            #             outer_prng=jax.random.key_data(env.outer_prng),
+            #         )
+            #     )
 
             print(
                 f"Batch {i + 1}/{len(tr_dataloader)}, Loss: {logs.value.train_loss[-1]}, LR: {logs.value.inner_learning_rate[-1]}"
@@ -930,58 +1018,82 @@ def train_loop_IO[D](
 
     total_logs: Traversable[AllLogs] = jax.tree.map(lambda *xs: jnp.concatenate(xs), *all_logs)
 
-    log_fn(total_logs.value)
-    checkpoint_fn(
-        copy.replace(
-            env,
-            inner_prng=jax.random.key_data(env.inner_prng),
-            outer_prng=jax.random.key_data(env.outer_prng),
-        )
-    )
+    # log_fn(total_logs.value)
+    # checkpoint_fn(
+    #     copy.replace(
+    #         env,
+    #         inner_prng=jax.random.key_data(env.inner_prng),
+    #         outer_prng=jax.random.key_data(env.outer_prng),
+    #     )
+    # )
 
     def safe_norm(x):
         return jnp.linalg.norm(x) if x is not None else None
 
     # log wandb partial metrics
+    step = 0
+    logger = task.get_logger()
     for log_tree_ in tree_unstack_lazy(total_logs.value):
         log_data: AllLogs = jax.tree.map(
             lambda x: jnp.real(x) if x is not None and jnp.all(jnp.isfinite(x)) else None, log_tree_
         )
-        wandb.log(
-            {
-                "train_loss": log_data.train_loss,
-                "validation_loss": log_data.validation_loss,
-                "test_loss": log_data.test_loss,
-                "hyperparameters": log_data.hyperparameters,
-                "inner_learning_rate": log_data.inner_learning_rate,
-                "parameter_norm": log_data.parameter_norm,
-                "oho_gradient": log_data.oho_gradient,
-                "train_gradient": log_data.train_gradient,
-                "validation_gradient": log_data.validation_gradient,
-                "oho_gradient_norm": safe_norm(log_data.oho_gradient),
-                "train_gradient_norm": safe_norm(log_data.train_gradient),
-                "validation_gradient_norm": safe_norm(log_data.validation_gradient),
-                "immediate_influence_tensor_norm": log_data.immediate_influence_tensor_norm,
-                "inner_influence_tensor_norm": log_data.inner_influence_tensor_norm,
-                "outer_influence_tensor_norm": log_data.outer_influence_tensor_norm,
-                "largest_jacobian_eigenvalue": log_data.largest_jacobian_eigenvalue,
-                "largest_influence_eigenvalue": log_data.largest_hessian_eigenvalue,
-                "jacobian_eigenvalues": log_data.jacobian,
-                "rnn_activation_norm": log_data.rnn_activation_norm,
-                "immediate_influence_tensor": jnp.ravel(log_data.immediate_influence_tensor)
-                if log_data.immediate_influence_tensor is not None
-                else None,
-                "outer_influence_tensor": jnp.ravel(log_data.outer_influence_tensor)
-                if log_data.outer_influence_tensor is not None
-                else None,
-            }
+
+        logger.report_scalar("train_loss", "value", iteration=step, value=log_data.train_loss)
+        logger.report_scalar("validation_loss", "value", iteration=step, value=log_data.validation_loss)
+        logger.report_scalar("test_loss", "value", iteration=step, value=log_data.test_loss)
+
+        logger.report_vector("hyperparameters", "values", iteration=step, values=log_data.hyperparameters)
+
+        logger.report_scalar("inner_learning_rate", "value", iteration=step, value=log_data.inner_learning_rate)
+        logger.report_scalar("parameter_norm", "value", iteration=step, value=log_data.parameter_norm)
+
+        logger.report_scalar("oho_gradient_norm", "value", iteration=step, value=safe_norm(log_data.oho_gradient))
+        logger.report_scalar("train_gradient_norm", "value", iteration=step, value=safe_norm(log_data.train_gradient))
+        logger.report_scalar(
+            "validation_gradient_norm", "value", iteration=step, value=safe_norm(log_data.validation_gradient)
         )
 
-    ee = te_loss(env)
-    eee = statistic(env)
-    print(ee)
-    print(eee)
-    wandb.log({"test_loss": ee, "test_statistic": eee})
+        logger.report_scalar(
+            "immediate_influence_tensor_norm", "value", iteration=step, value=log_data.immediate_influence_tensor_norm
+        )
+        logger.report_scalar(
+            "inner_influence_tensor_norm", "value", iteration=step, value=log_data.inner_influence_tensor_norm
+        )
+        logger.report_scalar(
+            "outer_influence_tensor_norm", "value", iteration=step, value=log_data.outer_influence_tensor_norm
+        )
+
+        logger.report_scalar(
+            "largest_jacobian_eigenvalue", "value", iteration=step, value=log_data.largest_jacobian_eigenvalue
+        )
+        logger.report_scalar(
+            "largest_influence_eigenvalue", "value", iteration=step, value=log_data.largest_hessian_eigenvalue
+        )
+
+        logger.report_scalar("rnn_activation_norm", "value", iteration=step, value=log_data.rnn_activation_norm)
+
+        if log_data.jacobian is not None:
+            logger.report_vector("jacobian_eigenvalues", "values", iteration=step, values=log_data.jacobian)
+
+        if log_data.immediate_influence_tensor is not None:
+            logger.report_vector(
+                "immediate_influence_tensor",
+                "values",
+                iteration=step,
+                values=jnp.ravel(log_data.immediate_influence_tensor),
+            )
+
+        if log_data.outer_influence_tensor is not None:
+            logger.report_vector(
+                "outer_influence_tensor", "values", iteration=step, values=jnp.ravel(log_data.outer_influence_tensor)
+            )
+        step += 1
+
+    # ee = te_loss(env)
+    # eee = statistic(env)
+    # print(ee)
+    # print(eee)
+    # wandb.log({"test_loss": ee, "test_statistic": eee})
 
 
 def create_online_model(

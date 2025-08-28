@@ -107,6 +107,7 @@ class SeedConfig:
 
 @dataclass(frozen=True)
 class GodConfig:
+    clearml_run: bool
     train_val_split_percent: float
     data_root_dir: str
     dataset: Literal["mnist", "delay_add"]
