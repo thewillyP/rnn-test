@@ -1107,15 +1107,11 @@ def train_loop_IO[D](
             if value is not None:
                 logger.report_scalar(name, "value", iteration=step, value=value)
 
-        # Scalars
+        # --- Scalars ---
         safe_log_scalar("train_loss", log_data.train_loss, step)
         safe_log_scalar("validation_loss", log_data.validation_loss, step)
         safe_log_scalar("test_loss", log_data.test_loss, step)
         safe_log_scalar("meta_test_loss", log_data.meta_test_loss, step)
-
-        # Hyperparameters as vector
-        if log_data.hyperparameters is not None:
-            logger.report_vector("hyperparameters", "values", iteration=step, values=log_data.hyperparameters)
 
         safe_log_scalar("inner_learning_rate", log_data.inner_learning_rate, step)
         safe_log_scalar("parameter_norm", log_data.parameter_norm, step)
@@ -1133,22 +1129,29 @@ def train_loop_IO[D](
 
         safe_log_scalar("rnn_activation_norm", log_data.rnn_activation_norm, step)
 
-        # Vectors
+        # --- Histograms (vectors) ---
+        if log_data.hyperparameters is not None:
+            logger.report_histogram(
+                title="hyperparameters", series="values", iteration=step, values=log_data.hyperparameters
+            )
+
         if log_data.jacobian is not None:
-            logger.report_vector("jacobian_eigenvalues", "values", iteration=step, values=log_data.jacobian)
+            logger.report_histogram(
+                title="jacobian_eigenvalues", series="values", iteration=step, values=log_data.jacobian
+            )
 
         if log_data.immediate_influence_tensor is not None:
-            logger.report_vector(
-                "immediate_influence_tensor",
-                "values",
+            logger.report_histogram(
+                title="immediate_influence_tensor",
+                series="values",
                 iteration=step,
                 values=jnp.ravel(log_data.immediate_influence_tensor),
             )
 
         if log_data.outer_influence_tensor is not None:
-            logger.report_vector(
-                "outer_influence_tensor",
-                "values",
+            logger.report_histogram(
+                title="outer_influence_tensor",
+                series="values",
                 iteration=step,
                 values=jnp.ravel(log_data.outer_influence_tensor),
             )
