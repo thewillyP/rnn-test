@@ -18,7 +18,6 @@ from cattrs import unstructure, structure
 
 # import dill
 import joblib
-from dacite import from_dict, Config
 import torch
 from torchvision.datasets import MNIST
 
